@@ -4,8 +4,36 @@ from pathlib import Path
 import json
 import logging
 import os
+import sys
 
 logger = logging.getLogger(__name__)
+
+
+def _default_config_dir() -> Path:
+    """Platform-aware config directory."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", "~/AppData/Roaming")).expanduser()
+    else:
+        base = Path("~/.config").expanduser()
+    return base / "zotpilot"
+
+
+def _default_data_dir() -> Path:
+    """Platform-aware data directory."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", "~/AppData/Local")).expanduser()
+    else:
+        base = Path("~/.local/share").expanduser()
+    return base / "zotpilot"
+
+
+def _old_config_path() -> Path:
+    """Legacy deep-zotero config path."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", "~/AppData/Roaming")).expanduser()
+    else:
+        base = Path("~/.config").expanduser()
+    return base / "deep-zotero" / "config.json"
 
 
 @dataclass
@@ -50,37 +78,36 @@ class Config:
         if path is not None:
             config_path = Path(path).expanduser()
         else:
-            config_path = Path("~/.config/zotpilot/config.json").expanduser()
+            config_path = _default_config_dir() / "config.json"
 
             # Migration support: if new config doesn't exist but old one does, load from old
             if not config_path.exists():
-                old_config_path = Path("~/.config/deep-zotero/config.json").expanduser()
-                if old_config_path.exists():
+                old_path = _old_config_path()
+                if old_path.exists():
                     logger.info(
-                        f"Migrating config from {old_config_path} to {config_path}. "
+                        f"Migrating config from {old_path} to {config_path}. "
                         f"Please update your config path to {config_path}."
                     )
-                    config_path = old_config_path
+                    config_path = old_path
 
         data = {}
         if config_path.exists():
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 data = json.load(f)
+
+        default_chroma = str(_default_data_dir() / "chroma")
 
         return cls(
             zotero_data_dir=Path(data.get("zotero_data_dir", "~/Zotero")).expanduser(),
-            chroma_db_path=Path(data.get("chroma_db_path", "~/.local/share/zotpilot/chroma")).expanduser(),
+            chroma_db_path=Path(data.get("chroma_db_path", default_chroma)).expanduser(),
             embedding_model=data.get("embedding_model", "gemini-embedding-001"),
             embedding_dimensions=data.get("embedding_dimensions", 768),
             chunk_size=data.get("chunk_size", 400),
             chunk_overlap=data.get("chunk_overlap", 100),
             gemini_api_key=data.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY"),
-            # Embedding provider: "gemini" or "local"
             embedding_provider=data.get("embedding_provider", "gemini"),
-            # Embedding settings
             embedding_timeout=data.get("embedding_timeout", 120.0),
             embedding_max_retries=data.get("embedding_max_retries", 3),
-            # Reranking settings
             rerank_alpha=data.get("rerank_alpha", 0.7),
             rerank_section_weights=data.get("rerank_section_weights"),
             rerank_journal_weights=data.get("rerank_journal_weights"),
@@ -88,11 +115,8 @@ class Config:
             oversample_multiplier=data.get("oversample_multiplier", 3),
             oversample_topic_factor=data.get("oversample_topic_factor", 5),
             stats_sample_limit=data.get("stats_sample_limit", 10000),
-            # OCR settings — language passed through to pymupdf-layout
             ocr_language=data.get("ocr_language", "eng"),
-            # OpenAlex settings
             openalex_email=data.get("openalex_email") or os.environ.get("OPENALEX_EMAIL"),
-            # Vision extraction settings
             vision_enabled=data.get("vision_enabled", True),
             vision_model=data.get("vision_model", "claude-haiku-4-5-20251001"),
             anthropic_api_key=data.get("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY"),
@@ -102,20 +126,15 @@ class Config:
         )
 
     def save(self, path: Path | str | None = None) -> None:
-        """Write the config to JSON.
-
-        Args:
-            path: Target file path. Defaults to ~/.config/zotpilot/config.json.
-        """
+        """Write the config to JSON."""
         if path is not None:
             config_path = Path(path).expanduser()
         else:
-            config_path = Path("~/.config/zotpilot/config.json").expanduser()
+            config_path = _default_config_dir() / "config.json"
 
-        config_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Never persist API keys to disk — they should come from env vars.
-        # Only save non-sensitive configuration.
         data = {
             "zotero_data_dir": str(self.zotero_data_dir),
             "chroma_db_path": str(self.chroma_db_path),
@@ -141,10 +160,14 @@ class Config:
             "zotero_library_type": self.zotero_library_type,
         }
 
-        import os as _os
-        fd = _os.open(str(config_path), _os.O_WRONLY | _os.O_CREAT | _os.O_TRUNC, 0o600)
-        with _os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
+        # Write with restrictive permissions on Unix, normal write on Windows
+        if sys.platform != "win32":
+            fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+        else:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
 
     def validate(self) -> list[str]:
         """Return list of validation errors, empty if valid."""
@@ -154,7 +177,6 @@ class Config:
         if not (self.zotero_data_dir / "zotero.sqlite").exists():
             errors.append(f"Zotero database not found: {self.zotero_data_dir / 'zotero.sqlite'}")
 
-        # Only require API key for Gemini provider
         if self.embedding_provider == "gemini" and not self.gemini_api_key:
             errors.append("GEMINI_API_KEY not set (required for embedding_provider='gemini')")
         elif self.embedding_provider not in ("gemini", "local"):

@@ -62,18 +62,19 @@ def cmd_setup(args):
         print("\n[3/5] Skipping API key (local embeddings selected)")
 
     # Step 4: Check for existing deep-zotero config
+    from .config import _default_config_dir, _default_data_dir, _old_config_path
+
     print("\n[4/5] Checking for existing configuration...")
-    old_config = Path("~/.config/deep-zotero/config.json").expanduser()
-    old_chroma = Path("~/.local/share/deep-zotero/chroma").expanduser()
-    chroma_db_path = Path("~/.local/share/zotpilot/chroma").expanduser()
+    old_config = _old_config_path()
+    old_chroma = _default_data_dir().parent / "deep-zotero" / "chroma"
+    chroma_db_path = _default_data_dir() / "chroma"
 
     if old_config.exists():
         print(f"  Found existing deep-zotero config: {old_config}")
         if input("  Migrate settings from deep-zotero? [Y/n] ").strip().lower() not in ("n", "no"):
-            with open(old_config) as f:
+            with open(old_config, encoding="utf-8") as f:
                 old_data = json.load(f)
             print(f"  Migrated {len(old_data)} settings from deep-zotero")
-            # If old chroma index exists, reuse it
             if old_chroma.exists():
                 print(f"  Found existing ChromaDB index: {old_chroma}")
                 if input("  Reuse existing index? [Y/n] ").strip().lower() not in ("n", "no"):
@@ -81,7 +82,7 @@ def cmd_setup(args):
 
     # Step 5: Write config
     print("\n[5/5] Writing configuration...")
-    config_path = Path("~/.config/zotpilot/config.json").expanduser()
+    config_path = _default_config_dir() / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
     config_data = {

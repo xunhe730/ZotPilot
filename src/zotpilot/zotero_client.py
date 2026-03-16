@@ -4,6 +4,15 @@ from pathlib import Path
 from .models import ZoteroItem
 
 
+def _sqlite_uri(path: Path) -> str:
+    """Build a SQLite URI for read-only access, cross-platform.
+
+    On Windows, Path.as_uri() produces 'file:///C:/...' which SQLite accepts.
+    On Unix, it produces 'file:///home/...' which also works.
+    """
+    return path.as_uri() + "?mode=ro&immutable=1"
+
+
 class ZoteroClient:
     """
     Read-only access to Zotero's SQLite database.
@@ -128,7 +137,7 @@ class ZoteroClient:
         """Load BetterBibTeX citation keys. Returns itemKey -> citationKey mapping."""
         if not self.bbt_db_path.exists():
             return {}
-        conn = sqlite3.connect(f"file:{self.bbt_db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.bbt_db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute("SELECT itemKey, citationKey FROM citationkey").fetchall()
@@ -164,7 +173,7 @@ class ZoteroClient:
 
     def get_all_items_with_pdfs(self) -> list[ZoteroItem]:
         """Get all Zotero items that have PDF attachments."""
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
 
         try:
@@ -211,7 +220,7 @@ class ZoteroClient:
           pdf_unresolved: list of (itemKey, title, reason) for PDF
               attachments that couldn't be resolved
         """
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
 
         try:
@@ -350,7 +359,7 @@ class ZoteroClient:
         if not words:
             return set()
 
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         try:
             if operator.upper() == "AND":
                 return self._search_fulltext_and(conn, words)
@@ -408,7 +417,7 @@ class ZoteroClient:
 
     def get_all_collections(self) -> list[dict]:
         """Get all Zotero collections with hierarchy."""
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute("""
@@ -427,7 +436,7 @@ class ZoteroClient:
 
     def get_all_tags(self) -> list[dict]:
         """Get all tags with usage counts, sorted by frequency."""
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute("""
@@ -445,7 +454,7 @@ class ZoteroClient:
 
     def get_item_abstract(self, item_key: str) -> str:
         """Get abstract text for a specific item."""
-        conn = sqlite3.connect(f"file:{self.db_path}?mode=ro&immutable=1", uri=True)
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute("""
