@@ -229,26 +229,30 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 ## 🏗️ How It Works
 
 ```
-┌─────────────┐     ┌──────────┐     ┌─────────────┐     ┌──────────┐
-│   Zotero     │────▶│   PDF    │────▶│ Embeddings  │────▶│ ChromaDB │
-│  SQLite DB   │     │ Extract  │     │  Gemini /   │     │  Vector  │
-│ (read-only)  │     │ +Tables  │     │   Local     │     │  Store   │
-│              │     │ +Figures │     └─────────────┘     └────┬─────┘
-│              │     │ +OCR     │                              │
-│  Zotero      │     └──────────┘                              │
-│  Web API ◀───┼─────────────────────────────────────┐         │
-│ (write ops)  │     ┌──────────┐     ┌──────────┐   │         │
-└──────────────┘     │ Reranker │◀────│Retriever │◀──┘─────────┘
-                     │ section  │     │ semantic │
-                     │ +journal │     │ search   │
-                     └────┬─────┘     └──────────┘
-                          │
-                   ┌──────┴──────┐
-                   │  AI Agent   │
-                   │ Claude Code │
-                   │  OpenCode   │
-                   │  OpenClaw   │
-                   └─────────────┘
+                        ┌─────────────────────────────────────────┐
+                        │              ZotPilot Skill              │
+                        │  SKILL.md → tool selection & workflows   │
+                        └────────────────────┬────────────────────┘
+                                             │ triggers
+                        ┌────────────────────▼────────────────────┐
+                        │            MCP Server (FastMCP)          │
+                        │         24 tools · stdio transport       │
+                        └──┬──────────────┬──────────────┬────────┘
+                           │              │              │
+              ┌────────────▼───┐  ┌───────▼───────┐  ┌──▼──────────────┐
+              │  Read Path     │  │  Search Path   │  │  Write Path     │
+              │                │  │                │  │                  │
+              │ Zotero SQLite  │  │ ChromaDB       │  │ Zotero Web API  │
+              │ (read-only)    │  │ Vector Store   │  │ (tags/collections)│
+              │ PDF extraction │  │ Semantic search │  │ via Pyzotero    │
+              │ Tables/Figures │  │ Section rerank  │  │                  │
+              │ OCR            │  │ Journal quality │  │                  │
+              └────────────────┘  └────────────────┘  └─────────────────┘
+                                         │
+                                  ┌──────▼──────┐
+                                  │  Embeddings  │
+                                  │ Gemini / Local│
+                                  └──────────────┘
 ```
 
 <details>
@@ -271,22 +275,6 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 |----------|---------|------------|---------|---------|
 | **Gemini** `gemini-embedding-001` | Required (free tier) | 768 | 🥇 MTEB #1 | No |
 | **Local** `all-MiniLM-L6-v2` | Not needed | 384 | Good | ✅ Yes |
-
----
-
-## 🗺️ Roadmap
-
-- [x] 24 MCP tools — full Zotero read/write/search
-- [x] Semantic search + section-aware reranking
-- [x] Table & figure extraction and search
-- [x] Citation graph via OpenAlex
-- [x] Journal quality weighting (SCImago)
-- [x] Chinese query auto-translation
-- [x] Cross-platform (macOS, Linux, Windows)
-- [ ] OpenAI / Ollama embedding providers
-- [ ] PyPI publishing (`pip install zotpilot`)
-- [ ] Literature review generation from search results
-- [ ] `zotpilot doctor` diagnostic command
 
 ---
 
