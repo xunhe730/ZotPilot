@@ -6,82 +6,121 @@ import sys
 import time
 from pathlib import Path
 
-from .config import Config
+from .config import Config, _default_config_dir
+
+
+def _default_config_path() -> Path:
+    """Return default config file path."""
+    return _default_config_dir() / "config.json"
 
 
 def cmd_setup(args):
-    """Interactive setup wizard."""
+    """Interactive or non-interactive setup wizard."""
+    from .config import _default_config_dir, _default_data_dir, _old_config_path
     from .zotero_detector import detect_zotero_data_dir
 
-    print("ZotPilot Setup Wizard")
-    print("=" * 40)
+    non_interactive = getattr(args, "non_interactive", False)
 
     # Step 1: Detect Zotero data directory
-    print("\n[1/5] Detecting Zotero data directory...")
-    detected = detect_zotero_data_dir()
-
-    if detected:
-        print(f"  Found: {detected}")
-        response = input(f"  Use this path? [Y/n] ").strip().lower()
-        if response in ("n", "no"):
-            zotero_dir = input("  Enter Zotero data directory: ").strip()
+    if non_interactive:
+        zotero_dir = getattr(args, "zotero_dir", None)
+        if zotero_dir:
+            zotero_path = Path(zotero_dir).expanduser()
         else:
-            zotero_dir = str(detected)
-    else:
-        print("  Could not auto-detect Zotero data directory.")
-        zotero_dir = input("  Enter Zotero data directory path: ").strip()
+            detected = detect_zotero_data_dir()
+            if detected:
+                zotero_path = detected
+            else:
+                print("ERROR: Cannot auto-detect Zotero data directory. Use --zotero-dir.", file=sys.stderr)
+                return 1
 
-    zotero_path = Path(zotero_dir).expanduser()
-    if not (zotero_path / "zotero.sqlite").exists():
-        print(f"  WARNING: zotero.sqlite not found at {zotero_path}")
-        if input("  Continue anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+        if not (zotero_path / "zotero.sqlite").exists():
+            print(f"ERROR: zotero.sqlite not found at {zotero_path}", file=sys.stderr)
             return 1
 
-    # Step 2: Choose embedding provider
-    print("\n[2/5] Choose embedding provider:")
-    print("  1. Gemini (recommended, requires API key)")
-    print("  2. Local (all-MiniLM-L6-v2, no API key needed)")
-    choice = input("  Choice [1/2]: ").strip()
-    embedding_provider = "local" if choice == "2" else "gemini"
+        # Provider from flag
+        embedding_provider = getattr(args, "provider", None) or "gemini"
+        if embedding_provider not in ("gemini", "local"):
+            print(f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini' or 'local'.", file=sys.stderr)
+            return 1
 
-    # Step 3: Configure API key if Gemini
+    else:
+        # Interactive mode (original behavior)
+        print("ZotPilot Setup Wizard")
+        print("=" * 40)
+
+        print("\n[1/5] Detecting Zotero data directory...")
+        detected = detect_zotero_data_dir()
+
+        if detected:
+            print(f"  Found: {detected}")
+            response = input(f"  Use this path? [Y/n] ").strip().lower()
+            if response in ("n", "no"):
+                zotero_dir = input("  Enter Zotero data directory: ").strip()
+            else:
+                zotero_dir = str(detected)
+        else:
+            print("  Could not auto-detect Zotero data directory.")
+            zotero_dir = input("  Enter Zotero data directory path: ").strip()
+
+        zotero_path = Path(zotero_dir).expanduser()
+        if not (zotero_path / "zotero.sqlite").exists():
+            print(f"  WARNING: zotero.sqlite not found at {zotero_path}")
+            if input("  Continue anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+                return 1
+
+        # Choose embedding provider
+        print("\n[2/5] Choose embedding provider:")
+        print("  1. Gemini (recommended, requires API key)")
+        print("  2. Local (all-MiniLM-L6-v2, no API key needed)")
+        choice = input("  Choice [1/2]: ").strip()
+        embedding_provider = "local" if choice == "2" else "gemini"
+
+    # Step 3: Configure API key if Gemini (interactive only)
     gemini_api_key = None
     if embedding_provider == "gemini":
-        print("\n[3/5] Gemini API key:")
-        import os
-        existing_key = os.environ.get("GEMINI_API_KEY")
-        if existing_key:
-            print("  Found GEMINI_API_KEY in environment (***hidden)")
-            if input("  Use this key? [Y/n] ").strip().lower() not in ("n", "no"):
-                gemini_api_key = existing_key
-        if not gemini_api_key:
-            gemini_api_key = input("  Enter Gemini API key: ").strip()
+        import os as _os
+        existing_key = _os.environ.get("GEMINI_API_KEY")
+        if non_interactive:
+            gemini_api_key = existing_key
             if not gemini_api_key:
-                print("  WARNING: No API key provided. Set GEMINI_API_KEY env var later.")
-    else:
+                print("NOTE: GEMINI_API_KEY not set. Set it before running the MCP server.", file=sys.stderr)
+        else:
+            print("\n[3/5] Gemini API key:")
+            if existing_key:
+                print("  Found GEMINI_API_KEY in environment (***hidden)")
+                if input("  Use this key? [Y/n] ").strip().lower() not in ("n", "no"):
+                    gemini_api_key = existing_key
+            if not gemini_api_key:
+                gemini_api_key = input("  Enter Gemini API key: ").strip()
+                if not gemini_api_key:
+                    print("  WARNING: No API key provided. Set GEMINI_API_KEY env var later.")
+    elif not non_interactive:
         print("\n[3/5] Skipping API key (local embeddings selected)")
 
     # Step 4: Check for existing deep-zotero config
-    from .config import _default_config_dir, _default_data_dir, _old_config_path
-
-    print("\n[4/5] Checking for existing configuration...")
-    old_config = _old_config_path()
-    old_chroma = _default_data_dir().parent / "deep-zotero" / "chroma"
     chroma_db_path = _default_data_dir() / "chroma"
 
-    if old_config.exists():
-        print(f"  Found existing deep-zotero config: {old_config}")
-        if input("  Migrate settings from deep-zotero? [Y/n] ").strip().lower() not in ("n", "no"):
-            with open(old_config, encoding="utf-8") as f:
-                old_data = json.load(f)
-            print(f"  Migrated {len(old_data)} settings from deep-zotero")
-            if old_chroma.exists():
-                print(f"  Found existing ChromaDB index: {old_chroma}")
-                if input("  Reuse existing index? [Y/n] ").strip().lower() not in ("n", "no"):
-                    chroma_db_path = old_chroma
+    if not non_interactive:
+        print("\n[4/5] Checking for existing configuration...")
+        old_config = _old_config_path()
+        old_chroma = _default_data_dir().parent / "deep-zotero" / "chroma"
+
+        if old_config.exists():
+            print(f"  Found existing deep-zotero config: {old_config}")
+            if input("  Migrate settings from deep-zotero? [Y/n] ").strip().lower() not in ("n", "no"):
+                with open(old_config, encoding="utf-8") as f:
+                    old_data = json.load(f)
+                print(f"  Migrated {len(old_data)} settings from deep-zotero")
+                if old_chroma.exists():
+                    print(f"  Found existing ChromaDB index: {old_chroma}")
+                    if input("  Reuse existing index? [Y/n] ").strip().lower() not in ("n", "no"):
+                        chroma_db_path = old_chroma
 
     # Step 5: Write config
-    print("\n[5/5] Writing configuration...")
+    if not non_interactive:
+        print("\n[5/5] Writing configuration...")
+
     config_path = _default_config_dir() / "config.json"
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -90,32 +129,34 @@ def cmd_setup(args):
         "chroma_db_path": str(chroma_db_path),
         "embedding_provider": embedding_provider,
     }
-    # API keys are NOT saved to config file for security.
-    # Users should set them via environment variables.
 
     with open(config_path, "w") as f:
         json.dump(config_data, f, indent=2)
-    print(f"  Config written to: {config_path}")
 
-    if gemini_api_key and not os.environ.get("GEMINI_API_KEY"):
-        print(f"\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
-        print(f"    export GEMINI_API_KEY='{gemini_api_key}'")
+    if non_interactive:
+        print(f"Config written to: {config_path}")
+    else:
+        print(f"  Config written to: {config_path}")
 
-    # Detect MCP client and offer to configure
-    print("\n" + "=" * 40)
-    print("Setup complete!")
-    print()
-    print("To start the MCP server, add to your client config:")
-    print()
-    print("  Claude Code (~/.claude/settings.json):")
-    print('    "mcpServers": {')
-    print('      "zotpilot": {')
-    print('        "command": "uv",')
-    print('        "args": ["tool", "run", "zotpilot"]')
-    print("      }")
-    print("    }")
-    print()
-    print("  Or run directly: zotpilot index")
+        import os as _os
+        if gemini_api_key and not _os.environ.get("GEMINI_API_KEY"):
+            print(f"\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
+            print(f"    export GEMINI_API_KEY='{gemini_api_key}'")
+
+        print("\n" + "=" * 40)
+        print("Setup complete!")
+        print()
+        print("To start the MCP server, add to your client config:")
+        print()
+        print("  Claude Code (~/.claude/settings.json):")
+        print('    "mcpServers": {')
+        print('      "zotpilot": {')
+        print('        "command": "uv",')
+        print('        "args": ["tool", "run", "zotpilot"]')
+        print("      }")
+        print("    }")
+        print()
+        print("  Or run directly: zotpilot index")
 
     return 0
 
@@ -184,8 +225,43 @@ def cmd_index(args):
 
 def cmd_status(args):
     """Show configuration and index stats."""
-    config = Config.load(args.config)
+    output_json = getattr(args, "json", False)
 
+    config = Config.load(args.config)
+    errors = config.validate()
+
+    if output_json:
+        result = {
+            "zotpilot_installed": True,
+            "config_exists": (Path(args.config) if args.config else _default_config_path()).exists(),
+            "zotero_dir": str(config.zotero_data_dir),
+            "zotero_dir_valid": config.zotero_data_dir.exists()
+                and (config.zotero_data_dir / "zotero.sqlite").exists(),
+            "embedding_provider": config.embedding_provider,
+            "gemini_key_set": bool(config.gemini_api_key),
+            "index_ready": False,
+            "doc_count": 0,
+            "chunk_count": 0,
+            "errors": errors,
+        }
+        try:
+            from .embeddings import create_embedder
+            from .vector_store import VectorStore
+
+            embedder = create_embedder(config)
+            store = VectorStore(config.chroma_db_path, embedder)
+            doc_ids = store.get_indexed_doc_ids()
+            total = store.count()
+            result["doc_count"] = len(doc_ids)
+            result["chunk_count"] = total
+            result["index_ready"] = len(doc_ids) > 0
+        except Exception as e:
+            result["errors"].append(f"Index error: {e}")
+
+        print(json.dumps(result, indent=2))
+        return 1 if errors else 0
+
+    # Human-readable output
     print("ZotPilot Status")
     print("=" * 40)
     print(f"  Zotero data dir:    {config.zotero_data_dir}")
@@ -196,14 +272,12 @@ def cmd_status(args):
     print(f"  Reranking enabled:  {config.rerank_enabled}")
     print(f"  Vision enabled:     {config.vision_enabled}")
 
-    errors = config.validate()
     if errors:
         print(f"\n  Config errors:")
         for e in errors:
             print(f"    - {e}")
         return 1
 
-    # Try to get index stats
     try:
         from .embeddings import create_embedder
         from .vector_store import VectorStore
@@ -232,6 +306,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # setup
     sub_setup = subparsers.add_parser("setup", help="Interactive setup wizard")
+    sub_setup.add_argument(
+        "--non-interactive", action="store_true",
+        help="Run without prompts (use flags or auto-detect)",
+    )
+    sub_setup.add_argument("--zotero-dir", type=str, default=None, help="Zotero data directory path")
+    sub_setup.add_argument(
+        "--provider", type=str, default=None,
+        choices=["gemini", "local"],
+        help="Embedding provider (default: gemini)",
+    )
     sub_setup.set_defaults(func=cmd_setup)
 
     # index
@@ -248,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     # status
     sub_status = subparsers.add_parser("status", help="Show config and index stats")
     sub_status.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_status.add_argument("--json", action="store_true", help="Output as JSON")
     sub_status.set_defaults(func=cmd_status)
 
     args = parser.parse_args(argv)

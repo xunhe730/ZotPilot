@@ -1,11 +1,6 @@
----
-name: zotpilot
-description: Use when the user mentions Zotero, academic papers, citations, literature reviews, research libraries, or wants to search/organize/analyze their paper collection. Also use when the user says things like "find papers about...", "what does my library have on...", "organize my papers", "who cites...", "tag these papers", or any task involving reading, searching, or managing a collection of academic PDFs. This skill guides you through ZotPilot's 24 MCP tools for full Zotero library access — you should use it even for simple queries like "search my papers" to ensure you pick the right tool and parameters.
----
+# ZotPilot Tool Guide
 
-# ZotPilot — Zotero AI Agent Skill
-
-You have access to a Zotero library through ZotPilot's 24 MCP tools. This skill tells you how to use them effectively. Follow these instructions precisely — they encode hard-won knowledge about tool behavior, parameter choices, and failure modes.
+You have access to a Zotero library through ZotPilot's 24 MCP tools. This guide tells you how to use them effectively. Follow these instructions precisely — they encode hard-won knowledge about tool behavior, parameter choices, and failure modes.
 
 ## Before you start: check readiness
 

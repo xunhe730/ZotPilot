@@ -112,7 +112,30 @@ def _start_parent_monitor():
 # Start parent monitor before anything else
 _start_parent_monitor()
 
-mcp = FastMCP("zotpilot")
+_MCP_INSTRUCTIONS = """\
+ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
+
+| User intent                        | Tool             |
+|------------------------------------|------------------|
+| Find specific passages or claims   | search_papers    |
+| Survey a topic / find papers       | search_topic     |
+| Find paper by exact terms          | search_boolean   |
+| Find data tables                   | search_tables    |
+| Find figures or diagrams           | search_figures   |
+
+Start with get_index_stats to check readiness. If doc count is 0, \
+tell the user to run `zotpilot index` first.
+
+For thorough research, chain: search_topic → get_paper_details → \
+search_papers with section_weights. Use search_boolean for exact \
+terms (author names, acronyms). Use get_passage_context to expand \
+any result with surrounding text.
+
+Write operations (tags, collections) require ZOTERO_API_KEY and \
+ZOTERO_USER_ID environment variables.
+"""
+
+mcp = FastMCP("zotpilot", instructions=_MCP_INSTRUCTIONS)
 
 # Lazy initialization
 _retriever = None

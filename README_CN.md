@@ -94,7 +94,7 @@
 自动翻译中文查询，双语并行搜索。
 
 ### 🧠 内置 Agent Skill
-自带 [Skill 文件](skill/SKILL.md)，教会 AI _如何_使用 ZotPilot——自动选择工具、串联多步工作流、排查错误。无需提示工程。
+自带 [Skill 文件](SKILL.md)，教会 AI _如何_使用 ZotPilot——自动选择工具、串联多步工作流、排查错误。无需提示工程。
 
 </td>
 </tr>
@@ -120,6 +120,18 @@
 
 ## 📥 快速开始
 
+### Claude Code（推荐）
+
+仓库本身就是 Skill —— 直接 clone 到 skills 目录即可：
+
+```bash
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
+```
+
+重启 Claude Code，Skill 自动被发现。当你提到 Zotero 或论文时，Skill 会自动触发并引导你完成安装、索引和使用。
+
+### 其他 MCP 客户端（Cursor、Windsurf 等）
+
 ```bash
 # 安装
 git clone https://github.com/xunhe730/ZotPilot.git
@@ -132,7 +144,7 @@ zotpilot setup
 zotpilot index
 ```
 
-然后添加到你的 MCP 客户端：
+然后添加到你的 MCP 客户端配置：
 
 <div align="center">
   <table>
@@ -169,7 +181,7 @@ zotpilot index
 
 ## 🧠 Agent Skill——让 AI 学会做研究
 
-大多数 MCP 服务器给 AI 一堆工具，然后听天由命。ZotPilot 自带 **[Agent Skill](skill/SKILL.md)** ——一份结构化指令文件，教会 AI _如何用你的文献库做研究_。
+大多数 MCP 服务器给 AI 一堆工具，然后听天由命。ZotPilot 自带 **[Agent Skill](SKILL.md)** ——一份结构化指令文件，教会 AI _如何用你的文献库做研究_。
 
 ```
 你：     "帮我写一段关于 EEG 脑机接口的 Related Work"
@@ -191,8 +203,10 @@ Skill 引导 AI：
 
 **安装**（Claude Code）：
 ```bash
-cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
 ```
+
+仓库本身就是 Skill——直接 clone 到 skills 目录，Claude Code 重启后自动发现。
 
 没有 Skill，AI 仍可调用全部 24 个工具——但不知道先选哪个、哪些参数重要、如何串联。Skill 是"我有工具"和"我会做研究"的区别。
 

@@ -94,7 +94,7 @@ Composite scoring: semantic similarity × section weight × journal quality (SCI
 Auto-translates Chinese queries for bilingual parallel search.
 
 ### 🧠 Built-in Agent Skill
-Ships with a [Skill file](skill/SKILL.md) that teaches your AI _how_ to use ZotPilot — auto-selects the right tool, chains multi-step workflows, and troubleshoots errors. No prompt engineering needed.
+Ships with a [Skill file](SKILL.md) that teaches your AI _how_ to use ZotPilot — auto-selects the right tool, chains multi-step workflows, and troubleshoots errors. No prompt engineering needed.
 
 </td>
 </tr>
@@ -120,6 +120,18 @@ Ships with a [Skill file](skill/SKILL.md) that teaches your AI _how_ to use ZotP
 
 ## 📥 Quick Start
 
+### Claude Code (recommended)
+
+The repository itself is a Skill — just clone it into your skills directory:
+
+```bash
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
+```
+
+Restart Claude Code. The Skill is auto-discovered. When you ask about Zotero or papers, the Skill triggers and guides you through installation, indexing, and usage automatically.
+
+### Other MCP clients (Cursor, Windsurf, etc.)
+
 ```bash
 # Install
 git clone https://github.com/xunhe730/ZotPilot.git
@@ -132,7 +144,7 @@ zotpilot setup
 zotpilot index
 ```
 
-Then add to your MCP client:
+Then add to your MCP client config:
 
 <div align="center">
   <table>
@@ -169,7 +181,7 @@ Then add to your MCP client:
 
 ## 🧠 Agent Skill — AI that knows how to research
 
-Most MCP servers give AI a bag of tools and hope for the best. ZotPilot ships with an **[Agent Skill](skill/SKILL.md)** — a structured instruction file that teaches AI _how to do research_ with your library.
+Most MCP servers give AI a bag of tools and hope for the best. ZotPilot ships with an **[Agent Skill](SKILL.md)** — a structured instruction file that teaches AI _how to do research_ with your library.
 
 ```
 You:    "Help me write a related work section on EEG-based BCI"
@@ -191,8 +203,10 @@ Skill guides AI to:
 
 **Install** (Claude Code):
 ```bash
-cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
 ```
+
+The repository itself is the Skill — clone it directly into your skills directory. Claude Code auto-discovers it on restart.
 
 Without the Skill, AI can still call all 24 tools — but it won't know which to pick first, what parameters matter, or how to chain them. The Skill is the difference between "I have tools" and "I know how to do research."
 

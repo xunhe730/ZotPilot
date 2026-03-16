@@ -1,9 +1,4 @@
----
-name: zotpilot-install
-description: Use when the user wants to install, set up, or configure ZotPilot, or when ZotPilot MCP tools are not available in the current session but the user is asking about Zotero, papers, or their research library. Also trigger when the user says "set up zotpilot", "install zotpilot", "configure zotero", or asks why zotpilot tools aren't working.
----
-
-# ZotPilot Installation Guide
+# ZotPilot Installation Steps
 
 Guide the user through installation step by step. Do not dump all instructions at once — check each prerequisite, handle errors, and confirm each step succeeded before moving on.
 
@@ -100,14 +95,6 @@ After configuring, the user needs to restart their AI client for the MCP server 
 After restart, test by asking: "How many papers are in my Zotero library?"
 
 If the AI can answer using `get_index_stats` or `get_library_overview`, installation is complete.
-
-## Optional: Install the Skill
-
-For Claude Code users, install the agent skill for guided research workflows:
-
-```bash
-cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
-```
 
 ## Optional: Enable write operations
 
