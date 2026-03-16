@@ -169,30 +169,32 @@ zotpilot index
 
 ## 🧠 Agent Skill——让 AI 学会做研究
 
-大多数 MCP 服务器给 AI 一堆工具，然后听天由命。ZotPilot 自带 **[Skill 文件](skill/SKILL.md)**，教会 AI _如何用你的文献库做研究_：
+大多数 MCP 服务器给 AI 一堆工具，然后听天由命。ZotPilot 自带 **[Agent Skill](skill/SKILL.md)** ——一份结构化指令文件，教会 AI _如何用你的文献库做研究_。
 
 ```
 你：     "帮我写一段关于 EEG 脑机接口的 Related Work"
 
-Skill:   ① search_topic → 找到该主题的核心论文
-         ② get_paper_details → 获取摘要和元数据
-         ③ find_references → 从参考文献扩展阅读列表
-         ④ search_papers → 深入挖掘具体论点
-         ⑤ get_passage_context → 获取完整上下文
+Skill 引导 AI：
+  ① 检查索引就绪状态（get_index_stats）
+  ② 选择 search_topic（不是 search_papers——这是综述任务）
+  ③ 使用 section_weights={"results": 1.0, "conclusion": 1.0} 聚焦发现
+  ④ 串联：search_topic → get_paper_details → find_references → search_papers
+  ⑤ 将结果格式化为带引用的可读文本，而不是原始 JSON
 ```
 
-Skill 包含：
-- **搜索策略决策树** — 根据目标自动选择合适的工具
-- **工作流模板** — 文献综述、相关工作、文献库整理
-- **参数指南** — 何时使用 `section_weights`、`required_terms`、`chunk_types`
-- **故障排除** — 常见错误及修复方法
+**Skill 编码了什么：**
+- **工具选择逻辑** — 用户意图 → 正确工具的决策表
+- **参数知识** — 何时用 `required_terms`（缩写词）、`section_weights`（聚焦区域）、`chunk_types`（混合内容）
+- **工作流链** — 文献综述、按主题整理、查找特定论文的完整步骤
+- **错误恢复** — 索引为空、DOI 缺失、API key 未设置时怎么办
+- **输出格式** — 如何呈现结果（引用段落、标注页码、按论文分组）
 
-**安装 Skill**（Claude Code）：
+**安装**（Claude Code）：
 ```bash
 cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
 ```
 
-没有 Skill，AI 仍可使用全部 24 个工具。有了 Skill，它知道_选哪个_、_什么时候用_、以及_如何串联_成真正的研究工作流。
+没有 Skill，AI 仍可调用全部 24 个工具——但不知道先选哪个、哪些参数重要、如何串联。Skill 是"我有工具"和"我会做研究"的区别。
 
 ---
 

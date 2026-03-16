@@ -1,129 +1,119 @@
 ---
 name: zotpilot-install
-description: Guided installation of ZotPilot MCP server for Claude Code, OpenCode, and OpenClaw
+description: Use when the user wants to install, set up, or configure ZotPilot, or when ZotPilot MCP tools are not available in the current session but the user is asking about Zotero, papers, or their research library. Also trigger when the user says "set up zotpilot", "install zotpilot", "configure zotero", or asks why zotpilot tools aren't working.
 ---
 
 # ZotPilot Installation Guide
 
-## Prerequisites
+Guide the user through installation step by step. Do not dump all instructions at once — check each prerequisite, handle errors, and confirm each step succeeded before moving on.
 
-Check these before starting:
-1. **Python ≥ 3.10**: `python3 --version`
-2. **uv** (recommended): `uv --version` — install from https://docs.astral.sh/uv/
-3. **Zotero** installed with a library containing PDFs
+## Step 1: Check prerequisites
 
-## Quick Install
+Run these checks and report results:
 
 ```bash
-# Clone the repo
+python3 --version    # Need 3.10+
+uv --version         # Need uv installed
+```
+
+If Python < 3.10: tell user to upgrade. Link: https://python.org
+If uv missing: tell user to install. One-liner: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+
+## Step 2: Install ZotPilot
+
+```bash
 git clone https://github.com/xunhe730/ZotPilot.git
-cd ZotPilot
+uv tool install ./ZotPilot
+```
 
-# Install as a uv tool (isolated environment)
-uv tool install .
+Verify: `zotpilot status` should print config info (may show errors about missing API key — that's OK at this stage).
 
-# Run interactive setup
+## Step 3: Run setup wizard
+
+```bash
 zotpilot setup
 ```
 
-The setup wizard will:
-1. Auto-detect your Zotero data directory
-2. Choose embedding provider (Gemini recommended, or local/offline)
-3. Configure API key if using Gemini
-4. Migrate settings from deep-zotero if present
-5. Write config to `~/.config/zotpilot/config.json`
+This auto-detects the Zotero data directory, lets the user choose embedding provider, and writes config.
 
-## Client Configuration
-
-### Claude Code
-
-Add to `~/.claude/settings.json`:
-
+If the user prefers manual setup, they need:
+1. Find their Zotero data directory (contains `zotero.sqlite`)
+   - macOS: `~/Zotero` or check Zotero → Preferences → Advanced → Data Directory
+   - Linux: `~/Zotero`
+   - Windows: `C:\Users\<name>\Zotero`
+2. Create config at `~/.config/zotpilot/config.json` (macOS/Linux) or `%APPDATA%\zotpilot\config.json` (Windows):
 ```json
 {
-  "mcpServers": {
-    "zotpilot": {
-      "command": "uv",
-      "args": ["tool", "run", "zotpilot"]
-    }
-  }
+  "zotero_data_dir": "/path/to/Zotero",
+  "embedding_provider": "gemini"
 }
 ```
+3. Set `GEMINI_API_KEY` environment variable (get from https://aistudio.google.com/apikey)
 
-### OpenCode
-
-Add to your OpenCode MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "zotpilot": {
-      "command": "uv",
-      "args": ["tool", "run", "zotpilot"]
-    }
-  }
-}
-```
-
-### OpenClaw
-
-Add to your OpenClaw configuration:
-
-```json
-{
-  "mcpServers": {
-    "zotpilot": {
-      "command": "uv",
-      "args": ["tool", "run", "zotpilot"]
-    }
-  }
-}
-```
-
-## Index Your Library
-
-After installation, index your Zotero library:
+## Step 4: Index the library
 
 ```bash
-# Index all papers (first run takes a while)
 zotpilot index
-
-# Or index with options
-zotpilot index --limit 10          # Index only 10 papers (test run)
-zotpilot index --force             # Re-index everything
-zotpilot index --verbose           # Debug logging
-zotpilot index --no-vision         # Skip vision-based table extraction
 ```
 
-## Verify Installation
+This takes a while on first run (processes all PDFs). For testing, use `zotpilot index --limit 10`.
+
+Verify: `zotpilot status` should show "Documents: N" with N > 0.
+
+## Step 5: Configure MCP client
+
+Determine which client the user has and write the appropriate config:
+
+**Claude Code** — add to `~/.claude.json` under `projects.<cwd>.mcpServers`:
+```json
+{
+  "zotpilot": {
+    "type": "stdio",
+    "command": "zotpilot",
+    "args": [],
+    "env": {
+      "GEMINI_API_KEY": "the-users-key"
+    }
+  }
+}
+```
+
+**Cursor** — add to `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "zotpilot": {
+      "command": "uv",
+      "args": ["tool", "run", "zotpilot"],
+      "env": { "GEMINI_API_KEY": "..." }
+    }
+  }
+}
+```
+
+**Windsurf** — add to `~/.codeium/windsurf/mcp_config.json` (same format as Cursor).
+
+After configuring, the user needs to restart their AI client for the MCP server to connect.
+
+## Step 6: Verify
+
+After restart, test by asking: "How many papers are in my Zotero library?"
+
+If the AI can answer using `get_index_stats` or `get_library_overview`, installation is complete.
+
+## Optional: Install the Skill
+
+For Claude Code users, install the agent skill for guided research workflows:
 
 ```bash
-# Check config and index status
-zotpilot status
-
-# Run MCP server directly (for testing)
-python -m zotpilot
+cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
 ```
 
-## Optional Dependencies
+## Optional: Enable write operations
 
-```bash
-# Vision-based table extraction (requires Anthropic API key)
-uv tool install ".[vision]"
+For tag/collection management, the user needs a Zotero Web API key:
+1. Go to https://www.zotero.org/settings/keys
+2. Create a new key with "Allow library access" and "Allow write access"
+3. Add to MCP config env: `"ZOTERO_API_KEY": "...", "ZOTERO_USER_ID": "..."`
 
-# PaddleOCR for scanned PDFs
-uv tool install ".[paddle]"
-
-# Zotero write operations (tagging, collections via Web API)
-uv tool install ".[write]"
-
-# Everything
-uv tool install ".[all]"
-```
-
-## Migrating from deep-zotero
-
-If you have an existing deep-zotero installation:
-- `zotpilot setup` will detect and offer to migrate your config
-- Your existing ChromaDB index is compatible — just point to it
-- No re-indexing needed if you keep the same embedding provider
+User ID is the number shown at https://www.zotero.org/settings/keys (not the username).

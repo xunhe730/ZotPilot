@@ -169,30 +169,32 @@ Then add to your MCP client:
 
 ## 🧠 Agent Skill — AI that knows how to research
 
-Most MCP servers give AI a bag of tools and hope for the best. ZotPilot ships with a **[Skill file](skill/SKILL.md)** that teaches AI _how to do research_ with your library:
+Most MCP servers give AI a bag of tools and hope for the best. ZotPilot ships with an **[Agent Skill](skill/SKILL.md)** — a structured instruction file that teaches AI _how to do research_ with your library.
 
 ```
 You:    "Help me write a related work section on EEG-based BCI"
 
-Skill:  ① search_topic → find top papers on the topic
-        ② get_paper_details → get abstracts and metadata
-        ③ find_references → expand reading list from bibliographies
-        ④ search_papers → deep-dive into specific claims
-        ⑤ get_passage_context → get full surrounding text
+Skill guides AI to:
+  ① Check index readiness (get_index_stats)
+  ② Pick search_topic (not search_papers — this is a survey task)
+  ③ Use section_weights={"results": 1.0, "conclusion": 1.0} to focus on findings
+  ④ Chain: search_topic → get_paper_details → find_references → search_papers
+  ⑤ Format results as readable text with citations, not raw JSON
 ```
 
-The Skill includes:
-- **Search strategy decision tree** — auto-selects the right tool for each goal
-- **Workflow templates** — literature review, related work, library organization
-- **Parameter guidance** — when to use `section_weights`, `required_terms`, `chunk_types`
-- **Troubleshooting** — common errors and fixes
+**What the Skill encodes:**
+- **Tool selection logic** — decision table mapping user intent → correct tool
+- **Parameter knowledge** — when to use `required_terms` (acronyms), `section_weights` (focus areas), `chunk_types` (mixed content)
+- **Workflow chains** — literature review, organize-by-theme, find-specific-paper recipes
+- **Error recovery** — what to do when index is empty, DOI is missing, API key isn't set
+- **Output formatting** — how to present results (quote passages, show page numbers, group by paper)
 
-**Install the Skill** (Claude Code):
+**Install** (Claude Code):
 ```bash
 cp -r ZotPilot/skill/ ~/.claude/skills/zotpilot/
 ```
 
-Without the Skill, AI can still use all 24 tools. With the Skill, it knows _which_ tool to pick, _when_, and _how to chain them_ into real research workflows.
+Without the Skill, AI can still call all 24 tools — but it won't know which to pick first, what parameters matter, or how to chain them. The Skill is the difference between "I have tools" and "I know how to do research."
 
 ---
 
