@@ -16,7 +16,7 @@ Check these before starting:
 
 ```bash
 # Clone the repo
-git clone https://github.com/xdzhuang/ZotPilot.git
+git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 
 # Install as a uv tool (isolated environment)

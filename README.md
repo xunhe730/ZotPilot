@@ -1,5 +1,7 @@
 # ZotPilot
 
+English | [中文](README_CN.md)
+
 AI-powered semantic search for your Zotero research library. ZotPilot is an MCP server that lets AI assistants search, analyze, and organize your academic papers.
 
 ## Why ZotPilot?
@@ -19,7 +21,7 @@ Zotero's built-in search is keyword-only. ZotPilot adds:
 
 ```bash
 # Install
-git clone https://github.com/xdzhuang/ZotPilot.git
+git clone https://github.com/xunhe730/ZotPilot.git
 uv tool install ./ZotPilot
 
 # Setup (auto-detects Zotero, configures embeddings)
@@ -35,7 +37,7 @@ zotpilot index
 ### For Developers
 
 ```bash
-git clone https://github.com/xdzhuang/ZotPilot.git
+git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 uv sync --extra dev
 uv run pytest

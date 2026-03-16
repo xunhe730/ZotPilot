@@ -89,12 +89,16 @@ def cmd_setup(args):
         "chroma_db_path": str(chroma_db_path),
         "embedding_provider": embedding_provider,
     }
-    if gemini_api_key:
-        config_data["gemini_api_key"] = gemini_api_key
+    # API keys are NOT saved to config file for security.
+    # Users should set them via environment variables.
 
     with open(config_path, "w") as f:
         json.dump(config_data, f, indent=2)
     print(f"  Config written to: {config_path}")
+
+    if gemini_api_key and not os.environ.get("GEMINI_API_KEY"):
+        print(f"\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
+        print(f"    export GEMINI_API_KEY='{gemini_api_key}'")
 
     # Detect MCP client and offer to configure
     print("\n" + "=" * 40)

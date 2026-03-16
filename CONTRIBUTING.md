@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/xdzhuang/ZotPilot.git
+git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 uv sync --extra dev
 ```

@@ -114,6 +114,8 @@ class Config:
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Never persist API keys to disk — they should come from env vars.
+        # Only save non-sensitive configuration.
         data = {
             "zotero_data_dir": str(self.zotero_data_dir),
             "chroma_db_path": str(self.chroma_db_path),
@@ -121,7 +123,6 @@ class Config:
             "embedding_dimensions": self.embedding_dimensions,
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
-            "gemini_api_key": self.gemini_api_key,
             "embedding_provider": self.embedding_provider,
             "embedding_timeout": self.embedding_timeout,
             "embedding_max_retries": self.embedding_max_retries,
@@ -136,8 +137,6 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
-            "anthropic_api_key": self.anthropic_api_key,
-            "zotero_api_key": self.zotero_api_key,
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
         }
