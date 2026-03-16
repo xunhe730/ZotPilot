@@ -1,0 +1,182 @@
+"""Context expansion tools."""
+import re
+
+from ..state import mcp, _get_store, ToolError
+
+
+@mcp.tool()
+def get_passage_context(
+    doc_id: str,
+    chunk_index: int,
+    window: int = 2,
+    table_page: int | None = None,
+    table_index: int | None = None,
+) -> dict:
+    """
+    Expand context around a specific passage.
+
+    Use after search_papers to get more context.
+
+    For table chunks (from search_tables), pass table_page and table_index
+    to find the text that references the table and return that with context.
+
+    Args:
+        doc_id: Document ID from search results
+        chunk_index: Chunk index from search results
+        window: Chunks before/after to include (1-5)
+        table_page: Page number of table (for table context lookup)
+        table_index: Index of table on page (for table context lookup)
+    """
+    window = max(1, min(window, 5))
+    store = _get_store()
+
+    # Handle table context lookup
+    if table_page is not None and table_index is not None:
+        return _get_table_reference_context(store, doc_id, table_page, table_index, window)
+
+    # Standard text chunk context
+    chunks = store.get_adjacent_chunks(doc_id, chunk_index, window=window)
+
+    if not chunks:
+        raise ToolError(f"No chunks found for doc_id={doc_id}")
+
+    # Get section and journal_quartile from center chunk
+    center_chunk = next((c for c in chunks if c.metadata["chunk_index"] == chunk_index), chunks[0])
+
+    return {
+        "doc_id": doc_id,
+        "doc_title": chunks[0].metadata.get("doc_title", "Unknown"),
+        "citation_key": chunks[0].metadata.get("citation_key", ""),
+        "section": center_chunk.metadata.get("section", "unknown"),
+        "section_confidence": center_chunk.metadata.get("section_confidence", 1.0),
+        "journal_quartile": center_chunk.metadata.get("journal_quartile") or None,
+        "center_chunk_index": chunk_index,
+        "window": window,
+        "passages": [
+            {
+                "chunk_index": c.metadata["chunk_index"],
+                "page": c.metadata["page_num"],
+                "section": c.metadata.get("section", "unknown"),
+                "section_confidence": c.metadata.get("section_confidence", 1.0),
+                "text": c.text,
+                "is_center": c.metadata["chunk_index"] == chunk_index,
+            }
+            for c in chunks
+        ],
+        "merged_text": "\n\n".join(c.text for c in chunks),
+    }
+
+
+def _get_table_reference_context(
+    store,
+    doc_id: str,
+    table_page: int,
+    table_index: int,
+    window: int,
+) -> dict:
+    """Find text that references a specific table and return with context."""
+    # Get the specific table's metadata
+    table_chunk_id = f"{doc_id}_table_{table_page:04d}_{table_index:02d}"
+    table_results = store.collection.get(
+        ids=[table_chunk_id],
+        include=["metadatas"]
+    )
+
+    if not table_results["ids"]:
+        raise ToolError(f"Table not found: page={table_page}, index={table_index}")
+
+    table_meta = table_results["metadatas"][0]
+    table_caption = table_meta.get("table_caption", "")
+
+    # Get all text chunks for this document
+    text_results = store.collection.get(
+        where={
+            "$and": [
+                {"doc_id": {"$eq": doc_id}},
+                {"chunk_type": {"$eq": "text"}},
+            ]
+        },
+        include=["documents", "metadatas"]
+    )
+
+    if not text_results["ids"]:
+        # No text chunks - return table metadata only
+        return {
+            "doc_id": doc_id,
+            "doc_title": table_meta.get("doc_title", "Unknown"),
+            "citation_key": table_meta.get("citation_key", ""),
+            "note": "No text chunks found for this document",
+            "table_caption": table_caption,
+            "table_page": table_page,
+            "table_index": table_index,
+            "passages": [],
+            "merged_text": "",
+        }
+
+    # Extract table number from caption (e.g., "Table 1: Results" -> "1")
+    table_num_match = re.search(r"Table\s*(\d+|[IVXLCDM]+)", table_caption, re.IGNORECASE)
+    if table_num_match:
+        table_ref = table_num_match.group(0)  # "Table 1" or "Table I"
+    else:
+        # Fallback: search for any table reference near this page
+        table_ref = f"Table"
+
+    # Search text chunks for reference to this table
+    ref_pattern = re.compile(re.escape(table_ref), re.IGNORECASE)
+    matching_chunk_idx = None
+
+    for chunk_id, text, meta in zip(
+        text_results["ids"], text_results["documents"], text_results["metadatas"]
+    ):
+        if ref_pattern.search(text):
+            matching_chunk_idx = meta["chunk_index"]
+            break
+
+    if matching_chunk_idx is None:
+        # No reference found - return table metadata with note
+        return {
+            "doc_id": doc_id,
+            "doc_title": table_meta.get("doc_title", "Unknown"),
+            "citation_key": table_meta.get("citation_key", ""),
+            "note": "No text reference to this table found",
+            "table_caption": table_caption,
+            "table_page": table_page,
+            "table_index": table_index,
+            "passages": [],
+            "merged_text": "",
+        }
+
+    # Found reference - get context around it
+    context_chunks = store.get_adjacent_chunks(doc_id, matching_chunk_idx, window=window)
+    center_chunk = next(
+        (c for c in context_chunks if c.metadata["chunk_index"] == matching_chunk_idx),
+        context_chunks[0] if context_chunks else None
+    )
+
+    if not center_chunk:
+        raise ToolError(f"Could not retrieve context for chunk {matching_chunk_idx}")
+
+    return {
+        "doc_id": doc_id,
+        "doc_title": center_chunk.metadata.get("doc_title", "Unknown"),
+        "citation_key": center_chunk.metadata.get("citation_key", ""),
+        "table_caption": table_caption,
+        "table_page": table_page,
+        "table_index": table_index,
+        "reference_found_in_chunk": matching_chunk_idx,
+        "section": center_chunk.metadata.get("section", "unknown"),
+        "section_confidence": center_chunk.metadata.get("section_confidence", 1.0),
+        "center_chunk_index": matching_chunk_idx,
+        "window": window,
+        "passages": [
+            {
+                "chunk_index": c.metadata["chunk_index"],
+                "page": c.metadata["page_num"],
+                "section": c.metadata.get("section", "unknown"),
+                "text": c.text,
+                "is_center": c.metadata["chunk_index"] == matching_chunk_idx,
+            }
+            for c in context_chunks
+        ],
+        "merged_text": "\n\n".join(c.text for c in context_chunks),
+    }

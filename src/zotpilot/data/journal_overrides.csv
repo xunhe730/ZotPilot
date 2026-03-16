@@ -1,0 +1,8 @@
+# Manual corrections for fuzzy matching mistakes
+# Format: input_title,correct_quartile
+#
+# Add entries here for journals that fuzzy matching gets wrong.
+# These take precedence over SCImago lookups.
+#
+# Example:
+# IEEE Trans. Biomed. Circuits Syst.,Q1

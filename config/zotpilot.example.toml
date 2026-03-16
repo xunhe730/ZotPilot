@@ -1,0 +1,24 @@
+# ZotPilot Configuration Example
+# Actual config is stored as JSON at ~/.config/zotpilot/config.json
+# This file is for documentation purposes.
+
+[zotero]
+data_dir = "~/Zotero"
+
+[embeddings]
+provider = "gemini"  # or "local"
+model = "gemini-embedding-001"
+dimensions = 768
+
+[index]
+chunk_size = 400
+chunk_overlap = 100
+chroma_db_path = "~/.local/share/zotpilot/chroma"
+
+[reranking]
+enabled = true
+alpha = 0.7
+
+[vision]
+enabled = true
+model = "claude-haiku-4-5-20251001"
