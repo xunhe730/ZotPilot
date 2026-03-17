@@ -1,10 +1,5 @@
 <div align="center">
   <h1>ZotPilot</h1>
-  <h3>Let AI Take Over Your Zotero</h3>
-  <p>
-    Search by meaning, explore citations, organize with natural language.<br>
-    <b>An AI Agent Skill for Zotero. Full library access. No plugin required.</b>
-  </p>
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
@@ -18,32 +13,233 @@
   </p>
 
   <p>
-    <a href="#-quick-start">Quick Start</a> &bull;
-    <a href="#-real-world-examples">Examples</a> &bull;
-    <a href="#-how-it-works">Architecture</a> &bull;
-    <a href="#-common-commands">Commands</a> &bull;
+    <a href="#quick-start">Quick Start</a> &bull;
+    <a href="#compared-to-alternatives">Compare</a> &bull;
+    <a href="#how-it-works">Architecture</a> &bull;
     <a href="README.md">简体中文</a>
   </p>
 </div>
 
 ---
 
-## The Problem
+## What is this
 
-You have hundreds of papers in Zotero. While writing a Related Work section, you _remember_ reading about "the relationship between sleep spindles and memory consolidation" — but can't find it in Zotero. Because you remember the _concept_, but Zotero only matches _exact words_.
+ZotPilot is an AI Agent Skill that adds semantic search, citation graph queries, and AI-assisted organization to your Zotero library.
 
-This is the fundamental limitation of all reference managers:
-- **Zotero search is keyword matching** — "memory consolidation during sleep" won't find a paper that says "sleep spindle-dependent replay", even though they describe the same phenomenon
-- **No cross-paper queries** — "which papers report N400 effects in their Results section?" requires opening each PDF manually
-- **Table data is locked in PDFs** — you know a paper has an accuracy comparison table, but can't search table contents
-- **Citation relationships are blind** — "who cites this paper? what do they say about it?" requires manual Google Scholar lookup
-- **Organizing is manual labor** — tagging and sorting 200 papers by theme is pure drag-and-drop busywork
+It builds a local vector index over your Zotero data, then exposes 24 tools to AI agents via MCP protocol. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, and help you tag and sort your collection. Your papers stay on your machine.
 
-## The Solution
+---
 
-ZotPilot builds a **local RAG system** (Retrieval-Augmented Generation) on top of your Zotero library, exposed to AI agents via MCP protocol — letting AI search by meaning, read, and organize your papers directly.
+## Why this exists
 
-**How it works:**
+You're writing a Related Work section and you remember reading about "the relationship between sleep spindles and memory consolidation." But you can't find it in Zotero. You remember the concept; Zotero only matches exact words. Searching "memory consolidation during sleep" won't find a paper that says "sleep spindle-dependent replay," even though they describe the same thing.
+
+Beyond search, there are a few other things Zotero can't do:
+
+- "Which papers report N400 effects in their Results section?" — you have to open each PDF and look
+- You know a paper has an accuracy comparison table, but you can't search table contents
+- "Who cites this paper? What do they say about it?" — manual Google Scholar work
+- Tagging and sorting 200 papers by theme — drag-and-drop busywork
+
+---
+
+## What it looks like in practice
+
+**Semantic search:**
+
+> "relationship between sleep spindles and memory consolidation"
+
+Returns 3 papers, even though they use the phrase "spindle-dependent replay." Zotero wouldn't find these.
+
+**Section-level retrieval:**
+
+> "Which papers report N400 effects in their Results?"
+
+Returns passages from Results sections only, with `[Author2022, p.12]` citations. Passing mentions in Introduction or References don't show up. Q1 journal results rank higher.
+
+**Batch organization:**
+
+> "Tag all deep learning papers and move them to a DL Methods collection"
+
+Semantic search matches 28 papers, auto-tags them, creates the collection, syncs back to Zotero. Asks for confirmation if more than 5 papers are affected.
+
+**Citation exploration:**
+
+> "Who cites Wang 2022 and what do they say about the limitations?"
+
+Finds 15 citing papers via OpenAlex, searches them for critique passages.
+
+**Table search:**
+
+> "Find tables comparing model accuracy"
+
+Searches extracted table headers, cell data, and captions from PDFs.
+
+---
+
+## Compared to alternatives
+
+| Approach | Semantic search | Knows paper structure | Organizes for you | Citation graph | Setup time |
+|----------|:-:|:-:|:-:|:-:|-------|
+| Zotero built-in search | No | No | No | No | None |
+| Feed PDFs to AI | Yes | No (section info lost) | No | No | Manual, token-limited |
+| Build your own RAG | Yes | Depends on implementation | No | No | Hours |
+| ZotPilot | Yes | Yes | Yes | Yes (OpenAlex) | ~5 min |
+
+The difference from DIY RAG: after finding a passage, ZotPilot knows whether it's from Results or Methods, from a Q1 journal or a workshop, and adjusts ranking accordingly. The scoring formula is `similarity^0.7 × section_weight × journal_quality`. Combined with table search, citation graph, and Zotero write operations, it covers most of the literature research workflow.
+
+---
+
+## Quick start
+
+### Option 1: Let your agent install it
+
+Copy this to your AI agent:
+
+> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, then help me set up my Zotero library.
+
+The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. Restart once, then you're ready.
+
+### Option 2: Manual install
+
+**1. Clone to your skills directory:**
+
+```bash
+# Claude Code
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
+
+# Codex CLI
+git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
+
+# OpenCode
+git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
+
+# OpenClaw
+git clone https://github.com/xunhe730/ZotPilot.git ~/.openclaw/skills/zotpilot
+```
+
+**2. Register the MCP server:**
+
+```bash
+# Claude Code
+claude mcp add -s user zotpilot -- zotpilot
+
+# Codex CLI
+codex mcp add zotpilot -- zotpilot
+
+# OpenCode / OpenClaw
+# Add MCP server via your agent's config: command = zotpilot, transport = stdio
+```
+
+**3. Restart your AI agent.**
+
+### What happens on first use
+
+When you say "search my Zotero" the first time, the Skill walks through setup:
+
+1. Detects missing `zotpilot` CLI, installs it via `uv tool install`
+2. Finds your Zotero data directory, asks which embedding provider to use
+3. Registers the MCP server (if not done already)
+4. You restart once for MCP tools to load
+5. Indexes your papers, ~2-5 seconds each
+6. Ready to search after that
+
+**Three embedding options:**
+
+| Provider | API Key needed | Quality | Offline | Dimensions |
+|----------|:---:|------|:---:|------|
+| Gemini `gemini-embedding-001` | Yes ([free tier](https://aistudio.google.com/apikey)) | MTEB #1 | No | 768 |
+| DashScope `text-embedding-v3` | Yes ([Alibaba Cloud](https://bailian.console.aliyun.com/)) | Very good | No | 1024 |
+| Local `all-MiniLM-L6-v2` | No | Decent | Yes | 384 |
+
+Note: this choice is hard to change later. The three providers produce different vector dimensions, so switching requires `zotpilot index --force` to re-index everything. Pick before you index.
+
+---
+
+## Common commands
+
+| What you say | What happens |
+|---|---|
+| "Search my papers for X" | Semantic search across all indexed papers |
+| "What do I have on X?" | Topic-level survey, papers grouped by relevance |
+| "Find the paper by Author about Y" | Exact-match search + paper details |
+| "Show me tables comparing X" | Searches extracted table content |
+| "Who cites this paper?" | Citation lookup via OpenAlex |
+| "Tag these papers as X" | Adds tags via Zotero Web API |
+| "Create a collection called X" | Creates a Zotero folder |
+| "How many papers are indexed?" | Index status check |
+
+---
+
+## 24 MCP tools
+
+<details>
+<summary>Search (6)</summary>
+
+| Tool | What it does |
+|------|-------------|
+| `search_papers` | Semantic search with section/journal weighting |
+| `search_topic` | Topic-level paper discovery, deduplicated by document |
+| `search_boolean` | Exact word matching (AND/OR) |
+| `search_tables` | Search table content |
+| `search_figures` | Search figure captions |
+| `get_passage_context` | Expand a result with surrounding text |
+
+</details>
+
+<details>
+<summary>Browse (6)</summary>
+
+| Tool | What it does |
+|------|-------------|
+| `get_library_overview` | List all papers with index status |
+| `get_paper_details` | Full metadata for one paper |
+| `list_collections` | All Zotero folders |
+| `get_collection_papers` | Papers in a specific folder |
+| `list_tags` | All tags |
+| `get_index_stats` | Index status: doc count, chunk count |
+
+</details>
+
+<details>
+<summary>Write (5)</summary>
+
+| Tool | What it does |
+|------|-------------|
+| `add_item_tags` / `remove_item_tags` | Add/remove tags |
+| `set_item_tags` | Replace all tags |
+| `add_to_collection` / `remove_from_collection` | Move in/out of folders |
+| `create_collection` | Create a folder |
+
+</details>
+
+<details>
+<summary>Citations (3)</summary>
+
+| Tool | What it does |
+|------|-------------|
+| `find_citing_papers` | Who cites this paper (OpenAlex) |
+| `find_references` | What this paper cites |
+| `get_citation_count` | Citation count |
+
+</details>
+
+<details>
+<summary>Admin (4)</summary>
+
+| Tool | What it does |
+|------|-------------|
+| `index_library` | Index new papers (incremental) |
+| `get_reranking_config` | View ranking weights |
+| `get_vision_costs` | Check vision API usage |
+
+</details>
+
+---
+
+## How it works
+
+ZotPilot is an AI Agent Skill: a repository with an instruction file ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads. It starts an MCP server with 24 tools.
 
 ```
 Indexing (run once)
@@ -56,273 +252,57 @@ AI Agent ──→ 24 MCP tools ──┬── Semantic search ──→ Chroma
                              └── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero
 ```
 
-- **Indexing**: reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract/Methods/Results/…), generates vector embeddings, stores in ChromaDB
-- **Retrieval**: query is vectorized, cosine similarity search in ChromaDB, results pass through **section-aware reranking** (Results weighted higher than References) and **journal quality weighting** (SCImago Q1 papers ranked higher)
-- **Write operations**: tag and collection management via Zotero's official Web API (Pyzotero), changes sync back to Zotero automatically
-- **Citation graph**: forward and backward citation lookup via OpenAlex API
+**Indexing:** reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract / Methods / Results / …), generates embeddings, stores in ChromaDB.
 
-**Key design decisions:**
-- Fully local — papers never leave your machine (except Gemini/DashScope embedding API calls)
-- Zotero SQLite read-only — safe even while Zotero is running
-- Asymmetric embeddings — documents encoded with `RETRIEVAL_DOCUMENT`, queries with `RETRIEVAL_QUERY`, improving retrieval quality
-- Built-in Skill — doesn't just give AI tools, teaches AI _which tool to pick and how to chain them_
+**Retrieval:** query is vectorized, cosine similarity search in ChromaDB, results go through section-aware reranking (Results weighted higher than References) and journal quality weighting (SCImago Q1 papers rank higher).
 
----
+**Write operations:** tag and collection management via Zotero's official Web API (Pyzotero), changes sync back to Zotero automatically.
 
-## Why ZotPilot, Not Other Approaches?
+**Citation graph:** forward and backward citation lookup via OpenAlex API.
 
-| Approach | Semantic search | Knows paper structure | Organizes for you | Citation graph | Setup |
-|----------|:-:|:-:|:-:|:-:|-------|
-| **Zotero built-in search** | No | No | No | No | None |
-| **Feed PDFs to Claude** | Yes | No (loses section info) | No | No | Manual, token-limited |
-| **Build your own RAG** | Yes | Depends | No | No | Hours of setup |
-| **ZotPilot** | **Yes** | **Yes (section+journal+tables)** | **Yes** | **Yes (OpenAlex)** | **5 min** |
+Design choices:
 
-ZotPilot's core advantage over DIY RAG: **it doesn't just "find relevant passages" — it knows whether a passage comes from Results or Methods, from a Q1 journal or a workshop paper, and ranks accordingly.** Combined with table/figure search, citation graph, and Zotero write operations, it forms a complete research workflow.
+- Zotero SQLite is opened with `mode=ro&immutable=1`. Read-only. Safe while Zotero is running.
+- Paper data stays local. The only network requests are embedding API calls (zero if using Local model).
+- Documents and queries use different encodings (Gemini's `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`), which improves retrieval quality over using the same encoding for both.
+- SKILL.md doesn't just expose tool interfaces; it tells the AI which tool to use in which scenario and how to combine them.
 
----
-
-## Quick Start
-
-### Option 1: Auto Install (recommended)
-
-Copy this to your AI agent:
-
-> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, then help me set up my Zotero library.
-
-The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. You restart once, then you're ready to search.
-
-### Option 2: Manual Install
-
-```bash
-# Claude Code
-git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-
-# OpenCode
-git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
-
-# OpenClaw
-git clone https://github.com/xunhe730/ZotPilot.git ~/.openclaw/skills/zotpilot
-```
-
-Restart your AI agent.
-
-### What happens on first use
-
-When you say "search my Zotero for..." the first time, the Skill walks you through setup:
-
-1. **Auto-installs CLI** — `scripts/run.py` detects missing `zotpilot` command and installs it via `uv tool install`
-2. **Configures Zotero** — auto-detects your Zotero data directory, asks you to choose embedding provider (Gemini or offline local)
-3. **Registers MCP server** — runs `claude mcp add` (or equivalent for OpenCode/OpenClaw)
-4. **You restart once** — MCP tools become available after restart
-5. **Indexes your papers** — on second launch, indexes your library (~2-5s per paper)
-6. **Ready to search** — from here on, just ask naturally
-
-> **Embedding choice:** Gemini (recommended, free tier at https://aistudio.google.com/apikey), DashScope/Bailian (recommended for China, get API key at https://bailian.console.aliyun.com/), or Local (offline, no API key). The Skill asks during setup.
->
-> **Note:** The embedding provider is locked in after first index. Different providers produce incompatible vector dimensions (Gemini 768d, DashScope 1024d, Local 384d). Switching requires re-indexing with `zotpilot index --force`. Choose carefully.
-
----
-
-## Real-World Examples
-
-### Example 1: Literature Survey
-
-**You:** "What do I have on transformer architectures for EEG classification?"
-
-**AI's internal process (guided by Skill):**
-```
-→ Checks index readiness (get_index_stats)
-→ Picks search_topic (not search_papers — this is a survey task)
-→ Returns 12 papers, sorted by relevance
-→ Reports: year range 2019–2024, key authors, best passages
-```
-
-**Result:** Structured overview with paper titles, authors, and key findings — no PDF opened.
-
-### Example 2: Finding Specific Evidence
-
-**You:** "Find evidence that N400 amplitude correlates with prediction error"
-
-**AI's internal process:**
-```
-→ Picks search_papers (specific claim, not survey)
-→ Uses required_terms=["N400"] to force exact match
-→ Sets section_weights={"results": 1.0, "discussion": 0.8}
-→ Returns passages with page numbers and citation keys
-```
-
-**Result:** Direct quotes from 3 papers with `[Author2022, p.12]` citations.
-
-### Example 3: Organize by Theme
-
-**You:** "Tag all deep learning papers and move them to a 'DL Methods' collection"
-
-**AI's internal process:**
-```
-→ search_topic("deep learning") → finds 28 matching papers
-→ create_collection("DL Methods") → creates Zotero folder
-→ For each paper: add_to_collection + add_item_tags(["deep-learning"])
-→ Confirms with user before modifying more than 5 papers
-```
-
-**Result:** 28 papers tagged and organized. Changes sync to Zotero via Web API.
-
-> **Note:** Write operations (tags, collections) require Zotero Web API credentials. See [Enable Write Operations](#enable-write-operations) below.
-
-### Example 4: Citation Exploration
-
-**You:** "Who cites Wang 2022 and what do they say about the limitations?"
-
-**AI's internal process:**
-```
-→ search_boolean("Wang 2022") → finds the paper, gets doc_id
-→ find_citing_papers(doc_id) → 15 citing papers via OpenAlex
-→ search_papers("limitations of Wang 2022 approach") in those papers
-→ Returns specific critique passages
-```
-
----
-
-## Common Commands
-
-| What you say | What happens |
-|---|---|
-| *"Search my papers for X"* | Semantic search across all indexed papers |
-| *"What do I have on X?"* | Topic survey — returns papers grouped by relevance |
-| *"Find the paper by Author about Y"* | Boolean search + paper details |
-| *"Show me tables comparing X"* | Searches extracted table content |
-| *"Who cites this paper?"* | Citation lookup via OpenAlex |
-| *"Tag these papers as X"* | Adds tags via Zotero Web API |
-| *"Create a collection called X"* | Creates Zotero folder |
-| *"How many papers are indexed?"* | Index health check |
-
----
-
-## 24 MCP Tools
-
-### Search & Discover
-
-| Tool | Description |
-|------|-------------|
-| `search_papers` | Semantic search with section/journal weighting and filters |
-| `search_topic` | Topic-level paper discovery, deduplicated by document |
-| `search_boolean` | Exact word matching (AND/OR) via Zotero's full-text index |
-| `search_tables` | Search table headers, cells, and captions |
-| `search_figures` | Search figure captions and descriptions |
-| `get_passage_context` | Expand any result with surrounding paragraphs |
-
-### Browse & Understand
-
-| Tool | Description |
-|------|-------------|
-| `get_library_overview` | Paginated list of all papers with index status |
-| `get_paper_details` | Full metadata: title, authors, abstract, DOI, tags |
-| `list_collections` | All Zotero folders with hierarchy |
-| `get_collection_papers` | Papers in a specific collection |
-| `list_tags` | All tags sorted by frequency |
-| `get_index_stats` | Index health: documents, chunks, unindexed papers |
-
-### Organize & Write
-
-| Tool | Description |
-|------|-------------|
-| `add_item_tags` / `remove_item_tags` | Add or remove tags (non-destructive) |
-| `set_item_tags` | Replace all tags on a paper |
-| `add_to_collection` / `remove_from_collection` | Move papers between folders |
-| `create_collection` | Create new folders (supports nesting) |
-
-### Citations & Impact
-
-| Tool | Description |
-|------|-------------|
-| `find_citing_papers` | Who cites this paper? (OpenAlex) |
-| `find_references` | What does this paper cite? |
-| `get_citation_count` | Citation and reference counts |
-
-### Admin
-
-| Tool | Description |
-|------|-------------|
-| `index_library` | Index new/changed papers (incremental) |
-| `get_reranking_config` | View ranking weights |
-| `get_vision_costs` | Monitor vision API usage |
-
----
-
-## How It Works
-
-This is an **AI Agent Skill** — a repository containing instructions ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads automatically. The Skill triggers an MCP server with 24 tools for full Zotero access.
-
-### Architecture
+### File structure
 
 ```
-~/.claude/skills/zotpilot/          (or OpenCode/OpenClaw equivalent)
+~/.claude/skills/zotpilot/          # or ~/.agents/skills/zotpilot/ (Codex)
 ├── SKILL.md                        # Decision tree: setup → index → research
 ├── scripts/run.py                  # Bootstrap: auto-installs CLI + delegates
-├── references/                     # Deep reference docs
-│   ├── tool-guide.md               # Detailed parameter guide
-│   ├── troubleshooting.md          # Common issues + fixes
+├── references/                     # Reference docs
+│   ├── tool-guide.md               # Tool parameter details
+│   ├── troubleshooting.md          # Common issues
 │   └── install-steps.md            # Manual install reference
-└── src/zotpilot/                   # MCP server source (24 tools)
+└── src/zotpilot/                   # MCP server source
 ```
 
-When you mention Zotero or papers, the AI:
-1. Loads `SKILL.md` → runs `scripts/run.py status --json`
-2. If not installed → auto-installs CLI, configures Zotero, registers MCP
-3. If not indexed → indexes your papers (Gemini or local embeddings)
-4. If ready → picks the right tool, sets optimal parameters, formats results
-
-### Key Design Decisions
-
-- **Local-first** — your papers never leave your machine. Zotero SQLite is read-only
-- **Write via Web API** — tag/collection changes sync through Zotero's official API
-- **Section-aware ranking** — composite score = similarity^0.7 x section_weight x journal_quality
-- **Asymmetric embeddings** — separate encodings for documents vs queries (Gemini)
-- **Skill, not just tools** — SKILL.md teaches AI _which_ tool to pick and _how_ to chain them
-
-### Embedding Options
-
-| Provider | API Key | Quality | Offline | Notes |
-|----------|---------|---------|---------|-------|
-| **Gemini** `gemini-embedding-001` | Required (free tier) | MTEB #1 | No | Recommended, 768d |
-| **DashScope** `text-embedding-v3` | Required (Alibaba Cloud) | Excellent | No | Recommended for China, 1024d, ¥0.0005/1k tokens |
-| **Local** `all-MiniLM-L6-v2` | Not needed | Good | Yes | 384d, fully offline |
-
-> **Note:** The embedding provider choice is locked in at first index. Different providers produce incompatible vector dimensions (Gemini 768d, DashScope 1024d, Local 384d). Switching providers requires re-indexing with `zotpilot index --force`. Choose carefully before indexing.
-
-### Data Storage
+### Data storage
 
 ```
-~/.config/zotpilot/config.json      # Configuration (Zotero path, provider)
-~/.local/share/zotpilot/chroma/     # ChromaDB vector index
+~/.config/zotpilot/config.json      # Configuration (Zotero path, embedding provider)
+~/.local/share/zotpilot/chroma/     # Vector index
 ```
-
-Your Zotero data is read directly from its SQLite database. The index is local. No data leaves your machine (except embedding API calls if using Gemini or DashScope).
 
 ---
 
-## Enable Write Operations
+## Enable write operations
 
-Search and citation tools work out of the box. To **organize your library** (add tags, move papers, create collections), you need a Zotero Web API key.
+Search and citation tools work without extra setup. Tagging and collection management need a Zotero Web API key.
 
-### Get credentials
-
-1. Go to [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
-2. Click **"Create new private key"**
-3. Check **"Allow library access"** and **"Allow write access"**
-4. Save — copy the key
-5. Note your **User ID** (the number shown on the same page — not your username)
-
-### Option 1: Let your Agent configure it (recommended)
-
-Once you have the key and User ID, just tell your AI agent:
+1. Go to [zotero.org/settings/keys](https://www.zotero.org/settings/keys), create a key with "Allow library access" and "Allow write access" checked
+2. Note your User ID (the number on the page, not your username)
+3. Tell your agent:
 
 > Enable ZotPilot write operations. My Zotero API Key is `xxxxx` and my User ID is `12345`.
 
-The agent will run `claude mcp remove` + `claude mcp add` and prompt you to restart.
+<details>
+<summary>Manual configuration</summary>
 
-### Option 2: Manual configuration
+**Claude Code:**
 
 ```bash
 claude mcp remove zotpilot
@@ -333,133 +313,160 @@ claude mcp add -s user \
   zotpilot -- zotpilot
 ```
 
-Restart your AI agent.
+**Codex CLI:**
 
-> Without these credentials, all read/search operations still work. You only need this for tag and collection management.
+```bash
+codex mcp remove zotpilot
+codex mcp add zotpilot \
+  --env GEMINI_API_KEY=<your-gemini-key> \
+  --env ZOTERO_API_KEY=<your-zotero-key> \
+  --env ZOTERO_USER_ID=<your-user-id> \
+  -- zotpilot
+```
+
+Or edit `~/.codex/config.toml` directly:
+
+```toml
+[mcp_servers.zotpilot]
+command = "zotpilot"
+env = { GEMINI_API_KEY = "...", ZOTERO_API_KEY = "...", ZOTERO_USER_ID = "..." }
+```
+
+Restart your agent.
+
+</details>
+
+Without these credentials, search and citations still work. Only tag and collection management requires the key.
 
 ---
 
 ## FAQ
 
-### Basics
+<details>
+<summary>Does this modify my Zotero database?</summary>
 
-**Does this modify my Zotero database?**
-No. ZotPilot opens SQLite with `mode=ro&immutable=1` — strictly read-only. Write operations (tags, collections) go through Zotero's official Web API v3 and sync back to the Zotero client normally.
+No. SQLite is opened with `mode=ro&immutable=1`, physically read-only. Tag and collection changes go through Zotero's official Web API v3 and sync back to the Zotero client normally.
 
-**Is it safe to run while Zotero is open?**
-Yes. Read-only database access is safe to run concurrently with Zotero.
+</details>
 
-**What AI agents are supported?**
-Claude Code, OpenCode, and OpenClaw. Any agent that supports the Skill + MCP protocol pattern.
+<details>
+<summary>Safe to run while Zotero is open?</summary>
 
-### Cost & Resources
+Yes, read-only mode doesn't conflict.
 
-**Does Gemini embedding cost money?**
-Gemini Embedding API has a **free tier** (~1,000 requests/day after the Dec 2025 reduction). ZotPilot sends 1 request per 32 text chunks. A 10-page paper produces ~15-25 chunks = 1 request. The free tier is enough to index several hundred papers in one go. **Each search query also requires 1 embedding request** (the query text must be vectorized for cosine similarity search). Paid pricing is $0.15/million tokens — daily search costs are negligible. The local model (`--provider local`) consumes zero API requests.
+</details>
 
-**What about DashScope/Bailian embeddings?**
-Alibaba Cloud's DashScope offers `text-embedding-v3` with 1024-dimensional vectors. Ideal for users in China (no VPN needed). Pricing: ¥0.0005/1k tokens — extremely affordable. Use `--provider dashscope` during setup and set `DASHSCOPE_API_KEY`. Get a key at https://bailian.console.aliyun.com/.
+<details>
+<summary>Which agents are supported?</summary>
 
-**What about the local embedding model?**
-`all-MiniLM-L6-v2` is ~80MB, downloaded automatically on first use. Runs fully offline after that — zero API cost. Lower quality than Gemini (384d vs 768d) but sufficient for small-to-medium libraries.
+Claude Code, Codex CLI, OpenCode, OpenClaw. Anything that supports Skill + MCP protocol.
 
-**How much disk space does the index use?**
-About 1MB per 100 papers. A 300-paper index is ~3MB — negligible.
+</details>
 
-**Does vision table extraction cost money?**
-Optional feature, enabled by default but requires `ANTHROPIC_API_KEY`. Uses Claude Haiku via Batch API to re-extract PDF tables (fixes merged cells, multi-level headers that PyMuPDF may garble). Costs are logged to `vision_costs.json`. Without an Anthropic API key, it's silently skipped — text search still works fine.
+<details>
+<summary>Does Gemini embedding cost money?</summary>
 
-### Indexing & Content
+Free tier is about 1,000 requests/day. One 10-page paper uses about 1 request (32 text chunks per request), and each search query uses 1 request. Free tier is enough to index a few hundred papers. Beyond that, $0.15/million tokens. Local model costs nothing.
 
-**How long does indexing take?**
-~2-5 seconds per paper (PDF extraction + embedding). 300 papers ≈ 10-15 minutes. Use `--limit 10` to test first. Re-running `zotpilot index` is incremental — only new/changed papers are processed.
+</details>
 
-**Can it search scanned/image-only PDFs?**
-Yes. PyMuPDF has built-in OCR that detects image-only pages and extracts text automatically. OCR quality depends on scan quality — blurry scans may extract incomplete text.
+<details>
+<summary>What about DashScope/Bailian?</summary>
 
-**Are figure images embedded as vectors?**
-No. ZotPilot embeds **figure captions and the surrounding paragraph text** that references the figure — not the image pixels. Figure PNGs are saved to disk; `search_figures` returns the image path. You can search by "what Figure 3's caption says" but not by image content.
+Alibaba Cloud's `text-embedding-v3`, 1024 dimensions. No VPN needed in China, ¥0.0005/1k tokens. Use `--provider dashscope` during setup. Key at https://bailian.console.aliyun.com/.
 
-**How are very long books (hundreds of pages) handled?**
-By default, documents longer than 40 pages are skipped (adjustable via `--max-pages`, use `--max-pages 0` to disable the limit). After indexing, skipped long documents are listed so you can decide whether to index them. You can also use `--item-key KEY` to index a specific long document individually.
+</details>
 
-Other filtering options:
-- `--title "pattern"` — regex filter by title, index only matching papers
-- `--limit N` — cap the number of papers processed
-- Already-indexed papers are never re-indexed (tracked by PDF hash)
+<details>
+<summary>Local embedding model?</summary>
 
-**Can I use this without any API key?**
-Yes. Choose `--provider local` during setup. Uses all-MiniLM-L6-v2 offline. No API key needed for anything — search, browse, and organize all work locally. If you're in China and can't easily access Gemini, `--provider dashscope` (Alibaba Cloud) is another option.
+`all-MiniLM-L6-v2`, about 80MB, auto-downloaded on first use. Fully offline after that. Lower quality than Gemini (384d vs 768d) but works fine for libraries under a few hundred papers.
 
-### Citation Graph
+</details>
 
-**Where does citation data come from?**
-[OpenAlex](https://openalex.org/) — a free, open scholarly metadata database covering ~250 million works. Lookup is DOI-based. Anonymous access: 1 req/sec; with `OPENALEX_EMAIL`: 10 req/sec.
+<details>
+<summary>How long does indexing take? Disk space?</summary>
 
-**Do Chinese (CNKI) papers support citation queries?**
-It depends on whether the paper has a DOI. OpenAlex primarily covers English-language literature, but some Chinese journals are indexed (especially those with English DOIs). If your CNKI paper has a DOI in Zotero and OpenAlex has it, citation queries work. Papers without DOIs (e.g., some Chinese theses) can't use citation tools, but semantic search and tag management work fine.
+2-5 seconds per paper, 300 papers takes about 15 minutes. Index size is roughly 1MB per 100 papers. `--limit 10` to test. Already-indexed papers are skipped.
 
-**What about papers without DOIs?**
-Semantic search, table search, boolean search, tag management — all work without DOIs. Only `find_citing_papers`, `find_references`, and `get_citation_count` require a DOI.
+</details>
+
+<details>
+<summary>Scanned PDFs / figures / long documents?</summary>
+
+- Scanned PDFs: PyMuPDF has built-in OCR
+- Figures: captions and surrounding text are indexed, not the image itself. PNG files saved locally
+- Long documents: skipped above 40 pages by default (`--max-pages` to adjust), `--item-key` to index specific ones
+- Table repair: optional, uses Claude Haiku to fix complex tables, requires `ANTHROPIC_API_KEY`
+
+</details>
+
+<details>
+<summary>Can I use this with no API key at all?</summary>
+
+Yes. Choose `--provider local` and everything runs offline.
+
+</details>
+
+<details>
+<summary>What about vision table extraction?</summary>
+
+Optional feature. Uses Claude Haiku (via Batch API) to re-extract PDF tables, fixing merged cells and multi-level headers that PyMuPDF sometimes garbles. Requires `ANTHROPIC_API_KEY`. Without it, the feature is silently skipped; text search still works. Costs are logged in `vision_costs.json`.
+
+</details>
+
+<details>
+<summary>Where does citation data come from? Chinese papers?</summary>
+
+[OpenAlex](https://openalex.org/), covering about 250 million works. DOI-based lookup. Chinese papers with DOIs that OpenAlex indexes work fine. Papers without DOIs can't use citation tools, but semantic search and tag management don't need DOIs.
+
+</details>
 
 ---
 
 ## Troubleshooting
 
-See [references/troubleshooting.md](references/troubleshooting.md) for detailed solutions. Quick fixes:
-
 | Problem | Fix |
 |---------|-----|
-| Skill not found after install | Check path: `ls ~/.claude/skills/zotpilot/SKILL.md` |
-| `zotpilot: command not found` | Run `python3 scripts/run.py status` (auto-installs) |
-| MCP tools not available | `claude mcp add -s user zotpilot -- zotpilot` then restart |
-| Empty search results | Run `zotpilot index` first, or try broader query |
-| `GEMINI_API_KEY not set` | Set env var, or switch to local: `zotpilot setup --non-interactive --provider local` |
-| Not sure what's wrong | Run `zotpilot doctor` for detailed diagnostics |
+| Skill not found | `ls ~/.claude/skills/zotpilot/SKILL.md` (Claude Code) or `ls ~/.agents/skills/zotpilot/SKILL.md` (Codex) |
+| `zotpilot: command not found` | `python3 scripts/run.py status` (auto-installs) |
+| MCP tools not showing up | Re-register MCP server and restart |
+| Empty search results | Run `zotpilot index` first, or try a broader query |
+| `GEMINI_API_KEY not set` | Set the env var, or `zotpilot setup --non-interactive --provider local` |
+| Not sure what's wrong | Run `zotpilot doctor` |
+
+More at [references/troubleshooting.md](references/troubleshooting.md).
 
 ---
 
-## Contributing
-
 <details>
-<summary><b>Development Setup</b></summary>
+<summary>Development / Contributing</summary>
 
 ```bash
 git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 uv sync --extra dev
-
-# Run tests
-uv run pytest              # 106 tests
-
-# Lint
+uv run pytest              # 131 tests
 uv run ruff check src/
 ```
 
-</details>
+Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+</details>
 
 ---
 
-## The Bottom Line
-
-**Without ZotPilot:** Keyword guessing in Zotero → open each PDF → copy-paste to AI → repeat
-
-**With ZotPilot:** Tell your AI what you need → it searches by meaning, finds evidence, explores citations, organizes papers — all in one conversation.
-
 ```bash
-# Get started in 30 seconds
 git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-# Restart Claude Code, then: "search my Zotero for..."
+# Restart Claude Code, then tell your AI: "search my Zotero"
 ```
 
 ---
 
 <div align="center">
   <p>
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Report Bug</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Request Feature</a> &middot;
+    <a href="https://github.com/xunhe730/ZotPilot/issues">Report a bug</a> &middot;
+    <a href="https://github.com/xunhe730/ZotPilot/issues">Request a feature</a> &middot;
     <a href="https://github.com/xunhe730/ZotPilot/discussions">Discussions</a>
   </p>
   <sub>MIT License &copy; 2026 Xiaodong Zhuang</sub>
