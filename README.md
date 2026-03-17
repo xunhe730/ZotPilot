@@ -339,23 +339,62 @@ claude mcp add -s user \
 
 ## 常见问题
 
+### 基本问题
+
 **会修改我的 Zotero 数据库吗？**
-不会。ZotPilot 以只读模式读取 SQLite 数据库。写操作（标签、集合）通过 Zotero 的官方 Web API，正常同步。
-
-**新增论文到 Zotero 后怎么办？**
-再运行 `zotpilot index`——增量索引，只处理新增/变更的论文。
-
-**可以不用 API key 吗？**
-可以。安装时选择 `--provider local` 使用离线嵌入模型（all-MiniLM-L6-v2），不需要任何 API key，一切在本地运行。
-
-**索引需要多久？**
-每篇论文约 2-5 秒。300 篇论文约 10-15 分钟。用 `--limit 10` 先测试。
-
-**支持哪些 AI agent？**
-Claude Code、OpenCode 和 OpenClaw。任何支持 Skill + MCP 协议的 agent。
+不会。ZotPilot 以 `mode=ro&immutable=1` 打开 SQLite 数据库，绝对只读。写操作（标签、集合）通过 Zotero 官方 Web API v3，变更正常同步回 Zotero 客户端。
 
 **Zotero 开着时可以用吗？**
-可以。ZotPilot 以只读模式打开 SQLite 数据库，永远不会写入。
+可以。只读模式打开数据库，和 Zotero 并行运行完全安全。
+
+**支持哪些 AI agent？**
+Claude Code、OpenCode 和 OpenClaw。任何支持 Skill + MCP 协议的 agent 都可以。
+
+### 成本与资源
+
+**Gemini 嵌入要花钱吗？**
+Gemini Embedding API 有**免费额度**（1,500 请求/天）。ZotPilot 每 32 个文本块发一次请求，一篇 10 页的论文大约产生 15-25 个块，即 1 次请求。免费额度足够一次性索引约 500 篇论文。日常搜索每次查询只消耗 1 个请求。索引完成后几乎没有持续成本。
+
+**本地嵌入模型有什么代价？**
+`all-MiniLM-L6-v2` 模型约 80MB，首次使用时自动下载。之后完全离线运行，零 API 成本。质量低于 Gemini（384 维 vs 768 维），但对于中小型文献库完全够用。
+
+**ChromaDB 索引占多少空间？**
+大约每 100 篇论文 1MB。300 篇论文的索引约 3MB，可以忽略不计。
+
+**Vision 表格提取要花钱吗？**
+这是可选功能，默认启用但需要 `ANTHROPIC_API_KEY`。使用 Claude Haiku 通过 Batch API 重新提取 PDF 表格（修复 PyMuPDF 可能搞乱的合并单元格、多级表头）。成本记录在 `vision_costs.json` 中。不设置 Anthropic API key 则自动跳过，不影响文本搜索。
+
+### 索引与内容
+
+**索引需要多久？**
+每篇论文约 2-5 秒（PDF 提取 + 嵌入）。300 篇约 10-15 分钟。用 `--limit 10` 先测试。新增论文运行 `zotpilot index` 会增量索引，只处理未索引的。
+
+**扫描版/纯图片 PDF 能搜索吗？**
+能。PyMuPDF 内置 OCR 自动识别纯图片页面并提取文字。提取出的文字和正常 PDF 文字一样进入向量索引。但 OCR 质量取决于扫描质量——模糊扫描可能提取不完整。
+
+**图片/图表会变成向量吗？**
+图表图片本身**不会**嵌入为向量。ZotPilot 提取的是图表的**标题文字（caption）和引用该图表的上下文段落**，这些文字会被嵌入。图片 PNG 文件保存在本地磁盘，搜索 `search_figures` 时返回图片路径。所以你可以按"Figure 3 的标题说了什么"搜索，但不能按图片内容搜索。
+
+**特别长的专著（几百页）怎么处理？**
+ZotPilot 把所有 PDF 统一按 400 token（约 1600 字符）分块，带 100 token 重叠。一本 500 页的专著会产生上千个块，索引时间较长但功能正常。如果你不想索引某些特别长的文献：
+- 用 `--title "pattern"` 按标题正则过滤，只索引匹配的论文
+- 用 `--item-key KEY` 只索引特定论文
+- 用 `--limit N` 限制一次索引的数量
+- 已索引的不会重复索引（按 PDF hash 跟踪）
+
+**可以不用 API key 吗？**
+可以。安装时选择 `--provider local`，使用 all-MiniLM-L6-v2 离线模型。不需要任何 API key，一切在本地运行。
+
+### 引用图谱
+
+**引用查询的数据来源是什么？**
+[OpenAlex](https://openalex.org/)——一个免费开放的学术元数据库，覆盖约 2.5 亿篇学术文献。通过 DOI 查找论文的被引和参考文献。匿名访问 1 请求/秒，设置 `OPENALEX_EMAIL` 后提升到 10 请求/秒。
+
+**知网（CNKI）论文支持引用查询吗？**
+取决于论文是否有 DOI。OpenAlex 的覆盖范围以英文学术文献为主，部分中文期刊有收录（尤其是有英文 DOI 的）。如果你的知网论文在 Zotero 里有 DOI 字段且 OpenAlex 有收录，引用查询可以工作。没有 DOI 的论文（如部分中文硕博论文）无法使用引用功能，但语义搜索和标签管理不受影响。
+
+**没有 DOI 的论文怎么办？**
+语义搜索、表格搜索、布尔搜索、标签管理——这些功能全部正常，不需要 DOI。只有 `find_citing_papers`、`find_references`、`get_citation_count` 这三个引用工具需要 DOI。
 
 ---
 

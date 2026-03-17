@@ -339,23 +339,62 @@ Restart your AI agent.
 
 ## FAQ
 
+### Basics
+
 **Does this modify my Zotero database?**
-No. ZotPilot reads the SQLite database in read-only mode. Write operations (tags, collections) go through Zotero's official Web API and sync back normally.
+No. ZotPilot opens SQLite with `mode=ro&immutable=1` — strictly read-only. Write operations (tags, collections) go through Zotero's official Web API v3 and sync back to the Zotero client normally.
 
-**What if I add new papers to Zotero?**
-Run `zotpilot index` again — it's incremental, only processes new/changed papers.
-
-**Can I use this without an API key?**
-Yes. Choose `--provider local` during setup to use the offline embedding model (all-MiniLM-L6-v2). No API key needed, everything runs locally.
-
-**How long does indexing take?**
-About 2-5 seconds per paper. For 300 papers, expect ~10-15 minutes. Use `--limit 10` to test first.
+**Is it safe to run while Zotero is open?**
+Yes. Read-only database access is safe to run concurrently with Zotero.
 
 **What AI agents are supported?**
 Claude Code, OpenCode, and OpenClaw. Any agent that supports the Skill + MCP protocol pattern.
 
-**Is it safe to run while Zotero is open?**
-Yes. ZotPilot opens the SQLite database in read-only mode and never writes to it.
+### Cost & Resources
+
+**Does Gemini embedding cost money?**
+Gemini Embedding API has a **free tier** (1,500 requests/day). ZotPilot sends 1 request per 32 text chunks. A 10-page paper produces ~15-25 chunks = 1 request. The free tier is enough to index ~500 papers in one go. Daily search queries consume 1 request each. After indexing, there's virtually no ongoing cost.
+
+**What about the local embedding model?**
+`all-MiniLM-L6-v2` is ~80MB, downloaded automatically on first use. Runs fully offline after that — zero API cost. Lower quality than Gemini (384d vs 768d) but sufficient for small-to-medium libraries.
+
+**How much disk space does the index use?**
+About 1MB per 100 papers. A 300-paper index is ~3MB — negligible.
+
+**Does vision table extraction cost money?**
+Optional feature, enabled by default but requires `ANTHROPIC_API_KEY`. Uses Claude Haiku via Batch API to re-extract PDF tables (fixes merged cells, multi-level headers that PyMuPDF may garble). Costs are logged to `vision_costs.json`. Without an Anthropic API key, it's silently skipped — text search still works fine.
+
+### Indexing & Content
+
+**How long does indexing take?**
+~2-5 seconds per paper (PDF extraction + embedding). 300 papers ≈ 10-15 minutes. Use `--limit 10` to test first. Re-running `zotpilot index` is incremental — only new/changed papers are processed.
+
+**Can it search scanned/image-only PDFs?**
+Yes. PyMuPDF has built-in OCR that detects image-only pages and extracts text automatically. OCR quality depends on scan quality — blurry scans may extract incomplete text.
+
+**Are figure images embedded as vectors?**
+No. ZotPilot embeds **figure captions and the surrounding paragraph text** that references the figure — not the image pixels. Figure PNGs are saved to disk; `search_figures` returns the image path. You can search by "what Figure 3's caption says" but not by image content.
+
+**How are very long books (hundreds of pages) handled?**
+All PDFs are uniformly chunked at 400 tokens (~1600 chars) with 100-token overlap. A 500-page monograph will produce thousands of chunks — indexing takes longer but works fine. If you want to skip certain long documents:
+- `--title "pattern"` — regex filter by title, index only matching papers
+- `--item-key KEY` — index a single specific paper
+- `--limit N` — cap the number of papers processed
+- Already-indexed papers are never re-indexed (tracked by PDF hash)
+
+**Can I use this without any API key?**
+Yes. Choose `--provider local` during setup. Uses all-MiniLM-L6-v2 offline. No API key needed for anything — search, browse, and organize all work locally.
+
+### Citation Graph
+
+**Where does citation data come from?**
+[OpenAlex](https://openalex.org/) — a free, open scholarly metadata database covering ~250 million works. Lookup is DOI-based. Anonymous access: 1 req/sec; with `OPENALEX_EMAIL`: 10 req/sec.
+
+**Do Chinese (CNKI) papers support citation queries?**
+It depends on whether the paper has a DOI. OpenAlex primarily covers English-language literature, but some Chinese journals are indexed (especially those with English DOIs). If your CNKI paper has a DOI in Zotero and OpenAlex has it, citation queries work. Papers without DOIs (e.g., some Chinese theses) can't use citation tools, but semantic search and tag management work fine.
+
+**What about papers without DOIs?**
+Semantic search, table search, boolean search, tag management — all work without DOIs. Only `find_citing_papers`, `find_references`, and `get_citation_count` require a DOI.
 
 ---
 
