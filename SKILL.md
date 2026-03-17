@@ -15,12 +15,13 @@ description: Use when user mentions Zotero, academic papers, citations,
 
 Run: `python3 scripts/run.py status --json`
 
-This auto-installs the ZotPilot CLI if not present. Parse the JSON output:
+This auto-installs the ZotPilot CLI if not present. Parse the JSON output and follow the FIRST matching branch:
 
-- Command fails entirely → go to "Prerequisites"
-- `errors` is non-empty → report errors to user, consult `references/troubleshooting.md`
-- `index_ready` is false or `doc_count` is 0 → go to "Index"
-- All green → go to "Research"
+1. Command fails entirely → go to **Prerequisites**
+2. `config_exists` is false → go to **First-Time Setup**
+3. `errors` is non-empty → go to **First-Time Setup** (likely missing API key or invalid Zotero path)
+4. `index_ready` is false or `doc_count` is 0 → go to **Index**
+5. All green → go to **Research**
 
 ## Prerequisites (if run.py fails)
 
@@ -30,17 +31,26 @@ The user needs:
 
 After installing, retry Step 1.
 
-## Setup (if status shows config errors)
+## First-Time Setup
 
-### 1. Configure
+This section runs once. After setup, the user must restart their AI agent before MCP tools become available.
 
+### 1. Configure Zotero + embedding provider
+
+Ask the user: "Do you have a Gemini API key, or prefer fully offline (local) embeddings?"
+
+**With Gemini (recommended, higher quality):**
 ```bash
-python3 scripts/run.py setup --non-interactive
+python3 scripts/run.py setup --non-interactive --provider gemini
+```
+User needs `GEMINI_API_KEY` — get one free at https://aistudio.google.com/apikey
+
+**Without API key (fully offline):**
+```bash
+python3 scripts/run.py setup --non-interactive --provider local
 ```
 
-- If `gemini_key_set` is false and user wants Gemini embeddings: ask for GEMINI_API_KEY first
-- For offline mode (no API key needed): add `--provider local`
-- To specify Zotero path: add `--zotero-dir /path/to/Zotero`
+If auto-detection of Zotero fails, add `--zotero-dir /path/to/Zotero`.
 
 ### 2. Register MCP server
 
@@ -48,7 +58,7 @@ python3 scripts/run.py setup --non-interactive
 ```bash
 claude mcp add -s user zotpilot -- zotpilot
 ```
-If Gemini embeddings, add the API key:
+If using Gemini, pass the key:
 ```bash
 claude mcp add -s user -e GEMINI_API_KEY=<key> zotpilot -- zotpilot
 ```
@@ -57,10 +67,10 @@ claude mcp add -s user -e GEMINI_API_KEY=<key> zotpilot -- zotpilot
 ```bash
 opencode mcp add
 ```
-Then enter: name=`zotpilot`, command=`zotpilot`, transport=`stdio`.
+Enter: name=`zotpilot`, command=`zotpilot`, transport=`stdio`.
 
 **OpenClaw:**
-1. Install MCP bridge: `openclaw plugins install @aiwerk/openclaw-mcp-bridge`
+1. `openclaw plugins install @aiwerk/openclaw-mcp-bridge`
 2. Edit `~/.openclaw/openclaw.json`, add under `plugins.entries.openclaw-mcp-bridge.config.servers`:
 ```json
 "zotpilot": {
@@ -71,18 +81,27 @@ Then enter: name=`zotpilot`, command=`zotpilot`, transport=`stdio`.
 }
 ```
 
-### 3. Restart
+### 3. Tell user to restart
 
-Tell user to restart their AI agent (or run `/mcp` in Claude Code to reconnect).
+Say: "Setup complete! Please restart your AI agent (or run `/mcp` in Claude Code) to activate ZotPilot's 24 tools. After restarting, ask me again and I'll index your papers and start searching."
+
+**IMPORTANT:** Stop here. Do NOT attempt to use MCP tools (search_papers, etc.) until the user restarts. The MCP server is not available until after restart.
 
 ## Index (if doc_count = 0)
 
+MCP tools are now available. Index the user's papers:
+
 ```bash
-python3 scripts/run.py index --limit 10    # quick test first
-python3 scripts/run.py index               # full index
+python3 scripts/run.py index --limit 10
 ```
 
-After indexing, proceed to the user's original request.
+This indexes 10 papers as a quick test. If successful, run full index:
+
+```bash
+python3 scripts/run.py index
+```
+
+Indexing takes ~2-5 seconds per paper. After completion, proceed to the user's original request.
 
 ## Research (daily use)
 
@@ -130,9 +149,24 @@ search_boolean first (exact terms) → fallback to search_papers (semantic) → 
 |---|---|
 | Empty results | Try broader query, or `search_boolean` for exact terms. Check `get_index_stats` |
 | "GEMINI_API_KEY not set" | User must set env var |
-| "ZOTERO_API_KEY not set" | Write ops need this — see `references/install-steps.md` |
+| "ZOTERO_API_KEY not set" | Write ops need Zotero Web API credentials — see below |
 | "Document has no DOI" | Cannot use citation tools for this paper |
 | "No chunks found" | Paper not indexed — run `index_library(item_key="...")` |
 
-For detailed parameter reference and advanced patterns, see `references/tool-guide.md`.
+### Write operations (tags, collections)
+
+Write tools (`add_item_tags`, `set_item_tags`, `add_to_collection`, `remove_from_collection`, `create_collection`) require Zotero Web API credentials. If user gets "ZOTERO_API_KEY not set":
+
+1. Go to https://www.zotero.org/settings/keys
+2. Click "Create new private key"
+3. Check "Allow library access" and "Allow write access"
+4. Copy the key and note the User ID (number on the same page)
+5. Re-register MCP with the credentials:
+   ```bash
+   claude mcp remove zotpilot
+   claude mcp add -s user -e GEMINI_API_KEY=<key> -e ZOTERO_API_KEY=<key> -e ZOTERO_USER_ID=<id> zotpilot -- zotpilot
+   ```
+6. Restart AI agent
+
+For detailed parameter reference, see `references/tool-guide.md`.
 For common issues and fixes, see `references/troubleshooting.md`.

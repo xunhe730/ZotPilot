@@ -81,9 +81,9 @@ You: "Find papers about sleep spindles and memory consolidation"
 
 Copy this to your AI agent:
 
-> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, set it up, and help me search my Zotero library.
+> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, then help me set up my Zotero library.
 
-The agent handles everything — cloning, CLI installation, MCP registration, indexing, and tool selection.
+The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. You restart once, then you're ready to search.
 
 ### Option 2: Manual Install
 
@@ -98,15 +98,20 @@ git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zot
 git clone https://github.com/xunhe730/ZotPilot.git ~/.openclaw/skills/zotpilot
 ```
 
-Restart your AI agent. Say "search my Zotero for..." — the Skill handles MCP setup, indexing, and tool selection automatically. Zero configuration.
+Restart your AI agent.
 
-When you first use the skill, it automatically:
-- Installs the ZotPilot CLI via `uv tool install`
-- Detects your Zotero data directory
-- Registers the MCP server with your AI agent
-- Indexes your papers (you choose: Gemini embeddings or fully offline local model)
+### What happens on first use
 
-> **Embedding choice:** Gemini (recommended, free tier) or Local (offline, no API key). The Skill asks you during setup.
+When you say "search my Zotero for..." the first time, the Skill walks you through setup:
+
+1. **Auto-installs CLI** — `scripts/run.py` detects missing `zotpilot` command and installs it via `uv tool install`
+2. **Configures Zotero** — auto-detects your Zotero data directory, asks you to choose embedding provider (Gemini or offline local)
+3. **Registers MCP server** — runs `claude mcp add` (or equivalent for OpenCode/OpenClaw)
+4. **You restart once** — MCP tools become available after restart
+5. **Indexes your papers** — on second launch, indexes your library (~2-5s per paper)
+6. **Ready to search** — from here on, just ask naturally
+
+> **Embedding choice:** Gemini (recommended, free tier at https://aistudio.google.com/apikey) or Local (offline, no API key). The Skill asks during setup.
 
 ---
 
@@ -153,6 +158,8 @@ When you first use the skill, it automatically:
 ```
 
 **Result:** 28 papers tagged and organized. Changes sync to Zotero via Web API.
+
+> **Note:** Write operations (tags, collections) require Zotero Web API credentials. See [Enable Write Operations](#enable-write-operations) below.
 
 ### Example 4: Citation Exploration
 
@@ -280,6 +287,33 @@ When you mention Zotero or papers, the AI:
 ```
 
 Your Zotero data is read directly from its SQLite database. The index is local. No data leaves your machine (except embedding API calls if using Gemini).
+
+---
+
+## Enable Write Operations
+
+Search and citation tools work out of the box. To **organize your library** (add tags, move papers, create collections), you need a Zotero Web API key:
+
+1. Go to [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
+2. Click **"Create new private key"**
+3. Check **"Allow library access"** and **"Allow write access"**
+4. Save — copy the key
+5. Note your **User ID** (the number shown on the same page — not your username)
+6. Re-register MCP with the credentials:
+
+```bash
+# Claude Code
+claude mcp remove zotpilot
+claude mcp add -s user \
+  -e GEMINI_API_KEY=<your-gemini-key> \
+  -e ZOTERO_API_KEY=<your-zotero-key> \
+  -e ZOTERO_USER_ID=<your-user-id> \
+  zotpilot -- zotpilot
+```
+
+7. Restart your AI agent
+
+Without these credentials, all read/search operations still work. You only need this for tag and collection management.
 
 ---
 
