@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🧭 ZotPilot</h1>
+  <h1>ZotPilot</h1>
   <h3>Let AI Take Over Your Zotero</h3>
   <p>
     Search by meaning, explore citations, organize with natural language.<br>
@@ -8,117 +8,74 @@
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-Compatible-00B265?style=flat-square&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMiA3bDEwIDUgMTAtNXoiIGZpbGw9IiNmZmYiLz48L3N2Zz4=&logoColor=white" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-24_Tools-00B265?style=flat-square" alt="MCP">
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
   </p>
   <p>
-    <img src="https://img.shields.io/badge/macOS-✓-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
-    <img src="https://img.shields.io/badge/Linux-✓-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-    <img src="https://img.shields.io/badge/Windows-✓-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+    <img src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+    <img src="https://img.shields.io/badge/Linux-supported-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
+    <img src="https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
   </p>
+
   <p>
-    <img src="https://img.shields.io/github/stars/xunhe730/ZotPilot?style=flat-square&logo=github" alt="GitHub stars">
-    <img src="https://img.shields.io/github/forks/xunhe730/ZotPilot?style=flat-square&logo=github" alt="GitHub forks">
-    <img src="https://img.shields.io/github/v/release/xunhe730/ZotPilot?style=flat-square&logo=github" alt="Latest version">
+    <a href="#-quick-start">Quick Start</a> &bull;
+    <a href="#-real-world-examples">Examples</a> &bull;
+    <a href="#-how-it-works">Architecture</a> &bull;
+    <a href="#-common-commands">Commands</a> &bull;
+    <a href="README_CN.md">简体中文</a>
   </p>
 </div>
 
-<p align="center">
-  <a href="#-quick-start">Quick Start</a> •
-  <a href="#-features">Features</a> •
-  <a href="#-24-tools">Tools</a> •
-  <a href="#-how-it-works">Architecture</a> •
-  <a href="README_CN.md">简体中文</a>
-</p>
+---
+
+## The Problem
+
+You have hundreds of papers in Zotero. You _know_ you read something about "the relationship between sleep spindles and memory consolidation" — but Zotero only matches exact keywords.
+
+When you ask AI to help, here's what happens:
+- **No access**: AI can't read your Zotero library at all
+- **Manual keyword guessing**: Zotero's search needs exact terms — "sleep spindles" won't find "spindle oscillations"
+- **Open every PDF**: Finding a specific table or claim means clicking through papers one by one
+- **No citation awareness**: Can't ask "who cites this paper?" or "what's the impact?"
+- **Tags are painful**: Organizing hundreds of papers by theme is hours of drag-and-drop
+
+## The Solution
+
+ZotPilot is an **AI Agent Skill** that gives your AI assistant full read/write access to your Zotero library — semantic search, citation graph, table extraction, tag management, and more. All through natural language.
+
+```
+You: "Find papers about sleep spindles and memory consolidation"
+ → Skill triggers → MCP server searches your library by meaning
+ → Returns ranked results with passages, page numbers, and citation keys
+```
+
+**No copy-paste. No keyword guessing. No opening PDFs.** AI reads your library directly and knows _how to research_ — which tools to use, what parameters matter, how to chain multi-step workflows.
 
 ---
 
-## 👋 Why ZotPilot?
+## Why ZotPilot, Not Other Approaches?
 
-You have hundreds of papers in Zotero. You _know_ you read something about "the relationship between sleep spindles and memory consolidation" — but Zotero only matches exact keywords. You can't search by _meaning_. You can't ask follow-up questions. You can't say "organize these by theme."
+| Approach | Finds by meaning? | Knows your library? | Organizes for you? | Setup |
+|----------|:-:|:-:|:-:|-------|
+| **Zotero built-in search** | No | Yes | No | None |
+| **Feed PDFs to Claude** | Yes | Partial (token limits) | No | Manual |
+| **Generic MCP search tools** | Some | No structure awareness | No | Medium |
+| **Local RAG pipeline** | Yes | Yes | No | Hours |
+| **ZotPilot** | **Yes** | **Yes — full Zotero access** | **Yes — tags & collections** | **5 min** |
 
-**ZotPilot changes that.** It gives your AI assistant full read/write access to your Zotero library — semantic search, citation exploration, table extraction, tag management, and more. All through natural language.
+### What makes ZotPilot different?
 
-<table>
-<tr>
-<td width="50%" valign="top">
-
-**Without ZotPilot**
-- Manual keyword guessing
-- Open each PDF to find data
-- Copy-paste tags one by one
-- No way to ask "who cites this?"
-- Switch between Zotero and AI
-
-</td>
-<td width="50%" valign="top">
-
-**With ZotPilot**
-- _"Find papers about sleep and memory"_
-- _"Show me accuracy comparison tables"_
-- _"Tag all DL papers and move to collection"_
-- _"Who cites Wang 2022 in Q1 journals?"_
-- AI reads your library directly
-
-</td>
-</tr>
-</table>
+1. **Semantic search, not keywords** — "memory consolidation during sleep" finds papers about "sleep spindle-dependent replay" even if those exact words don't appear together
+2. **Section-aware ranking** — knows if a passage comes from Methods vs Results vs Abstract, weights accordingly
+3. **Journal quality weighting** — Q1 journal papers ranked higher using SCImago quartile data
+4. **Full read/write access** — not just search: browse collections, add tags, move papers, create folders
+5. **Citation graph** — "who cites this?" and "what does this cite?" via OpenAlex
+6. **Table and figure search** — find specific data tables and figures across your entire library
+7. **Built-in Skill** — doesn't just give AI tools, teaches AI _how to do research_
 
 ---
 
-## ✨ Features
-
-<table>
-<tr>
-<td width="50%" valign="top">
-
-### 🔍 Semantic Search
-Find passages by meaning, not keywords. Results ranked by section relevance and journal quality.
-
-### 📊 Table & Figure Search
-Search inside extracted tables and figure captions across your entire library.
-
-### 🌐 Citation Graph
-Explore who cites what, find references, check impact — powered by OpenAlex.
-
-</td>
-<td width="50%" valign="top">
-
-### 🏷️ Library Management
-Add/remove tags, move papers between collections, create folders — all via conversation.
-
-### 🎯 Smart Ranking
-Composite scoring: semantic similarity × section weight × journal quality (SCImago).
-
-### 🀄 Chinese Support
-Auto-translates Chinese queries for bilingual parallel search.
-
-### 🧠 Built-in Agent Skill
-Ships with a [Skill file](SKILL.md) that teaches your AI _how_ to use ZotPilot — auto-selects the right tool, chains multi-step workflows, and troubleshoots errors. No prompt engineering needed.
-
-</td>
-</tr>
-</table>
-
-### Comparison
-
-| | Zotero Built-in | Other MCP Tools | **ZotPilot** |
-|---|:---:|:---:|:---:|
-| Keyword search | ✅ | ✅ | ✅ |
-| Semantic search (by meaning) | | | ✅ |
-| Search tables & figures | | | ✅ |
-| Citation graph | | | ✅ |
-| Section-aware ranking | | | ✅ |
-| Journal quality weighting | | | ✅ |
-| Browse collections & tags | ✅ | Partial | ✅ |
-| Manage tags & collections | ✅ | Partial | ✅ |
-| Chinese query support | | | ✅ |
-| Agent Skill (guided workflows) | | | ✅ |
-| 100% local processing | ✅ | | ✅ |
-
----
-
-## 📥 Quick Start
+## Quick Start
 
 ### Option 1: Auto Install (recommended)
 
@@ -143,41 +100,92 @@ git clone https://github.com/xunhe730/ZotPilot.git ~/.openclaw/skills/zotpilot
 
 Restart your AI agent. Say "search my Zotero for..." — the Skill handles MCP setup, indexing, and tool selection automatically. Zero configuration.
 
-> **Embedding choice:** Gemini (recommended, free tier available) or Local (offline, no API key needed). The Skill asks you during setup.
+When you first use the skill, it automatically:
+- Installs the ZotPilot CLI via `uv tool install`
+- Detects your Zotero data directory
+- Registers the MCP server with your AI agent
+- Indexes your papers (you choose: Gemini embeddings or fully offline local model)
+
+> **Embedding choice:** Gemini (recommended, free tier) or Local (offline, no API key). The Skill asks you during setup.
 
 ---
 
-## 🧠 Agent Skill — AI that knows how to research
+## Real-World Examples
 
-Most MCP servers give AI a bag of tools and hope for the best. ZotPilot ships with an **[Agent Skill](SKILL.md)** — a structured instruction file that teaches AI _how to do research_ with your library.
+### Example 1: Literature Survey
 
+**You:** "What do I have on transformer architectures for EEG classification?"
+
+**AI's internal process (guided by Skill):**
 ```
-You:    "Help me write a related work section on EEG-based BCI"
-
-Skill guides AI to:
-  ① Check index readiness (get_index_stats)
-  ② Pick search_topic (not search_papers — this is a survey task)
-  ③ Use section_weights={"results": 1.0, "conclusion": 1.0} to focus on findings
-  ④ Chain: search_topic → get_paper_details → find_references → search_papers
-  ⑤ Format results as readable text with citations, not raw JSON
+→ Checks index readiness (get_index_stats)
+→ Picks search_topic (not search_papers — this is a survey task)
+→ Returns 12 papers, sorted by relevance
+→ Reports: year range 2019–2024, key authors, best passages
 ```
 
-**What the Skill encodes:**
-- **Tool selection logic** — decision table mapping user intent → correct tool
-- **Parameter knowledge** — when to use `required_terms` (acronyms), `section_weights` (focus areas), `chunk_types` (mixed content)
-- **Workflow chains** — literature review, organize-by-theme, find-specific-paper recipes
-- **Error recovery** — what to do when index is empty, DOI is missing, API key isn't set
-- **Output formatting** — how to present results (quote passages, show page numbers, group by paper)
+**Result:** Structured overview with paper titles, authors, and key findings — no PDF opened.
 
-**Install:** See [Quick Start](#-quick-start) above — one `git clone` into your skills directory.
+### Example 2: Finding Specific Evidence
 
-Without the Skill, AI can still call all 24 tools — but it won't know which to pick first, what parameters matter, or how to chain them. The Skill is the difference between "I have tools" and "I know how to do research."
+**You:** "Find evidence that N400 amplitude correlates with prediction error"
+
+**AI's internal process:**
+```
+→ Picks search_papers (specific claim, not survey)
+→ Uses required_terms=["N400"] to force exact match
+→ Sets section_weights={"results": 1.0, "discussion": 0.8}
+→ Returns passages with page numbers and citation keys
+```
+
+**Result:** Direct quotes from 3 papers with `[Author2022, p.12]` citations.
+
+### Example 3: Organize by Theme
+
+**You:** "Tag all deep learning papers and move them to a 'DL Methods' collection"
+
+**AI's internal process:**
+```
+→ search_topic("deep learning") → finds 28 matching papers
+→ create_collection("DL Methods") → creates Zotero folder
+→ For each paper: add_to_collection + add_item_tags(["deep-learning"])
+→ Confirms with user before modifying more than 5 papers
+```
+
+**Result:** 28 papers tagged and organized. Changes sync to Zotero via Web API.
+
+### Example 4: Citation Exploration
+
+**You:** "Who cites Wang 2022 and what do they say about the limitations?"
+
+**AI's internal process:**
+```
+→ search_boolean("Wang 2022") → finds the paper, gets doc_id
+→ find_citing_papers(doc_id) → 15 citing papers via OpenAlex
+→ search_papers("limitations of Wang 2022 approach") in those papers
+→ Returns specific critique passages
+```
 
 ---
 
-## 🛠️ 24 Tools
+## Common Commands
 
-### 🔍 Search & Discover
+| What you say | What happens |
+|---|---|
+| *"Search my papers for X"* | Semantic search across all indexed papers |
+| *"What do I have on X?"* | Topic survey — returns papers grouped by relevance |
+| *"Find the paper by Author about Y"* | Boolean search + paper details |
+| *"Show me tables comparing X"* | Searches extracted table content |
+| *"Who cites this paper?"* | Citation lookup via OpenAlex |
+| *"Tag these papers as X"* | Adds tags via Zotero Web API |
+| *"Create a collection called X"* | Creates Zotero folder |
+| *"How many papers are indexed?"* | Index health check |
+
+---
+
+## 24 MCP Tools
+
+### Search & Discover
 
 | Tool | Description |
 |------|-------------|
@@ -188,7 +196,7 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 | `search_figures` | Search figure captions and descriptions |
 | `get_passage_context` | Expand any result with surrounding paragraphs |
 
-### 📚 Browse & Understand
+### Browse & Understand
 
 | Tool | Description |
 |------|-------------|
@@ -199,7 +207,7 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 | `list_tags` | All tags sorted by frequency |
 | `get_index_stats` | Index health: documents, chunks, unindexed papers |
 
-### 🏷️ Organize & Write
+### Organize & Write
 
 | Tool | Description |
 |------|-------------|
@@ -208,7 +216,7 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 | `add_to_collection` / `remove_from_collection` | Move papers between folders |
 | `create_collection` | Create new folders (supports nesting) |
 
-### 📈 Citations & Impact
+### Citations & Impact
 
 | Tool | Description |
 |------|-------------|
@@ -216,7 +224,7 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 | `find_references` | What does this paper cite? |
 | `get_citation_count` | Citation and reference counts |
 
-### ⚙️ Admin
+### Admin
 
 | Tool | Description |
 |------|-------------|
@@ -226,59 +234,92 @@ Without the Skill, AI can still call all 24 tools — but it won't know which to
 
 ---
 
-## 🏗️ How It Works
+## How It Works
+
+This is an **AI Agent Skill** — a repository containing instructions ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads automatically. The Skill triggers an MCP server with 24 tools for full Zotero access.
+
+### Architecture
 
 ```
-                        ┌─────────────────────────────────────────┐
-                        │              ZotPilot Skill              │
-                        │  SKILL.md → tool selection & workflows   │
-                        └────────────────────┬────────────────────┘
-                                             │ triggers
-                        ┌────────────────────▼────────────────────┐
-                        │            MCP Server (FastMCP)          │
-                        │         24 tools · stdio transport       │
-                        └──┬──────────────┬──────────────┬────────┘
-                           │              │              │
-              ┌────────────▼───┐  ┌───────▼───────┐  ┌──▼──────────────┐
-              │  Read Path     │  │  Search Path   │  │  Write Path     │
-              │                │  │                │  │                  │
-              │ Zotero SQLite  │  │ ChromaDB       │  │ Zotero Web API  │
-              │ (read-only)    │  │ Vector Store   │  │ (tags/collections)│
-              │ PDF extraction │  │ Semantic search │  │ via Pyzotero    │
-              │ Tables/Figures │  │ Section rerank  │  │                  │
-              │ OCR            │  │ Journal quality │  │                  │
-              └────────────────┘  └────────────────┘  └─────────────────┘
-                                         │
-                                  ┌──────▼──────┐
-                                  │  Embeddings  │
-                                  │ Gemini / Local│
-                                  └──────────────┘
+~/.claude/skills/zotpilot/          (or OpenCode/OpenClaw equivalent)
+├── SKILL.md                        # Decision tree: setup → index → research
+├── scripts/run.py                  # Bootstrap: auto-installs CLI + delegates
+├── references/                     # Deep reference docs
+│   ├── tool-guide.md               # Detailed parameter guide
+│   ├── troubleshooting.md          # Common issues + fixes
+│   └── install-steps.md            # Manual install reference
+└── src/zotpilot/                   # MCP server source (24 tools)
 ```
 
-<details>
-<summary><b>Key Design Decisions</b></summary>
+When you mention Zotero or papers, the AI:
+1. Loads `SKILL.md` → runs `scripts/run.py status --json`
+2. If not installed → auto-installs CLI, configures Zotero, registers MCP
+3. If not indexed → indexes your papers (Gemini or local embeddings)
+4. If ready → picks the right tool, sets optimal parameters, formats results
 
-- **Local-first** — your papers never leave your machine
-- **Read-only SQLite** — safe even while Zotero is running
-- **Write via Web API** — tag/collection changes sync back through Zotero's official API
+### Key Design Decisions
+
+- **Local-first** — your papers never leave your machine. Zotero SQLite is read-only
+- **Write via Web API** — tag/collection changes sync through Zotero's official API
+- **Section-aware ranking** — composite score = similarity^0.7 x section_weight x journal_quality
 - **Asymmetric embeddings** — separate encodings for documents vs queries (Gemini)
-- **Section-aware** — knows if a passage comes from Methods, Results, or References
-- **Journal quality** — Q1 journals ranked higher using SCImago quartile data
+- **Skill, not just tools** — SKILL.md teaches AI _which_ tool to pick and _how_ to chain them
 
-</details>
+### Embedding Options
+
+| Provider | API Key | Quality | Offline |
+|----------|---------|---------|---------|
+| **Gemini** `gemini-embedding-001` | Required (free tier) | MTEB #1 | No |
+| **Local** `all-MiniLM-L6-v2` | Not needed | Good | Yes |
+
+### Data Storage
+
+```
+~/.config/zotpilot/config.json      # Configuration (Zotero path, provider)
+~/.local/share/zotpilot/chroma/     # ChromaDB vector index
+```
+
+Your Zotero data is read directly from its SQLite database. The index is local. No data leaves your machine (except embedding API calls if using Gemini).
 
 ---
 
-## 📦 Embedding Options
+## FAQ
 
-| Provider | API Key | Dimensions | Quality | Offline |
-|----------|---------|------------|---------|---------|
-| **Gemini** `gemini-embedding-001` | Required (free tier) | 768 | 🥇 MTEB #1 | No |
-| **Local** `all-MiniLM-L6-v2` | Not needed | 384 | Good | ✅ Yes |
+**Does this modify my Zotero database?**
+No. ZotPilot reads the SQLite database in read-only mode. Write operations (tags, collections) go through Zotero's official Web API and sync back normally.
+
+**What if I add new papers to Zotero?**
+Run `zotpilot index` again — it's incremental, only processes new/changed papers.
+
+**Can I use this without an API key?**
+Yes. Choose `--provider local` during setup to use the offline embedding model (all-MiniLM-L6-v2). No API key needed, everything runs locally.
+
+**How long does indexing take?**
+About 2-5 seconds per paper. For 300 papers, expect ~10-15 minutes. Use `--limit 10` to test first.
+
+**What AI agents are supported?**
+Claude Code, OpenCode, and OpenClaw. Any agent that supports the Skill + MCP protocol pattern.
+
+**Is it safe to run while Zotero is open?**
+Yes. ZotPilot opens the SQLite database in read-only mode and never writes to it.
 
 ---
 
-## 🤝 Contributing
+## Troubleshooting
+
+See [references/troubleshooting.md](references/troubleshooting.md) for detailed solutions. Quick fixes:
+
+| Problem | Fix |
+|---------|-----|
+| Skill not found after install | Check path: `ls ~/.claude/skills/zotpilot/SKILL.md` |
+| `zotpilot: command not found` | Run `python3 scripts/run.py status` (auto-installs) |
+| MCP tools not available | `claude mcp add -s user zotpilot -- zotpilot` then restart |
+| Empty search results | Run `zotpilot index` first, or try broader query |
+| `GEMINI_API_KEY not set` | Set env var, or switch to local: `zotpilot setup --non-interactive --provider local` |
+
+---
+
+## Contributing
 
 <details>
 <summary><b>Development Setup</b></summary>
@@ -297,26 +338,29 @@ uv run ruff check src/
 
 </details>
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding embedding providers, MCP tools, or bug fixes.
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+---
+
+## The Bottom Line
+
+**Without ZotPilot:** Keyword guessing in Zotero → open each PDF → copy-paste to AI → repeat
+
+**With ZotPilot:** Tell your AI what you need → it searches by meaning, finds evidence, explores citations, organizes papers — all in one conversation.
+
+```bash
+# Get started in 30 seconds
+git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
+# Restart Claude Code, then: "search my Zotero for..."
+```
 
 ---
 
 <div align="center">
-  <a href="https://www.star-history.com/#xunhe730/ZotPilot&type=Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=xunhe730/ZotPilot&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=xunhe730/ZotPilot&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=xunhe730/ZotPilot&type=Date" width="600" />
-    </picture>
-  </a>
-</div>
-
-<div align="center">
-  <br>
   <p>
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Report Bug</a> ·
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Request Feature</a> ·
+    <a href="https://github.com/xunhe730/ZotPilot/issues">Report Bug</a> &middot;
+    <a href="https://github.com/xunhe730/ZotPilot/issues">Request Feature</a> &middot;
     <a href="https://github.com/xunhe730/ZotPilot/discussions">Discussions</a>
   </p>
-  <sub>MIT License © 2026 Xiaodong Zhuang</sub>
+  <sub>MIT License &copy; 2026 Xiaodong Zhuang</sub>
 </div>
