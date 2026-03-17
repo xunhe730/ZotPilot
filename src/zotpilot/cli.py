@@ -326,6 +326,41 @@ def cmd_status(args):
     return 0
 
 
+def cmd_doctor(args):
+    """Run environment health checks."""
+    from .doctor import run_checks
+
+    output_json = getattr(args, "json", False)
+    full = getattr(args, "full", False)
+
+    results = run_checks(config_path=args.config, full=full)
+
+    if output_json:
+        summary = {"pass": 0, "warn": 0, "fail": 0}
+        for r in results:
+            summary[r.status] += 1
+        data = {
+            "checks": [{"name": r.name, "status": r.status, "message": r.message} for r in results],
+            "summary": summary,
+        }
+        print(json.dumps(data, indent=2))
+    else:
+        status_icons = {"pass": "PASS", "warn": "WARN", "fail": "FAIL"}
+        print("ZotPilot Doctor")
+        print("=" * 50)
+        for r in results:
+            icon = status_icons[r.status]
+            print(f"  [{icon}] {r.name}: {r.message}")
+        print()
+        counts = {"pass": 0, "warn": 0, "fail": 0}
+        for r in results:
+            counts[r.status] += 1
+        print(f"  Summary: {counts['pass']} passed, {counts['warn']} warnings, {counts['fail']} failures")
+
+    has_fail = any(r.status == "fail" for r in results)
+    return 1 if has_fail else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="zotpilot",
@@ -365,6 +400,13 @@ def main(argv: list[str] | None = None) -> int:
     sub_status.add_argument("--config", type=str, default=None, help="Config file path")
     sub_status.add_argument("--json", action="store_true", help="Output as JSON")
     sub_status.set_defaults(func=cmd_status)
+
+    # doctor
+    sub_doctor = subparsers.add_parser("doctor", help="Check environment health")
+    sub_doctor.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_doctor.add_argument("--json", action="store_true", help="Output as JSON")
+    sub_doctor.add_argument("--full", action="store_true", help="Include slow checks (API connectivity)")
+    sub_doctor.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
 

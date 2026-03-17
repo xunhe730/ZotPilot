@@ -1,0 +1,183 @@
+"""Health-check diagnostics for ZotPilot environment."""
+from __future__ import annotations
+
+import os
+import sqlite3
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from .config import Config, _default_config_dir
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """Result of a single health check."""
+
+    name: str
+    status: str  # "pass", "warn", "fail"
+    message: str
+
+
+def _check_python_version() -> CheckResult:
+    """Check Python >= 3.10."""
+    version = sys.version_info
+    version_str = f"Python {version.major}.{version.minor}.{version.micro}"
+    if (version.major, version.minor) >= (3, 10):
+        return CheckResult("python_version", "pass", version_str)
+    return CheckResult("python_version", "fail", f"{version_str} (requires >= 3.10)")
+
+
+def _check_config_exists(config_path: Path) -> CheckResult:
+    """Check that the config file exists."""
+    if config_path.exists():
+        return CheckResult("config_file", "pass", str(config_path))
+    return CheckResult("config_file", "fail", f"Not found: {config_path}")
+
+
+def _check_zotero_data(config) -> CheckResult:
+    """Check Zotero data directory and sqlite readability."""
+    zotero_dir: Path = config.zotero_data_dir
+    sqlite_path = zotero_dir / "zotero.sqlite"
+
+    if not zotero_dir.exists():
+        return CheckResult("zotero_data", "fail", f"Directory not found: {zotero_dir}")
+    if not sqlite_path.exists():
+        return CheckResult("zotero_data", "fail", f"zotero.sqlite not found in {zotero_dir}")
+
+    try:
+        uri = f"file:{sqlite_path}?mode=ro&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute("SELECT count(*) FROM items LIMIT 1")
+        conn.close()
+    except Exception as exc:
+        return CheckResult("zotero_data", "fail", f"Cannot read zotero.sqlite: {exc}")
+
+    return CheckResult("zotero_data", "pass", str(zotero_dir))
+
+
+def _check_embedding_api_key(config) -> CheckResult:
+    """Check that the required embedding API key is set."""
+    provider = config.embedding_provider
+
+    if provider == "local":
+        return CheckResult("embedding_api_key", "pass", "provider=local (no key needed)")
+
+    if provider == "gemini":
+        if config.gemini_api_key:
+            return CheckResult("embedding_api_key", "pass", "GEMINI_API_KEY is set")
+        return CheckResult("embedding_api_key", "fail", "GEMINI_API_KEY not set (required for provider=gemini)")
+
+    if provider == "dashscope":
+        if config.dashscope_api_key:
+            return CheckResult("embedding_api_key", "pass", "DASHSCOPE_API_KEY is set")
+        return CheckResult("embedding_api_key", "fail", "DASHSCOPE_API_KEY not set (required for provider=dashscope)")
+
+    return CheckResult("embedding_api_key", "fail", f"Unknown provider: {provider}")
+
+
+def _check_chromadb_index(config) -> CheckResult:
+    """Check ChromaDB index health."""
+    try:
+        from .embeddings import create_embedder
+        from .vector_store import VectorStore
+
+        embedder = create_embedder(config)
+        store = VectorStore(config.chroma_db_path, embedder)
+        doc_ids = store.get_indexed_doc_ids()
+        total = store.count()
+        doc_count = len(doc_ids)
+
+        if doc_count > 0:
+            avg = total / doc_count
+            return CheckResult(
+                "chromadb_index",
+                "pass",
+                f"{doc_count} documents, {total} chunks (avg {avg:.1f} chunks/doc)",
+            )
+        return CheckResult("chromadb_index", "warn", "Index is empty (run 'zotpilot index' to populate)")
+    except Exception as exc:
+        return CheckResult("chromadb_index", "fail", f"Cannot open index: {exc}")
+
+
+def _check_zotero_web_api() -> CheckResult:
+    """Check Zotero Web API credentials presence."""
+    api_key = os.environ.get("ZOTERO_API_KEY")
+    user_id = os.environ.get("ZOTERO_USER_ID")
+
+    if api_key and user_id:
+        return CheckResult("zotero_web_api", "pass", "ZOTERO_API_KEY and ZOTERO_USER_ID are set")
+
+    missing = []
+    if not api_key:
+        missing.append("ZOTERO_API_KEY")
+    if not user_id:
+        missing.append("ZOTERO_USER_ID")
+    return CheckResult(
+        "zotero_web_api",
+        "warn",
+        f"Missing: {', '.join(missing)} (write operations will not work)",
+    )
+
+
+def _check_write_connectivity(config) -> CheckResult:
+    """Test Zotero Web API connectivity (slow — only with --full)."""
+    api_key = config.zotero_api_key or os.environ.get("ZOTERO_API_KEY")
+    user_id = config.zotero_user_id or os.environ.get("ZOTERO_USER_ID")
+
+    if not api_key or not user_id:
+        return CheckResult("write_connectivity", "fail", "Cannot test: missing ZOTERO_API_KEY or ZOTERO_USER_ID")
+
+    try:
+        from pyzotero import zotero
+
+        zot = zotero.Zotero(user_id, config.zotero_library_type, api_key)
+        # A lightweight call to verify credentials
+        zot.key_info()
+        return CheckResult("write_connectivity", "pass", "Zotero Web API connection successful")
+    except Exception as exc:
+        return CheckResult("write_connectivity", "fail", f"Zotero Web API error: {exc}")
+
+
+def run_checks(config_path: str | None = None, full: bool = False) -> list[CheckResult]:
+    """Run all health checks and return structured results.
+
+    Args:
+        config_path: Path to config file, or None for default.
+        full: If True, include slow checks (API connectivity).
+
+    Returns:
+        List of CheckResult objects.
+    """
+    results: list[CheckResult] = []
+
+    # 1. Python version
+    results.append(_check_python_version())
+
+    # 2. Config file exists
+    if config_path:
+        resolved_config_path = Path(config_path).expanduser()
+    else:
+        resolved_config_path = _default_config_dir() / "config.json"
+    results.append(_check_config_exists(resolved_config_path))
+
+    # Load config (needed for remaining checks)
+    config = Config.load(config_path)
+
+    # 3. Zotero data directory + sqlite
+    results.append(_check_zotero_data(config))
+
+    # 4. Embedding API key
+    results.append(_check_embedding_api_key(config))
+
+    # 5. ChromaDB index
+    results.append(_check_chromadb_index(config))
+
+    # 6. Zotero Web API credentials
+    results.append(_check_zotero_web_api())
+
+    # 7. Write connectivity (only with --full)
+    if full:
+        results.append(_check_write_connectivity(config))
+
+    return results

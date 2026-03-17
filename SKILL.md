@@ -18,6 +18,8 @@ Run: `python3 scripts/run.py status --json`
 This auto-installs the ZotPilot CLI if not present. Parse the JSON output and follow the FIRST matching branch:
 
 1. Command fails entirely → go to **Prerequisites**
+
+If any errors or unexpected behavior: run `python3 scripts/run.py doctor` for detailed diagnostics.
 2. `config_exists` is false → go to **First-Time Setup**
 3. `errors` is non-empty → go to **First-Time Setup** (likely missing API key or invalid Zotero path)
 4. `index_ready` is false or `doc_count` is 0 → go to **Index**

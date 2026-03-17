@@ -4758,6 +4758,7 @@ dependencies = [
     { name = "pymupdf" },
     { name = "pymupdf-layout" },
     { name = "pymupdf4llm" },
+    { name = "pyzotero" },
     { name = "rapidfuzz" },
     { name = "tqdm" },
 ]
@@ -4768,7 +4769,6 @@ all = [
     { name = "openai" },
     { name = "paddleocr" },
     { name = "paddlepaddle" },
-    { name = "pyzotero" },
 ]
 dev = [
     { name = "mypy" },
@@ -4783,9 +4783,6 @@ paddle = [
 vision = [
     { name = "anthropic" },
     { name = "openai" },
-]
-write = [
-    { name = "pyzotero" },
 ]
 
 [package.metadata]
@@ -4805,10 +4802,10 @@ requires-dist = [
     { name = "pymupdf4llm", specifier = ">=0.0.17" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pyzotero", marker = "extra == 'write'", specifier = ">=1.10.0" },
+    { name = "pyzotero", specifier = ">=1.10.0" },
     { name = "rapidfuzz" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "tqdm" },
-    { name = "zotpilot", extras = ["paddle", "vision", "write"], marker = "extra == 'all'" },
+    { name = "zotpilot", extras = ["paddle", "vision"], marker = "extra == 'all'" },
 ]
-provides-extras = ["paddle", "vision", "write", "dev", "all"]
+provides-extras = ["paddle", "vision", "dev", "all"]

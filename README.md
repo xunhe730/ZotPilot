@@ -290,6 +290,8 @@ ZotPilot 是一个 **AI Agent Skill**——一个包含指令（[SKILL.md](SKILL
 | **DashScope** `text-embedding-v3` | 需要（阿里云百炼） | 优秀 | 否 | 国内推荐，1024 维，¥0.0005/千 token |
 | **本地** `all-MiniLM-L6-v2` | 不需要 | 良好 | 是 | 384 维，完全离线 |
 
+> **注意：** 嵌入模型（provider）的选择在首次索引时就会确定。不同 provider 的向量维度不兼容（Gemini 768 维、DashScope 1024 维、Local 384 维），切换 provider 后必须用 `zotpilot index --force` 重新索引全部论文。请在索引前慎重选择。
+
 ### 数据存储
 
 ```
@@ -414,6 +416,7 @@ Gemini Embedding API 有**免费额度**（约 1,000 请求/天，2025.12 缩减
 | MCP 工具不可用 | `claude mcp add -s user zotpilot -- zotpilot` 然后重启 |
 | 搜索结果为空 | 先运行 `zotpilot index`，或尝试更宽泛的查询 |
 | `GEMINI_API_KEY not set` | 设置环境变量，或切换到本地模型：`zotpilot setup --non-interactive --provider local` |
+| 不确定哪里出了问题 | 运行 `zotpilot doctor` 查看详细诊断 |
 
 ---
 

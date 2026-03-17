@@ -27,6 +27,7 @@ dependencies = [
     "httpx",
     "rapidfuzz",
     "tqdm",
+    "pyzotero>=1.10.0",
 ]
 
 [project.urls]
@@ -37,9 +38,8 @@ Issues = "https://github.com/xunhe730/ZotPilot/issues"
 [project.optional-dependencies]
 paddle = ["paddlepaddle>=3.0.0", "paddleocr>=3.0.0"]
 vision = ["anthropic>=0.40.0", "openai>=1.0.0"]
-write = ["pyzotero>=1.10.0"]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "ruff", "mypy"]
-all = ["zotpilot[paddle,vision,write]"]
+all = ["zotpilot[paddle,vision]"]
 
 [project.scripts]
 zotpilot = "zotpilot.cli:main"

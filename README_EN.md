@@ -290,6 +290,8 @@ When you mention Zotero or papers, the AI:
 | **DashScope** `text-embedding-v3` | Required (Alibaba Cloud) | Excellent | No | Recommended for China, 1024d, ¥0.0005/1k tokens |
 | **Local** `all-MiniLM-L6-v2` | Not needed | Good | Yes | 384d, fully offline |
 
+> **Note:** The embedding provider choice is locked in at first index. Different providers produce incompatible vector dimensions (Gemini 768d, DashScope 1024d, Local 384d). Switching providers requires re-indexing with `zotpilot index --force`. Choose carefully before indexing.
+
 ### Data Storage
 
 ```
@@ -414,6 +416,7 @@ See [references/troubleshooting.md](references/troubleshooting.md) for detailed 
 | MCP tools not available | `claude mcp add -s user zotpilot -- zotpilot` then restart |
 | Empty search results | Run `zotpilot index` first, or try broader query |
 | `GEMINI_API_KEY not set` | Set env var, or switch to local: `zotpilot setup --non-interactive --provider local` |
+| Not sure what's wrong | Run `zotpilot doctor` for detailed diagnostics |
 
 ---
 

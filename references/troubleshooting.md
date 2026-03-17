@@ -17,6 +17,7 @@
 | MCP tools not available | MCP not registered | See "MCP Registration by Platform" below |
 | Indexing fails on specific PDFs | Corrupted or scanned PDF | Try `--no-vision` flag, or use `--item-key` to skip |
 | ChromaDB lock error | Another process using the index | Stop other zotpilot processes, wait 60s, retry |
+| Not sure what's wrong | Unknown | Run `zotpilot doctor` for detailed diagnostics |
 
 ## Embedding Provider Issues
 
