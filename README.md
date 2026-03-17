@@ -1,9 +1,9 @@
 <div align="center">
   <h1>ZotPilot</h1>
-  <h3>Let AI Take Over Your Zotero</h3>
+  <h3>让 AI 接管你的 Zotero</h3>
   <p>
-    Search by meaning, explore citations, organize with natural language.<br>
-    <b>An AI Agent Skill for Zotero. Full library access. No plugin required.</b>
+    按语义搜索、探索引用、用自然语言整理文献。<br>
+    <b>一个 AI Agent Skill，完整 Zotero 访问，无需插件。</b>
   </p>
 
   <p>
@@ -18,74 +18,74 @@
   </p>
 
   <p>
-    <a href="#-quick-start">Quick Start</a> &bull;
-    <a href="#-real-world-examples">Examples</a> &bull;
-    <a href="#-how-it-works">Architecture</a> &bull;
-    <a href="#-common-commands">Commands</a> &bull;
-    <a href="README_CN.md">简体中文</a>
+    <a href="#-快速开始">快速开始</a> &bull;
+    <a href="#-真实使用案例">案例</a> &bull;
+    <a href="#-工作原理">架构</a> &bull;
+    <a href="#-常用命令">命令</a> &bull;
+    <a href="README_EN.md">English</a>
   </p>
 </div>
 
 ---
 
-## The Problem
+## 问题
 
-You have hundreds of papers in Zotero. You _know_ you read something about "the relationship between sleep spindles and memory consolidation" — but Zotero only matches exact keywords.
+你的 Zotero 里有几百篇论文。你*记得*读过一篇关于"睡眠纺锤波与记忆巩固"的研究——但 Zotero 只能匹配精确关键词。
 
-When you ask AI to help, here's what happens:
-- **No access**: AI can't read your Zotero library at all
-- **Manual keyword guessing**: Zotero's search needs exact terms — "sleep spindles" won't find "spindle oscillations"
-- **Open every PDF**: Finding a specific table or claim means clicking through papers one by one
-- **No citation awareness**: Can't ask "who cites this paper?" or "what's the impact?"
-- **Tags are painful**: Organizing hundreds of papers by theme is hours of drag-and-drop
+当你让 AI 帮忙时，会遇到这些问题：
+- **无法访问**：AI 根本读不了你的 Zotero 文献库
+- **手动猜关键词**：Zotero 搜索需要精确词——"sleep spindles"找不到"spindle oscillations"
+- **逐个打开 PDF**：找一个表格或结论意味着点开一篇篇论文
+- **无引用感知**：不能问"谁引用了这篇？"或"影响力如何？"
+- **标签很痛苦**：按主题整理几百篇论文需要数小时拖拽
 
-## The Solution
+## 方案
 
-ZotPilot is an **AI Agent Skill** that gives your AI assistant full read/write access to your Zotero library — semantic search, citation graph, table extraction, tag management, and more. All through natural language.
+ZotPilot 是一个 **AI Agent Skill**，赋予 AI 助手对 Zotero 文献库的完整读写权限——语义搜索、引用图谱、表格提取、标签管理……全部通过自然语言完成。
 
 ```
-You: "Find papers about sleep spindles and memory consolidation"
- → Skill triggers → MCP server searches your library by meaning
- → Returns ranked results with passages, page numbers, and citation keys
+你："找关于睡眠纺锤波与记忆巩固的论文"
+ → Skill 触发 → MCP 服务器按语义搜索你的文献库
+ → 返回排序结果，包含段落、页码和引用键
 ```
 
-**No copy-paste. No keyword guessing. No opening PDFs.** AI reads your library directly and knows _how to research_ — which tools to use, what parameters matter, how to chain multi-step workflows.
+**不用复制粘贴。不用猜关键词。不用打开 PDF。** AI 直接读取你的文献库，而且知道*如何做研究*——用哪个工具、什么参数、怎么串联多步工作流。
 
 ---
 
-## Why ZotPilot, Not Other Approaches?
+## 为什么选 ZotPilot？
 
-| Approach | Finds by meaning? | Knows your library? | Organizes for you? | Setup |
-|----------|:-:|:-:|:-:|-------|
-| **Zotero built-in search** | No | Yes | No | None |
-| **Feed PDFs to Claude** | Yes | Partial (token limits) | No | Manual |
-| **Generic MCP search tools** | Some | No structure awareness | No | Medium |
-| **Local RAG pipeline** | Yes | Yes | No | Hours |
-| **ZotPilot** | **Yes** | **Yes — full Zotero access** | **Yes — tags & collections** | **5 min** |
+| 方案 | 按语义搜索？ | 了解你的文献库？ | 帮你整理？ | 安装时间 |
+|------|:-:|:-:|:-:|--------|
+| **Zotero 自带搜索** | 否 | 是 | 否 | 无 |
+| **把 PDF 喂给 AI** | 是 | 部分（token 限制） | 否 | 手动 |
+| **通用 MCP 搜索工具** | 部分 | 无结构感知 | 否 | 中等 |
+| **本地 RAG 管线** | 是 | 是 | 否 | 数小时 |
+| **ZotPilot** | **是** | **是——完整 Zotero 访问** | **是——标签和集合** | **5 分钟** |
 
-### What makes ZotPilot different?
+### ZotPilot 有什么不同？
 
-1. **Semantic search, not keywords** — "memory consolidation during sleep" finds papers about "sleep spindle-dependent replay" even if those exact words don't appear together
-2. **Section-aware ranking** — knows if a passage comes from Methods vs Results vs Abstract, weights accordingly
-3. **Journal quality weighting** — Q1 journal papers ranked higher using SCImago quartile data
-4. **Full read/write access** — not just search: browse collections, add tags, move papers, create folders
-5. **Citation graph** — "who cites this?" and "what does this cite?" via OpenAlex
-6. **Table and figure search** — find specific data tables and figures across your entire library
-7. **Built-in Skill** — doesn't just give AI tools, teaches AI _how to do research_
+1. **语义搜索**——"记忆巩固在睡眠中的作用"能找到"睡眠纺锤波依赖的记忆重放"，即使这些词没有一起出现
+2. **章节感知排序**——知道段落来自方法、结果还是摘要，相应加权
+3. **期刊质量加权**——Q1 期刊论文排名更高（SCImago 分区数据）
+4. **完整读写访问**——不仅搜索：浏览集合、添加标签、移动论文、创建文件夹
+5. **引用图谱**——"谁引用了这篇？"和"这篇引用了什么？"（OpenAlex）
+6. **表格和图表搜索**——在整个文献库中查找特定数据表和图表
+7. **内置 Skill**——不仅给 AI 工具，还教会 AI *如何做研究*
 
 ---
 
-## Quick Start
+## 快速开始
 
-### Option 1: Auto Install (recommended)
+### 方式一：自动安装（推荐）
 
-Copy this to your AI agent:
+把这段话复制给你的 AI agent：
 
-> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, then help me set up my Zotero library.
+> 帮我安装 ZotPilot skill：clone https://github.com/xunhe730/ZotPilot.git 到我的 skills 目录，然后帮我配置 Zotero 文献库。
 
-The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. You restart once, then you're ready to search.
+Agent 会 clone 仓库、安装 CLI、配置 Zotero、注册 MCP 服务器。重启一次后即可搜索。
 
-### Option 2: Manual Install
+### 方式二：手动安装
 
 ```bash
 # Claude Code
@@ -98,303 +98,313 @@ git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zot
 git clone https://github.com/xunhe730/ZotPilot.git ~/.openclaw/skills/zotpilot
 ```
 
-Restart your AI agent.
+重启你的 AI agent。
 
-### What happens on first use
+### 首次使用流程
 
-When you say "search my Zotero for..." the first time, the Skill walks you through setup:
+当你第一次说"搜索我的 Zotero……"时，Skill 会引导你完成安装：
 
-1. **Auto-installs CLI** — `scripts/run.py` detects missing `zotpilot` command and installs it via `uv tool install`
-2. **Configures Zotero** — auto-detects your Zotero data directory, asks you to choose embedding provider (Gemini or offline local)
-3. **Registers MCP server** — runs `claude mcp add` (or equivalent for OpenCode/OpenClaw)
-4. **You restart once** — MCP tools become available after restart
-5. **Indexes your papers** — on second launch, indexes your library (~2-5s per paper)
-6. **Ready to search** — from here on, just ask naturally
+1. **自动安装 CLI** — `scripts/run.py` 检测到缺少 `zotpilot` 命令，通过 `uv tool install` 安装
+2. **配置 Zotero** — 自动检测 Zotero 数据目录，询问你选择嵌入模型（Gemini 或离线本地模型）
+3. **注册 MCP 服务器** — 运行 `claude mcp add`（或 OpenCode/OpenClaw 对应命令）
+4. **重启一次** — MCP 工具在重启后生效
+5. **索引论文** — 第二次启动时，索引你的文献库（每篇约 2-5 秒）
+6. **开始搜索** — 之后直接用自然语言提问即可
 
-> **Embedding choice:** Gemini (recommended, free tier at https://aistudio.google.com/apikey) or Local (offline, no API key). The Skill asks during setup.
-
----
-
-## Real-World Examples
-
-### Example 1: Literature Survey
-
-**You:** "What do I have on transformer architectures for EEG classification?"
-
-**AI's internal process (guided by Skill):**
-```
-→ Checks index readiness (get_index_stats)
-→ Picks search_topic (not search_papers — this is a survey task)
-→ Returns 12 papers, sorted by relevance
-→ Reports: year range 2019–2024, key authors, best passages
-```
-
-**Result:** Structured overview with paper titles, authors, and key findings — no PDF opened.
-
-### Example 2: Finding Specific Evidence
-
-**You:** "Find evidence that N400 amplitude correlates with prediction error"
-
-**AI's internal process:**
-```
-→ Picks search_papers (specific claim, not survey)
-→ Uses required_terms=["N400"] to force exact match
-→ Sets section_weights={"results": 1.0, "discussion": 0.8}
-→ Returns passages with page numbers and citation keys
-```
-
-**Result:** Direct quotes from 3 papers with `[Author2022, p.12]` citations.
-
-### Example 3: Organize by Theme
-
-**You:** "Tag all deep learning papers and move them to a 'DL Methods' collection"
-
-**AI's internal process:**
-```
-→ search_topic("deep learning") → finds 28 matching papers
-→ create_collection("DL Methods") → creates Zotero folder
-→ For each paper: add_to_collection + add_item_tags(["deep-learning"])
-→ Confirms with user before modifying more than 5 papers
-```
-
-**Result:** 28 papers tagged and organized. Changes sync to Zotero via Web API.
-
-> **Note:** Write operations (tags, collections) require Zotero Web API credentials. See [Enable Write Operations](#enable-write-operations) below.
-
-### Example 4: Citation Exploration
-
-**You:** "Who cites Wang 2022 and what do they say about the limitations?"
-
-**AI's internal process:**
-```
-→ search_boolean("Wang 2022") → finds the paper, gets doc_id
-→ find_citing_papers(doc_id) → 15 citing papers via OpenAlex
-→ search_papers("limitations of Wang 2022 approach") in those papers
-→ Returns specific critique passages
-```
+> **嵌入模型选择：** Gemini（推荐，免费额度在 https://aistudio.google.com/apikey 获取）或 Local（离线，无需 API key）。Skill 会在安装时询问你。
 
 ---
 
-## Common Commands
+## 真实使用案例
 
-| What you say | What happens |
-|---|---|
-| *"Search my papers for X"* | Semantic search across all indexed papers |
-| *"What do I have on X?"* | Topic survey — returns papers grouped by relevance |
-| *"Find the paper by Author about Y"* | Boolean search + paper details |
-| *"Show me tables comparing X"* | Searches extracted table content |
-| *"Who cites this paper?"* | Citation lookup via OpenAlex |
-| *"Tag these papers as X"* | Adds tags via Zotero Web API |
-| *"Create a collection called X"* | Creates Zotero folder |
-| *"How many papers are indexed?"* | Index health check |
+### 案例 1：文献综述
+
+**你：** "我有哪些关于 transformer 用于 EEG 分类的论文？"
+
+**AI 的内部流程（由 Skill 引导）：**
+```
+→ 检查索引就绪状态（get_index_stats）
+→ 选择 search_topic（不是 search_papers——这是综述任务）
+→ 返回 12 篇论文，按相关性排序
+→ 报告：年份范围 2019–2024，主要作者，最佳段落
+```
+
+**结果：** 结构化概览，包含论文标题、作者和关键发现——没有打开任何 PDF。
+
+### 案例 2：查找特定证据
+
+**你：** "找到 N400 振幅与预测误差相关的证据"
+
+**AI 的内部流程：**
+```
+→ 选择 search_papers（具体论断，不是综述）
+→ 使用 required_terms=["N400"] 强制精确匹配
+→ 设置 section_weights={"results": 1.0, "discussion": 0.8}
+→ 返回带页码和引用键的段落
+```
+
+**结果：** 来自 3 篇论文的直接引用，带 `[Author2022, p.12]` 标注。
+
+### 案例 3：按主题整理
+
+**你：** "给所有深度学习论文打标签，移到'DL Methods'集合"
+
+**AI 的内部流程：**
+```
+→ search_topic("deep learning") → 找到 28 篇匹配论文
+→ create_collection("DL Methods") → 创建 Zotero 文件夹
+→ 对每篇论文：add_to_collection + add_item_tags(["deep-learning"])
+→ 修改超过 5 篇时先确认
+```
+
+**结果：** 28 篇论文已打标签并整理。变更通过 Web API 同步到 Zotero。
+
+> **注意：** 写操作（标签、集合）需要 Zotero Web API 凭据。见下方[启用写操作](#启用写操作)。
+
+### 案例 4：引用探索
+
+**你：** "谁引用了 Wang 2022？他们怎么评价局限性？"
+
+**AI 的内部流程：**
+```
+→ search_boolean("Wang 2022") → 找到论文，获取 doc_id
+→ find_citing_papers(doc_id) → 通过 OpenAlex 找到 15 篇引用论文
+→ search_papers("limitations of Wang 2022 approach") 在这些论文中搜索
+→ 返回具体的批评段落
+```
 
 ---
 
-## 24 MCP Tools
+## 常用命令
 
-### Search & Discover
-
-| Tool | Description |
-|------|-------------|
-| `search_papers` | Semantic search with section/journal weighting and filters |
-| `search_topic` | Topic-level paper discovery, deduplicated by document |
-| `search_boolean` | Exact word matching (AND/OR) via Zotero's full-text index |
-| `search_tables` | Search table headers, cells, and captions |
-| `search_figures` | Search figure captions and descriptions |
-| `get_passage_context` | Expand any result with surrounding paragraphs |
-
-### Browse & Understand
-
-| Tool | Description |
-|------|-------------|
-| `get_library_overview` | Paginated list of all papers with index status |
-| `get_paper_details` | Full metadata: title, authors, abstract, DOI, tags |
-| `list_collections` | All Zotero folders with hierarchy |
-| `get_collection_papers` | Papers in a specific collection |
-| `list_tags` | All tags sorted by frequency |
-| `get_index_stats` | Index health: documents, chunks, unindexed papers |
-
-### Organize & Write
-
-| Tool | Description |
-|------|-------------|
-| `add_item_tags` / `remove_item_tags` | Add or remove tags (non-destructive) |
-| `set_item_tags` | Replace all tags on a paper |
-| `add_to_collection` / `remove_from_collection` | Move papers between folders |
-| `create_collection` | Create new folders (supports nesting) |
-
-### Citations & Impact
-
-| Tool | Description |
-|------|-------------|
-| `find_citing_papers` | Who cites this paper? (OpenAlex) |
-| `find_references` | What does this paper cite? |
-| `get_citation_count` | Citation and reference counts |
-
-### Admin
-
-| Tool | Description |
-|------|-------------|
-| `index_library` | Index new/changed papers (incremental) |
-| `get_reranking_config` | View ranking weights |
-| `get_vision_costs` | Monitor vision API usage |
+| 你说什么 | 发生什么 |
+|---------|---------|
+| *"搜索我的论文，关于 X"* | 语义搜索所有已索引论文 |
+| *"我有哪些关于 X 的文献？"* | 主题综述——按相关性分组返回论文 |
+| *"找某作者关于 Y 的论文"* | 布尔搜索 + 论文详情 |
+| *"展示比较 X 的表格"* | 搜索提取的表格内容 |
+| *"谁引用了这篇论文？"* | 通过 OpenAlex 查找引用 |
+| *"给这些论文打上 X 标签"* | 通过 Zotero Web API 添加标签 |
+| *"创建一个叫 X 的集合"* | 创建 Zotero 文件夹 |
+| *"索引了多少论文？"* | 索引健康检查 |
 
 ---
 
-## How It Works
+## 24 个 MCP 工具
 
-This is an **AI Agent Skill** — a repository containing instructions ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads automatically. The Skill triggers an MCP server with 24 tools for full Zotero access.
+### 搜索与发现
 
-### Architecture
+| 工具 | 功能 |
+|------|------|
+| `search_papers` | 语义搜索，支持章节/期刊加权和多维过滤 |
+| `search_topic` | 主题级论文发现，按文档去重 |
+| `search_boolean` | 精确词匹配（AND/OR），使用 Zotero 全文索引 |
+| `search_tables` | 搜索表头、单元格、标题 |
+| `search_figures` | 搜索图表标题和描述 |
+| `get_passage_context` | 展开任意结果的上下文段落 |
 
-```
-~/.claude/skills/zotpilot/          (or OpenCode/OpenClaw equivalent)
-├── SKILL.md                        # Decision tree: setup → index → research
-├── scripts/run.py                  # Bootstrap: auto-installs CLI + delegates
-├── references/                     # Deep reference docs
-│   ├── tool-guide.md               # Detailed parameter guide
-│   ├── troubleshooting.md          # Common issues + fixes
-│   └── install-steps.md            # Manual install reference
-└── src/zotpilot/                   # MCP server source (24 tools)
-```
+### 浏览与理解
 
-When you mention Zotero or papers, the AI:
-1. Loads `SKILL.md` → runs `scripts/run.py status --json`
-2. If not installed → auto-installs CLI, configures Zotero, registers MCP
-3. If not indexed → indexes your papers (Gemini or local embeddings)
-4. If ready → picks the right tool, sets optimal parameters, formats results
+| 工具 | 功能 |
+|------|------|
+| `get_library_overview` | 分页展示全部论文及索引状态 |
+| `get_paper_details` | 完整元数据：标题、作者、摘要、DOI、标签 |
+| `list_collections` | 所有 Zotero 文件夹及层级 |
+| `get_collection_papers` | 特定集合中的论文 |
+| `list_tags` | 所有标签按频率排序 |
+| `get_index_stats` | 索引健康：文档数、chunk 数、未索引论文 |
 
-### Key Design Decisions
+### 整理与写入
 
-- **Local-first** — your papers never leave your machine. Zotero SQLite is read-only
-- **Write via Web API** — tag/collection changes sync through Zotero's official API
-- **Section-aware ranking** — composite score = similarity^0.7 x section_weight x journal_quality
-- **Asymmetric embeddings** — separate encodings for documents vs queries (Gemini)
-- **Skill, not just tools** — SKILL.md teaches AI _which_ tool to pick and _how_ to chain them
+| 工具 | 功能 |
+|------|------|
+| `add_item_tags` / `remove_item_tags` | 添加或删除标签（非破坏性） |
+| `set_item_tags` | 替换论文的全部标签 |
+| `add_to_collection` / `remove_from_collection` | 在文件夹间移动论文 |
+| `create_collection` | 创建新文件夹（支持嵌套） |
 
-### Embedding Options
+### 引用与影响力
 
-| Provider | API Key | Quality | Offline |
-|----------|---------|---------|---------|
-| **Gemini** `gemini-embedding-001` | Required (free tier) | MTEB #1 | No |
-| **Local** `all-MiniLM-L6-v2` | Not needed | Good | Yes |
+| 工具 | 功能 |
+|------|------|
+| `find_citing_papers` | 谁引用了这篇？（OpenAlex） |
+| `find_references` | 这篇引用了什么？ |
+| `get_citation_count` | 被引次数和参考文献数 |
 
-### Data Storage
+### 管理
 
-```
-~/.config/zotpilot/config.json      # Configuration (Zotero path, provider)
-~/.local/share/zotpilot/chroma/     # ChromaDB vector index
-```
-
-Your Zotero data is read directly from its SQLite database. The index is local. No data leaves your machine (except embedding API calls if using Gemini).
+| 工具 | 功能 |
+|------|------|
+| `index_library` | 索引新增/变更论文（增量） |
+| `get_reranking_config` | 查看排序权重 |
+| `get_vision_costs` | 监控视觉 API 用量 |
 
 ---
 
-## Enable Write Operations
+## 工作原理
 
-Search and citation tools work out of the box. To **organize your library** (add tags, move papers, create collections), you need a Zotero Web API key:
+ZotPilot 是一个 **AI Agent Skill**——一个包含指令（[SKILL.md](SKILL.md)）和引导脚本（[scripts/run.py](scripts/run.py)）的仓库，AI agent 自动加载。Skill 触发一个拥有 24 个工具的 MCP 服务器，提供完整的 Zotero 访问。
 
-1. Go to [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
-2. Click **"Create new private key"**
-3. Check **"Allow library access"** and **"Allow write access"**
-4. Save — copy the key
-5. Note your **User ID** (the number shown on the same page — not your username)
-6. Re-register MCP with the credentials:
+### 架构
+
+```
+~/.claude/skills/zotpilot/          （或 OpenCode/OpenClaw 对应路径）
+├── SKILL.md                        # 决策树：安装 → 索引 → 研究
+├── scripts/run.py                  # 引导脚本：自动安装 CLI + 委托执行
+├── references/                     # 深入参考文档
+│   ├── tool-guide.md               # 详细参数指南
+│   ├── troubleshooting.md          # 常见问题 + 修复方案
+│   └── install-steps.md            # 手动安装参考
+└── src/zotpilot/                   # MCP 服务器源码（24 个工具）
+```
+
+当你提到 Zotero 或论文时，AI 会：
+1. 加载 `SKILL.md` → 运行 `scripts/run.py status --json`
+2. 如果未安装 → 自动安装 CLI，配置 Zotero，注册 MCP
+3. 如果未索引 → 索引你的论文（Gemini 或本地嵌入）
+4. 如果就绪 → 选择正确的工具，设置最优参数，格式化结果
+
+### 关键设计决策
+
+- **本地优先** — 论文永远不离开你的电脑。Zotero SQLite 只读
+- **Web API 写入** — 标签/集合变更通过 Zotero 官方 API 同步
+- **章节感知排序** — 组合分 = 相似度^0.7 x 章节权重 x 期刊质量
+- **非对称嵌入** — 文档和查询使用不同编码（Gemini）
+- **Skill 而非工具** — SKILL.md 教会 AI *选哪个*工具，*怎么*串联
+
+### 嵌入模型
+
+| 模型 | API Key | 质量 | 离线 |
+|------|---------|------|------|
+| **Gemini** `gemini-embedding-001` | 需要（有免费额度） | MTEB 第一 | 否 |
+| **本地** `all-MiniLM-L6-v2` | 不需要 | 良好 | 是 |
+
+### 数据存储
+
+```
+~/.config/zotpilot/config.json      # 配置（Zotero 路径、嵌入模型）
+~/.local/share/zotpilot/chroma/     # ChromaDB 向量索引
+```
+
+你的 Zotero 数据直接从 SQLite 数据库只读。索引存在本地。没有数据离开你的电脑（除非使用 Gemini 的嵌入 API 调用）。
+
+---
+
+## 启用写操作
+
+搜索和引用工具开箱即用。要**整理文献库**（添加标签、移动论文、创建集合），需要 Zotero Web API 密钥。
+
+### 获取凭据
+
+1. 前往 [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
+2. 点击 **"Create new private key"**
+3. 勾选 **"Allow library access"** 和 **"Allow write access"**
+4. 保存——复制密钥
+5. 记下你的 **User ID**（同页面显示的数字——不是用户名）
+
+### 配置方式一：让 Agent 帮你配（推荐）
+
+拿到密钥和 User ID 后，直接告诉你的 AI agent：
+
+> 帮我启用 ZotPilot 写操作，我的 Zotero API Key 是 `xxxxx`，User ID 是 `12345`。
+
+Agent 会自动执行 `claude mcp remove` + `claude mcp add` 并提示你重启。
+
+### 配置方式二：手动配置
 
 ```bash
-# Claude Code
 claude mcp remove zotpilot
 claude mcp add -s user \
-  -e GEMINI_API_KEY=<your-gemini-key> \
-  -e ZOTERO_API_KEY=<your-zotero-key> \
-  -e ZOTERO_USER_ID=<your-user-id> \
+  -e GEMINI_API_KEY=<你的gemini密钥> \
+  -e ZOTERO_API_KEY=<你的zotero密钥> \
+  -e ZOTERO_USER_ID=<你的用户ID> \
   zotpilot -- zotpilot
 ```
 
-7. Restart your AI agent
+重启 AI agent。
 
-Without these credentials, all read/search operations still work. You only need this for tag and collection management.
-
----
-
-## FAQ
-
-**Does this modify my Zotero database?**
-No. ZotPilot reads the SQLite database in read-only mode. Write operations (tags, collections) go through Zotero's official Web API and sync back normally.
-
-**What if I add new papers to Zotero?**
-Run `zotpilot index` again — it's incremental, only processes new/changed papers.
-
-**Can I use this without an API key?**
-Yes. Choose `--provider local` during setup to use the offline embedding model (all-MiniLM-L6-v2). No API key needed, everything runs locally.
-
-**How long does indexing take?**
-About 2-5 seconds per paper. For 300 papers, expect ~10-15 minutes. Use `--limit 10` to test first.
-
-**What AI agents are supported?**
-Claude Code, OpenCode, and OpenClaw. Any agent that supports the Skill + MCP protocol pattern.
-
-**Is it safe to run while Zotero is open?**
-Yes. ZotPilot opens the SQLite database in read-only mode and never writes to it.
+> 没有这些凭据，所有读取/搜索操作仍然正常。只有标签和集合管理需要。
 
 ---
 
-## Troubleshooting
+## 常见问题
 
-See [references/troubleshooting.md](references/troubleshooting.md) for detailed solutions. Quick fixes:
+**会修改我的 Zotero 数据库吗？**
+不会。ZotPilot 以只读模式读取 SQLite 数据库。写操作（标签、集合）通过 Zotero 的官方 Web API，正常同步。
 
-| Problem | Fix |
-|---------|-----|
-| Skill not found after install | Check path: `ls ~/.claude/skills/zotpilot/SKILL.md` |
-| `zotpilot: command not found` | Run `python3 scripts/run.py status` (auto-installs) |
-| MCP tools not available | `claude mcp add -s user zotpilot -- zotpilot` then restart |
-| Empty search results | Run `zotpilot index` first, or try broader query |
-| `GEMINI_API_KEY not set` | Set env var, or switch to local: `zotpilot setup --non-interactive --provider local` |
+**新增论文到 Zotero 后怎么办？**
+再运行 `zotpilot index`——增量索引，只处理新增/变更的论文。
+
+**可以不用 API key 吗？**
+可以。安装时选择 `--provider local` 使用离线嵌入模型（all-MiniLM-L6-v2），不需要任何 API key，一切在本地运行。
+
+**索引需要多久？**
+每篇论文约 2-5 秒。300 篇论文约 10-15 分钟。用 `--limit 10` 先测试。
+
+**支持哪些 AI agent？**
+Claude Code、OpenCode 和 OpenClaw。任何支持 Skill + MCP 协议的 agent。
+
+**Zotero 开着时可以用吗？**
+可以。ZotPilot 以只读模式打开 SQLite 数据库，永远不会写入。
 
 ---
 
-## Contributing
+## 故障排查
+
+详见 [references/troubleshooting.md](references/troubleshooting.md)。快速修复：
+
+| 问题 | 解决 |
+|------|------|
+| 安装后找不到 Skill | 检查路径：`ls ~/.claude/skills/zotpilot/SKILL.md` |
+| `zotpilot: command not found` | 运行 `python3 scripts/run.py status`（自动安装） |
+| MCP 工具不可用 | `claude mcp add -s user zotpilot -- zotpilot` 然后重启 |
+| 搜索结果为空 | 先运行 `zotpilot index`，或尝试更宽泛的查询 |
+| `GEMINI_API_KEY not set` | 设置环境变量，或切换到本地模型：`zotpilot setup --non-interactive --provider local` |
+
+---
+
+## 参与贡献
 
 <details>
-<summary><b>Development Setup</b></summary>
+<summary><b>开发环境搭建</b></summary>
 
 ```bash
 git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 uv sync --extra dev
 
-# Run tests
-uv run pytest              # 106 tests
+# 运行测试
+uv run pytest              # 106 个测试
 
-# Lint
+# 代码检查
 uv run ruff check src/
 ```
 
 </details>
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+欢迎贡献！详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ---
 
-## The Bottom Line
+## 一句话总结
 
-**Without ZotPilot:** Keyword guessing in Zotero → open each PDF → copy-paste to AI → repeat
+**没有 ZotPilot：** 在 Zotero 猜关键词 → 逐个打开 PDF → 复制粘贴给 AI → 循环
 
-**With ZotPilot:** Tell your AI what you need → it searches by meaning, finds evidence, explores citations, organizes papers — all in one conversation.
+**有了 ZotPilot：** 告诉 AI 你需要什么 → 语义搜索、查找证据、探索引用、整理论文——一个对话搞定。
 
 ```bash
-# Get started in 30 seconds
+# 30 秒开始
 git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-# Restart Claude Code, then: "search my Zotero for..."
+# 重启 Claude Code，然后："搜索我的 Zotero……"
 ```
 
 ---
 
 <div align="center">
   <p>
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Report Bug</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Request Feature</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/discussions">Discussions</a>
+    <a href="https://github.com/xunhe730/ZotPilot/issues">报告 Bug</a> &middot;
+    <a href="https://github.com/xunhe730/ZotPilot/issues">功能建议</a> &middot;
+    <a href="https://github.com/xunhe730/ZotPilot/discussions">讨论区</a>
   </p>
   <sub>MIT License &copy; 2026 Xiaodong Zhuang</sub>
 </div>
