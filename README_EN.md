@@ -30,48 +30,58 @@
 
 ## The Problem
 
-You have hundreds of papers in Zotero. You _know_ you read something about "the relationship between sleep spindles and memory consolidation" — but Zotero only matches exact keywords.
+You have hundreds of papers in Zotero. While writing a Related Work section, you _remember_ reading about "the relationship between sleep spindles and memory consolidation" — but can't find it in Zotero. Because you remember the _concept_, but Zotero only matches _exact words_.
 
-When you ask AI to help, here's what happens:
-- **No access**: AI can't read your Zotero library at all
-- **Manual keyword guessing**: Zotero's search needs exact terms — "sleep spindles" won't find "spindle oscillations"
-- **Open every PDF**: Finding a specific table or claim means clicking through papers one by one
-- **No citation awareness**: Can't ask "who cites this paper?" or "what's the impact?"
-- **Tags are painful**: Organizing hundreds of papers by theme is hours of drag-and-drop
+This is the fundamental limitation of all reference managers:
+- **Zotero search is keyword matching** — "memory consolidation during sleep" won't find a paper that says "sleep spindle-dependent replay", even though they describe the same phenomenon
+- **No cross-paper queries** — "which papers report N400 effects in their Results section?" requires opening each PDF manually
+- **Table data is locked in PDFs** — you know a paper has an accuracy comparison table, but can't search table contents
+- **Citation relationships are blind** — "who cites this paper? what do they say about it?" requires manual Google Scholar lookup
+- **Organizing is manual labor** — tagging and sorting 200 papers by theme is pure drag-and-drop busywork
 
 ## The Solution
 
-ZotPilot is an **AI Agent Skill** that gives your AI assistant full read/write access to your Zotero library — semantic search, citation graph, table extraction, tag management, and more. All through natural language.
+ZotPilot builds a **local RAG system** (Retrieval-Augmented Generation) on top of your Zotero library, exposed to AI agents via MCP protocol — letting AI search by meaning, read, and organize your papers directly.
+
+**How it works:**
 
 ```
-You: "Find papers about sleep spindles and memory consolidation"
- → Skill triggers → MCP server searches your library by meaning
- → Returns ranked results with passages, page numbers, and citation keys
+Zotero SQLite ──→ PDF extraction (PyMuPDF) ──→ Chunking + section classification ──→ Embeddings (Gemini/local) ──→ ChromaDB
+     │                                              │
+     │            ┌──────────────────────────────────┘
+     ▼            ▼
+  Metadata    Semantic retrieval + reranking
+  (title, authors,   (similarity^0.7 × section_weight × journal_quality)
+   DOI, tags)              │
+     │                     ▼
+     └──────→ 24 MCP tools ←── AI Agent (Claude Code / OpenCode / OpenClaw)
+                   │
+            Zotero Web API (write ops: tags, collections)
 ```
 
-**No copy-paste. No keyword guessing. No opening PDFs.** AI reads your library directly and knows _how to research_ — which tools to use, what parameters matter, how to chain multi-step workflows.
+- **Indexing**: reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract/Methods/Results/…), generates vector embeddings, stores in ChromaDB
+- **Retrieval**: query is vectorized, cosine similarity search in ChromaDB, results pass through **section-aware reranking** (Results weighted higher than References) and **journal quality weighting** (SCImago Q1 papers ranked higher)
+- **Write operations**: tag and collection management via Zotero's official Web API (Pyzotero), changes sync back to Zotero automatically
+- **Citation graph**: forward and backward citation lookup via OpenAlex API
+
+**Key design decisions:**
+- Fully local — papers never leave your machine (except Gemini embedding API calls)
+- Zotero SQLite read-only — safe even while Zotero is running
+- Asymmetric embeddings — documents encoded with `RETRIEVAL_DOCUMENT`, queries with `RETRIEVAL_QUERY`, improving retrieval quality
+- Built-in Skill — doesn't just give AI tools, teaches AI _which tool to pick and how to chain them_
 
 ---
 
 ## Why ZotPilot, Not Other Approaches?
 
-| Approach | Finds by meaning? | Knows your library? | Organizes for you? | Setup |
-|----------|:-:|:-:|:-:|-------|
-| **Zotero built-in search** | No | Yes | No | None |
-| **Feed PDFs to Claude** | Yes | Partial (token limits) | No | Manual |
-| **Generic MCP search tools** | Some | No structure awareness | No | Medium |
-| **Local RAG pipeline** | Yes | Yes | No | Hours |
-| **ZotPilot** | **Yes** | **Yes — full Zotero access** | **Yes — tags & collections** | **5 min** |
+| Approach | Semantic search | Knows paper structure | Organizes for you | Citation graph | Setup |
+|----------|:-:|:-:|:-:|:-:|-------|
+| **Zotero built-in search** | No | No | No | No | None |
+| **Feed PDFs to Claude** | Yes | No (loses section info) | No | No | Manual, token-limited |
+| **Build your own RAG** | Yes | Depends | No | No | Hours of setup |
+| **ZotPilot** | **Yes** | **Yes (section+journal+tables)** | **Yes** | **Yes (OpenAlex)** | **5 min** |
 
-### What makes ZotPilot different?
-
-1. **Semantic search, not keywords** — "memory consolidation during sleep" finds papers about "sleep spindle-dependent replay" even if those exact words don't appear together
-2. **Section-aware ranking** — knows if a passage comes from Methods vs Results vs Abstract, weights accordingly
-3. **Journal quality weighting** — Q1 journal papers ranked higher using SCImago quartile data
-4. **Full read/write access** — not just search: browse collections, add tags, move papers, create folders
-5. **Citation graph** — "who cites this?" and "what does this cite?" via OpenAlex
-6. **Table and figure search** — find specific data tables and figures across your entire library
-7. **Built-in Skill** — doesn't just give AI tools, teaches AI _how to do research_
+ZotPilot's core advantage over DIY RAG: **it doesn't just "find relevant passages" — it knows whether a passage comes from Results or Methods, from a Q1 journal or a workshop paper, and ranks accordingly.** Combined with table/figure search, citation graph, and Zotero write operations, it forms a complete research workflow.
 
 ---
 
