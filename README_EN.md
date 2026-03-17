@@ -46,17 +46,29 @@ ZotPilot builds a **local RAG system** (Retrieval-Augmented Generation) on top o
 **How it works:**
 
 ```
-Zotero SQLite ──→ PDF extraction (PyMuPDF) ──→ Chunking + section classification ──→ Embeddings (Gemini/local) ──→ ChromaDB
-     │                                              │
-     │            ┌──────────────────────────────────┘
-     ▼            ▼
-  Metadata    Semantic retrieval + reranking
-  (title, authors,   (similarity^0.7 × section_weight × journal_quality)
-   DOI, tags)              │
-     │                     ▼
-     └──────→ 24 MCP tools ←── AI Agent (Claude Code / OpenCode / OpenClaw)
-                   │
-            Zotero Web API (write ops: tags, collections)
+┌──────────────────────────────── Indexing (offline, run once) ────────────────────────────┐
+│                                                                                         │
+│  Zotero SQLite ──→ PDF extraction ──→ Chunking + sections ──→ Embeddings ──→ ChromaDB   │
+│    (read-only)      (PyMuPDF)       (Abstract/Methods/      (Gemini /    (local vector  │
+│      │                                Results/…)            DashScope /     store)       │
+│      ▼                                                        Local)                    │
+│    Metadata                                                                             │
+│  (title, authors, DOI, tags)                                                            │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────── Usage (every query) ────────────────────────────────────┐
+│                                                                                         │
+│  AI Agent ──→ 24 MCP tools                                                              │
+│  (Claude Code     │                                                                     │
+│   OpenCode        ├── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results             │
+│   OpenClaw)       │                                (sim^α × section × journal)           │
+│                   ├── Citation graph  ──→ OpenAlex API                                   │
+│                   ├── Library browse  ──→ Zotero SQLite (read-only)                      │
+│                   └── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero             │
+│                                          (tags, collections)  (Pyzotero)                 │
+│                                                                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Indexing**: reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract/Methods/Results/…), generates vector embeddings, stores in ChromaDB
