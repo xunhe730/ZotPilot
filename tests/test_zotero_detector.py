@@ -30,10 +30,8 @@ class TestDetection:
 
     def test_invalid_configured_path_tries_fallbacks(self, tmp_path):
         with patch("zotpilot.zotero_detector._detect_from_profiles", return_value=None):
-            # No valid path anywhere
             result = detect_zotero_data_dir(configured_path="/nonexistent")
-            # Will try fallbacks, likely return None
-            # (unless ~/Zotero exists on the test machine)
+            assert result is None or isinstance(result, Path)
 
     def test_fallback_to_home_zotero(self, tmp_path, monkeypatch):
         home_zotero = tmp_path / "Zotero"

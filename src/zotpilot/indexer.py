@@ -160,7 +160,12 @@ class Indexer:
 
         if title_pattern:
             import re
-            pattern = re.compile(title_pattern, re.IGNORECASE)
+            if len(title_pattern) > 200:
+                raise ValueError(f"title_pattern too long ({len(title_pattern)} chars, max 200)")
+            try:
+                pattern = re.compile(title_pattern, re.IGNORECASE)
+            except re.error as e:
+                raise ValueError(f"Invalid regex in title_pattern: {e}")
             items = [i for i in items if pattern.search(i.title)]
             logger.info(f"Title filter: {len(items)} papers match '{title_pattern}'")
 

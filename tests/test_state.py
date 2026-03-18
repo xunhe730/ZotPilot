@@ -1,7 +1,8 @@
 """Tests for shared state helpers in zotpilot.state."""
+import threading
 import pytest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from zotpilot.models import RetrievalResult
 from zotpilot.state import (
@@ -203,3 +204,37 @@ class TestMergeResultsByChunk:
         # The kept DOC1 result should have the higher composite_score
         doc1_result = [r for r in merged if r.doc_id == "DOC1"][0]
         assert doc1_result.composite_score == 0.8
+
+
+# ---------------------------------------------------------------------------
+# Thread-safety: _get_config() returns same instance across threads
+# ---------------------------------------------------------------------------
+
+class TestThreadSafety:
+    def test_get_config_concurrent(self):
+        """10 threads calling _get_config() should all get the same instance."""
+        import zotpilot.state as state_mod
+
+        mock_config = MagicMock()
+        original_config = state_mod._config
+        original_lock = state_mod._init_lock
+
+        try:
+            # Reset to force initialization
+            state_mod._config = None
+
+            with patch("zotpilot.state.Config.load", return_value=mock_config):
+                results = [None] * 10
+                def worker(idx):
+                    results[idx] = state_mod._get_config()
+
+                threads = [threading.Thread(target=worker, args=(i,)) for i in range(10)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+                # All threads should get the exact same object
+                assert all(r is results[0] for r in results)
+        finally:
+            state_mod._config = original_config

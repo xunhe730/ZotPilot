@@ -1,5 +1,6 @@
 """Library write operations via Pyzotero Web API."""
 from ..state import mcp, _get_writer
+from .library import _invalidate_collection_cache
 
 
 @mcp.tool()
@@ -73,6 +74,7 @@ def add_to_collection(item_key: str, collection_key: str) -> dict:
         {"success": true, "item_key": ..., "collection_key": ...}
     """
     _get_writer().add_to_collection(item_key, collection_key)
+    _invalidate_collection_cache()
     return {"success": True, "item_key": item_key, "collection_key": collection_key}
 
 
@@ -91,6 +93,7 @@ def remove_from_collection(item_key: str, collection_key: str) -> dict:
         {"success": true, "item_key": ..., "collection_key": ...}
     """
     _get_writer().remove_from_collection(item_key, collection_key)
+    _invalidate_collection_cache()
     return {"success": True, "item_key": item_key, "collection_key": collection_key}
 
 
@@ -106,4 +109,6 @@ def create_collection(name: str, parent_key: str | None = None) -> dict:
     Returns:
         {"key": ..., "name": ..., "parent_key": ...}
     """
-    return _get_writer().create_collection(name, parent_key)
+    result = _get_writer().create_collection(name, parent_key)
+    _invalidate_collection_cache()
+    return result

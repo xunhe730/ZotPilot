@@ -183,29 +183,7 @@ class ZoteroClient:
             conn.close()
 
         citation_keys = self._load_citation_keys()
-
-        items = []
-        for row in rows:
-            pdf_path = self._resolve_pdf_path(
-                row["path"],
-                row["linkMode"],
-                row["attachmentKey"]
-            )
-            item_key = row["itemKey"]
-            items.append(ZoteroItem(
-                item_key=item_key,
-                title=row["title"],
-                authors=row["authors"],
-                year=row["year"],
-                pdf_path=pdf_path,
-                citation_key=citation_keys.get(item_key, ""),
-                publication=row["publication"],
-                doi=row["doi"],
-                tags=row["tags"],
-                collections=row["collections"],
-            ))
-
-        return items
+        return [self._row_to_item(row, citation_keys) for row in rows]
 
     def get_library_diagnostics(self) -> dict:
         """
@@ -325,15 +303,144 @@ class ZoteroClient:
             "pdf_unresolved": unresolved,
         }
 
+    SINGLE_ITEM_SQL = """
+    WITH
+        base_items AS (
+            SELECT items.itemID, items."key" AS itemKey, items.itemTypeID
+            FROM items
+            WHERE items.itemTypeID NOT IN (1, 14)
+              AND items.itemID NOT IN (SELECT itemID FROM deletedItems)
+              AND items."key" = ?
+        ),
+        titles AS (
+            SELECT itemData.itemID, itemDataValues.value AS title
+            FROM itemData
+            JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+            JOIN fields ON itemData.fieldID = fields.fieldID
+            WHERE fields.fieldName = 'title'
+        ),
+        years AS (
+            SELECT itemData.itemID, CAST(substr(itemDataValues.value, 1, 4) AS INTEGER) AS year
+            FROM itemData
+            JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+            JOIN fields ON itemData.fieldID = fields.fieldID
+            WHERE fields.fieldName = 'date'
+        ),
+        authors AS (
+            SELECT
+                items.itemID,
+                CASE
+                    WHEN COUNT(*) = 1 THEN
+                        MAX(creators.lastName) ||
+                        CASE WHEN MAX(creators.firstName) IS NOT NULL AND MAX(creators.firstName) != ''
+                             THEN ', ' || substr(MAX(creators.firstName), 1, 1) || '.'
+                             ELSE '' END
+                    ELSE
+                        MAX(CASE WHEN itemCreators.orderIndex = 0 THEN creators.lastName END) || ' et al.'
+                END AS authors
+            FROM items
+            JOIN itemCreators ON items.itemID = itemCreators.itemID
+            JOIN creators ON itemCreators.creatorID = creators.creatorID
+            GROUP BY items.itemID
+        ),
+        publications AS (
+            SELECT itemData.itemID, itemDataValues.value AS publication
+            FROM itemData
+            JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+            JOIN fields ON itemData.fieldID = fields.fieldID
+            WHERE fields.fieldName = 'publicationTitle'
+        ),
+        dois AS (
+            SELECT itemData.itemID, itemDataValues.value AS doi
+            FROM itemData
+            JOIN itemDataValues ON itemData.valueID = itemDataValues.valueID
+            JOIN fields ON itemData.fieldID = fields.fieldID
+            WHERE fields.fieldName = 'DOI'
+        ),
+        item_tags AS (
+            SELECT items.itemID, GROUP_CONCAT(tags.name, '; ') AS tags
+            FROM items
+            JOIN itemTags ON items.itemID = itemTags.itemID
+            JOIN tags ON itemTags.tagID = tags.tagID
+            GROUP BY items.itemID
+        ),
+        item_collections AS (
+            SELECT items.itemID, GROUP_CONCAT(c.collectionName, '; ') AS collection_names
+            FROM items
+            JOIN collectionItems ci ON items.itemID = ci.itemID
+            JOIN collections c ON ci.collectionID = c.collectionID
+            GROUP BY items.itemID
+        ),
+        pdfs AS (
+            SELECT
+                COALESCE(ia.parentItemID, ia.itemID) AS parentItemID,
+                items."key" AS attachmentKey,
+                ia.linkMode,
+                ia.path
+            FROM itemAttachments ia
+            JOIN items ON ia.itemID = items.itemID
+            WHERE ia.contentType = 'application/pdf'
+              AND ia.linkMode IN (0, 1, 2)
+        )
+    SELECT
+        base_items.itemKey,
+        COALESCE(titles.title, '[No Title]') AS title,
+        COALESCE(authors.authors, '[No Author]') AS authors,
+        years.year,
+        COALESCE(publications.publication, '') AS publication,
+        COALESCE(dois.doi, '') AS doi,
+        COALESCE(item_tags.tags, '') AS tags,
+        COALESCE(item_collections.collection_names, '') AS collections,
+        pdfs.attachmentKey,
+        pdfs.linkMode,
+        pdfs.path
+    FROM base_items
+    LEFT JOIN titles ON base_items.itemID = titles.itemID
+    LEFT JOIN years ON base_items.itemID = years.itemID
+    LEFT JOIN authors ON base_items.itemID = authors.itemID
+    LEFT JOIN publications ON base_items.itemID = publications.itemID
+    LEFT JOIN dois ON base_items.itemID = dois.itemID
+    LEFT JOIN item_tags ON base_items.itemID = item_tags.itemID
+    LEFT JOIN item_collections ON base_items.itemID = item_collections.itemID
+    LEFT JOIN pdfs ON base_items.itemID = pdfs.parentItemID;
+    """
+
+    def _row_to_item(self, row, citation_keys: dict[str, str]) -> ZoteroItem:
+        """Convert a database row to a ZoteroItem."""
+        pdf_path = self._resolve_pdf_path(
+            row["path"],
+            row["linkMode"],
+            row["attachmentKey"]
+        ) if row["attachmentKey"] else None
+        item_key = row["itemKey"]
+        return ZoteroItem(
+            item_key=item_key,
+            title=row["title"],
+            authors=row["authors"],
+            year=row["year"],
+            pdf_path=pdf_path,
+            citation_key=citation_keys.get(item_key, ""),
+            publication=row["publication"],
+            doi=row["doi"],
+            tags=row["tags"],
+            collections=row["collections"],
+        )
+
     def get_item(self, item_key: str) -> ZoteroItem | None:
-        """Get a specific item by key."""
-        # For now, just filter from all items
-        # Could optimize with a WHERE clause if needed
-        all_items = self.get_all_items_with_pdfs()
-        for item in all_items:
-            if item.item_key == item_key:
-                return item
-        return None
+        """Get a specific item by key (single-item SQL, not full table scan)."""
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(self.SINGLE_ITEM_SQL, (item_key,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            return None
+
+        citation_keys = self._load_citation_keys()
+        return self._row_to_item(row, citation_keys)
 
     # =========================================================================
     # Boolean Full-Text Search (Feature 3)

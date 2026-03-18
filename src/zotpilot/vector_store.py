@@ -81,6 +81,26 @@ class VectorStore:
         )
         self.embedder = embedder
 
+    @staticmethod
+    def _build_base_metadata(doc_id: str, doc_meta: dict) -> dict:
+        """Build the shared metadata fields for any chunk type."""
+        return {
+            "doc_id": doc_id,
+            "doc_title": doc_meta.get("title", ""),
+            "authors": doc_meta.get("authors", ""),
+            "authors_lower": doc_meta.get("authors", "").lower(),
+            "year": doc_meta.get("year") or 0,
+            "citation_key": doc_meta.get("citation_key", ""),
+            "publication": doc_meta.get("publication", ""),
+            "doi": doc_meta.get("doi", ""),
+            "tags": doc_meta.get("tags", ""),
+            "tags_lower": doc_meta.get("tags", "").lower(),
+            "collections": doc_meta.get("collections", ""),
+            "journal_quartile": doc_meta.get("journal_quartile", ""),
+            "pdf_hash": doc_meta.get("pdf_hash", ""),
+            "quality_grade": doc_meta.get("quality_grade", ""),
+        }
+
     def add_chunks(self, doc_id: str, doc_meta: dict, chunks: list[Chunk]) -> None:
         """
         Add all chunks for a document.
@@ -99,21 +119,10 @@ class VectorStore:
         # Use RETRIEVAL_DOCUMENT task type
         embeddings = self.embedder.embed(texts, task_type="RETRIEVAL_DOCUMENT")
 
-        metadatas = [
-            {
-                "doc_id": doc_id,
-                "doc_title": doc_meta.get("title", ""),
-                "authors": doc_meta.get("authors", ""),
-                "authors_lower": doc_meta.get("authors", "").lower(),  # For case-insensitive search
-                "year": doc_meta.get("year") or 0,
-                "citation_key": doc_meta.get("citation_key", ""),
-                "publication": doc_meta.get("publication", ""),
-                "doi": doc_meta.get("doi", ""),
-                "tags": doc_meta.get("tags", ""),
-                "tags_lower": doc_meta.get("tags", "").lower(),  # For case-insensitive search
-                "collections": doc_meta.get("collections", ""),
-                "pdf_hash": doc_meta.get("pdf_hash", ""),  # Feature 6: for update detection
-                "quality_grade": doc_meta.get("quality_grade", ""),  # Feature 11: extraction quality
+        metadatas = []
+        for c in chunks:
+            meta = self._build_base_metadata(doc_id, doc_meta)
+            meta.update({
                 "page_num": c.page_num,
                 "chunk_index": c.chunk_index,
                 "total_chunks": len(chunks),
@@ -121,11 +130,9 @@ class VectorStore:
                 "char_end": c.char_end,
                 "section": c.section,
                 "section_confidence": c.section_confidence,
-                "journal_quartile": doc_meta.get("journal_quartile", ""),
                 "chunk_type": "text",
-            }
-            for c in chunks
-        ]
+            })
+            metadatas.append(meta)
 
         self.collection.add(
             ids=ids,
@@ -164,36 +171,22 @@ class VectorStore:
         # Use RETRIEVAL_DOCUMENT task type
         embeddings = self.embedder.embed(texts, task_type="RETRIEVAL_DOCUMENT")
 
-        metadatas = [
-            {
-                "doc_id": doc_id,
-                "doc_title": doc_meta.get("title", ""),
-                "authors": doc_meta.get("authors", ""),
-                "authors_lower": doc_meta.get("authors", "").lower(),
-                "year": doc_meta.get("year") or 0,
-                "citation_key": doc_meta.get("citation_key", ""),
-                "publication": doc_meta.get("publication", ""),
-                "doi": doc_meta.get("doi", ""),
-                "tags": doc_meta.get("tags", ""),
-                "tags_lower": doc_meta.get("tags", "").lower(),
-                "collections": doc_meta.get("collections", ""),
-                "journal_quartile": doc_meta.get("journal_quartile", ""),
-                "pdf_hash": doc_meta.get("pdf_hash", ""),  # Feature 6: for update detection
-                "quality_grade": doc_meta.get("quality_grade", ""),  # Feature 11: extraction quality
+        metadatas = []
+        for t in tables:
+            meta = self._build_base_metadata(doc_id, doc_meta)
+            meta.update({
                 "page_num": t.page_num,
                 "chunk_index": _ref_chunk_index(ref_map, "table", t) if ref_map else -1,
                 "chunk_type": "table",
                 "table_index": t.table_index,
-                "table_caption": t.caption or "",  # None -> empty string for ChromaDB
+                "table_caption": t.caption or "",
                 "table_num_rows": t.num_rows,
                 "table_num_cols": t.num_cols,
                 "reference_context": getattr(t, 'reference_context', '') or "",
-                # Section detection doesn't apply to tables
                 "section": "table",
                 "section_confidence": 1.0,
-            }
-            for t in tables
-        ]
+            })
+            metadatas.append(meta)
 
         self.collection.add(
             ids=ids,
@@ -232,32 +225,18 @@ class VectorStore:
             # Use caption for embedding, or fallback text for orphans
             text = fig.to_searchable_text()
 
-            metadata = {
-                "doc_id": doc_id,
-                "doc_title": doc_meta.get("title", ""),
-                "authors": doc_meta.get("authors", ""),
-                "authors_lower": doc_meta.get("authors", "").lower(),
-                "year": doc_meta.get("year") or 0,
-                "citation_key": doc_meta.get("citation_key", ""),
-                "publication": doc_meta.get("publication", ""),
-                "doi": doc_meta.get("doi", ""),
-                "tags": doc_meta.get("tags", ""),
-                "tags_lower": doc_meta.get("tags", "").lower(),
-                "collections": doc_meta.get("collections", ""),
-                "journal_quartile": doc_meta.get("journal_quartile", ""),
-                "pdf_hash": doc_meta.get("pdf_hash", ""),
-                "quality_grade": doc_meta.get("quality_grade", ""),
+            metadata = self._build_base_metadata(doc_id, doc_meta)
+            metadata.update({
                 "chunk_type": "figure",
                 "page_num": fig.page_num,
                 "chunk_index": _ref_chunk_index(ref_map, "figure", fig) if ref_map else -1,
                 "figure_index": fig.figure_index,
-                "caption": fig.caption or "",  # Empty string for orphans
+                "caption": fig.caption or "",
                 "image_path": str(fig.image_path) if fig.image_path else "",
                 "reference_context": getattr(fig, 'reference_context', '') or "",
-                # Section detection doesn't apply to figures
                 "section": "figure",
                 "section_confidence": 1.0,
-            }
+            })
 
             ids.append(chunk_id)
             documents.append(text)

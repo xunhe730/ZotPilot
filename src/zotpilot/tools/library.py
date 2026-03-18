@@ -2,6 +2,11 @@
 from ..state import mcp, _get_zotero, _get_store, ToolError
 
 
+def _invalidate_collection_cache():
+    """Reset the cached collection map so next call re-fetches from DB."""
+    get_collection_papers._col_map = None
+
+
 @mcp.tool()
 def list_collections() -> list[dict]:
     """
@@ -101,6 +106,7 @@ def get_paper_details(item_key: str) -> dict:
 
     return {
         "key": item.item_key,
+        "doc_id": item.item_key,
         "title": item.title,
         "authors": item.authors,
         "year": item.year,

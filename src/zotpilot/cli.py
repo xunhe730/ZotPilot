@@ -159,8 +159,9 @@ def cmd_setup(args):
 
         import os as _os
         if gemini_api_key and not _os.environ.get("GEMINI_API_KEY"):
+            masked = gemini_api_key[:4] + "..." + gemini_api_key[-4:] if len(gemini_api_key) > 8 else "****"
             print(f"\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
-            print(f"    export GEMINI_API_KEY='{gemini_api_key}'")
+            print(f"    export GEMINI_API_KEY='{masked}'  # (masked for security)")
 
         print("\n" + "=" * 40)
         print("Setup complete!")

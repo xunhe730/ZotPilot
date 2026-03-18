@@ -84,7 +84,7 @@ def get_index_stats() -> dict:
     """Get statistics about the indexed collection.
 
     Also checks for papers in Zotero that have not yet been indexed into the
-    RAG store. If unindexed_count > 0, consider calling index_documents() to
+    RAG store. If unindexed_count > 0, consider calling index_library() to
     update the index.
     """
     _get_retriever()  # Ensure initialized
@@ -151,7 +151,7 @@ def get_index_stats() -> dict:
     if unindexed_papers:
         result["_notice"] = (
             f"\u26a0\ufe0f {len(unindexed_papers)} paper(s) in Zotero are not yet indexed. "
-            "Call index_documents() to update the RAG library."
+            "Call index_library() to update the RAG library."
         )
 
     return result

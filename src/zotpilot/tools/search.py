@@ -5,11 +5,16 @@ from collections import defaultdict
 from dataclasses import replace
 
 from ..state import (
-    mcp, _get_retriever, _get_reranker, _get_store, _get_config,
-    ToolError, VALID_CHUNK_TYPES,
-    _build_chromadb_filters, _apply_text_filters, _has_text_filters,
-    _apply_required_terms, _contains_chinese, _translate_to_english,
-    _merge_results_by_chunk, _result_to_dict, _stored_chunk_to_retrieval_result,
+    mcp, _get_retriever, _get_reranker, _get_store, _get_config, _get_zotero,
+    ToolError,
+)
+from ..filters import (
+    VALID_CHUNK_TYPES, _build_chromadb_filters, _apply_text_filters,
+    _has_text_filters, _apply_required_terms,
+)
+from ..translation import _contains_chinese, _translate_to_english
+from ..result_utils import (
+    _stored_chunk_to_retrieval_result, _merge_results_by_chunk, _result_to_dict,
 )
 from ..reranker import validate_section_weights, validate_journal_weights, VALID_SECTIONS, VALID_QUARTILES
 
@@ -278,6 +283,7 @@ def search_topic(
 
         paper_results.append({
             "doc_id": doc_id,
+            "item_key": doc_id,
             "doc_title": best_hit.doc_title,
             "authors": best_hit.authors,
             "year": best_hit.year,
@@ -335,16 +341,7 @@ def search_boolean(
         List of matching papers with metadata (no passages - use search_papers
         for passage retrieval on specific papers)
     """
-    from ..zotero_client import ZoteroClient
-    from ..state import _config as _state_config
-    from ..config import Config
-
-    # Get config lazily
-    _config = _state_config
-    if _config is None:
-        _config = Config.load()
-
-    zotero = ZoteroClient(_config.zotero_data_dir)
+    zotero = _get_zotero()
     matching_keys = zotero.search_fulltext(query, operator)
 
     if not matching_keys:
@@ -368,6 +365,7 @@ def search_boolean(
 
         results.append({
             "item_key": item.item_key,
+            "doc_id": item.item_key,
             "title": item.title,
             "authors": item.authors,
             "year": item.year,
