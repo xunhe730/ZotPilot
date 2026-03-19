@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_zotero, _get_store, ToolError
+from ..state import mcp, _get_zotero, _get_store, _get_store_optional, ToolError
 
 
 def _invalidate_collection_cache():
@@ -76,10 +76,14 @@ def get_paper_details(
 
     # Check if indexed in vector store
     try:
-        store = _get_store()
-        meta = store.get_document_meta(item_key)
-        indexed = meta is not None
-        quality_grade = meta.get("quality_grade", "") if meta else ""
+        store = _get_store_optional()
+        if store is not None:
+            meta = store.get_document_meta(item_key)
+            indexed = meta is not None
+            quality_grade = meta.get("quality_grade", "") if meta else ""
+        else:
+            indexed = False
+            quality_grade = ""
     except Exception:
         indexed = False
         quality_grade = ""
@@ -113,8 +117,8 @@ def get_library_overview(
 
     # Get indexed doc IDs for the "indexed" flag
     try:
-        store = _get_store()
-        indexed_ids = store.get_indexed_doc_ids()
+        store = _get_store_optional()
+        indexed_ids = store.get_indexed_doc_ids() if store is not None else set()
     except Exception:
         indexed_ids = set()
 

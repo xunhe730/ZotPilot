@@ -31,10 +31,13 @@ def create_embedder(config):
             timeout=config.embedding_timeout,
             max_retries=config.embedding_max_retries,
         )
+    elif config.embedding_provider == "none":
+        logger.info("No-RAG mode: embedding disabled, semantic search unavailable")
+        return None
     else:
         raise ValueError(
             f"Invalid embedding_provider: {config.embedding_provider}. "
-            f"Must be 'gemini', 'dashscope', or 'local'"
+            f"Must be 'gemini', 'dashscope', 'local', or 'none'"
         )
 
 

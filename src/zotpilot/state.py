@@ -160,12 +160,18 @@ def _get_retriever():
     if _retriever is None:
         with _init_lock:
             if _retriever is None:
+                _config = Config.load()
+                if _config.embedding_provider == "none":
+                    raise ToolError(
+                        "Semantic search requires indexing. "
+                        "Configure an embedding provider (gemini/dashscope/local) "
+                        "and run index_library() first."
+                    )
                 from .vector_store import VectorStore
                 from .retriever import Retriever
                 from .reranker import Reranker
                 from .embeddings import create_embedder
 
-                _config = Config.load()
                 embedder = create_embedder(_config)
                 _store = VectorStore(_config.chroma_db_path, embedder)
                 _retriever = Retriever(_store)
@@ -176,6 +182,14 @@ def _get_retriever():
 def _get_store():
     _get_retriever()  # Ensure initialized
     return _store
+
+
+def _get_store_optional():
+    """Returns VectorStore or None if No-RAG mode (embedding_provider='none')."""
+    config = _get_config()
+    if config.embedding_provider == "none":
+        return None
+    return _get_store()
 
 
 def _get_reranker():

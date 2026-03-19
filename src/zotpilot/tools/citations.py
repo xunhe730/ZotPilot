@@ -3,8 +3,26 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_store, _get_config, ToolError
-from ..config import Config
+from ..state import mcp, _get_store, _get_store_optional, _get_zotero, _get_config, ToolError
+
+
+def _get_doi(doc_id: str) -> str:
+    """Get DOI for a document, trying vector store first, then SQLite."""
+    store = _get_store_optional()
+    if store is not None:
+        meta = store.get_document_meta(doc_id)
+        if not meta:
+            raise ToolError(f"Document not found: {doc_id}")
+        doi = meta.get("doi")
+    else:
+        # No-RAG mode: get DOI from Zotero SQLite
+        item = _get_zotero().get_item(doc_id)
+        if not item:
+            raise ToolError(f"Document not found: {doc_id}")
+        doi = item.doi
+    if not doi:
+        raise ToolError("Document has no DOI - citation lookup unavailable")
+    return doi
 
 
 @mcp.tool()
@@ -13,14 +31,7 @@ def find_citing_papers(
     limit: Annotated[int, Field(description="Max citing papers to return", ge=1, le=100)] = 20,
 ) -> list[dict]:
     """Find papers that cite a given document. Requires DOI. Uses OpenAlex API."""
-    store = _get_store()
-    meta = store.get_document_meta(doc_id)
-    if not meta:
-        raise ToolError(f"Document not found: {doc_id}")
-
-    doi = meta.get("doi")
-    if not doi:
-        raise ToolError("Document has no DOI - citation lookup unavailable")
+    doi = _get_doi(doc_id)
 
     from ..openalex_client import OpenAlexClient
 
@@ -43,14 +54,7 @@ def find_references(
     limit: Annotated[int, Field(description="Max references to return", ge=1, le=100)] = 50,
 ) -> list[dict]:
     """Find papers referenced by a document (its bibliography). Requires DOI."""
-    store = _get_store()
-    meta = store.get_document_meta(doc_id)
-    if not meta:
-        raise ToolError(f"Document not found: {doc_id}")
-
-    doi = meta.get("doi")
-    if not doi:
-        raise ToolError("Document has no DOI - reference lookup unavailable")
+    doi = _get_doi(doc_id)
 
     from ..openalex_client import OpenAlexClient
 
@@ -72,14 +76,7 @@ def get_citation_count(
     doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
 ) -> dict:
     """Get citation and reference counts for a document. Requires DOI."""
-    store = _get_store()
-    meta = store.get_document_meta(doc_id)
-    if not meta:
-        raise ToolError(f"Document not found: {doc_id}")
-
-    doi = meta.get("doi")
-    if not doi:
-        raise ToolError("Document has no DOI - citation lookup unavailable")
+    doi = _get_doi(doc_id)
 
     from ..openalex_client import OpenAlexClient
 

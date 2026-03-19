@@ -47,7 +47,7 @@ class Config:
     chunk_overlap: int
     gemini_api_key: str | None
     dashscope_api_key: str | None
-    # Embedding provider: "gemini", "dashscope", or "local"
+    # Embedding provider: "gemini", "dashscope", "local", or "none" (No-RAG mode)
     embedding_provider: str
     # Embedding settings
     embedding_timeout: float
@@ -106,6 +106,7 @@ class Config:
             "gemini": ("gemini-embedding-001", 768),
             "dashscope": ("text-embedding-v3", 1024),
             "local": ("all-MiniLM-L6-v2", 384),
+            "none": ("none", 0),
         }
         default_model, default_dims = model_defaults.get(provider, ("gemini-embedding-001", 768))
 
@@ -196,7 +197,7 @@ class Config:
             errors.append("GEMINI_API_KEY not set (required for embedding_provider='gemini')")
         elif self.embedding_provider == "dashscope" and not self.dashscope_api_key:
             errors.append("DASHSCOPE_API_KEY not set (required for embedding_provider='dashscope')")
-        elif self.embedding_provider not in ("gemini", "dashscope", "local"):
-            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', or 'local'")
+        elif self.embedding_provider not in ("gemini", "dashscope", "local", "none"):
+            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")
 
         return errors

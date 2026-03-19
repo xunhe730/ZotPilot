@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0] - 2026-03-19
+
+### Added
+- **No-RAG mode**: `embedding_provider: "none"` disables semantic search while keeping all metadata-based tools functional (advanced_search, get_notes, list_tags, citations via SQLite DOI fallback, etc.)
+- `_get_store_optional()` pattern in state.py for graceful degradation
+- Citation tools fall back to SQLite for DOI lookup when vector store unavailable
+
+### Changed
+- `config.py` accepts `"none"` as valid embedding_provider, skips API key validation
+- `embeddings/__init__.py` returns `None` for provider "none"
+- `get_index_stats` returns `{mode: "no-rag", total_documents: 0}` in No-RAG mode
+- `get_reranking_config` returns `{enabled: false, mode: "no-rag"}` in No-RAG mode
+- `get_paper_details` and `get_library_overview` show `indexed: false` in No-RAG mode
+- `search_papers`, `search_topic`, `get_passage_context` raise clear ToolError in No-RAG mode
+
 ## [0.1.5] - 2026-03-19
 
 ### Added

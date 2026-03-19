@@ -47,9 +47,9 @@ class TestListTags:
 
 
 class TestGetPaperDetails:
-    @patch("zotpilot.tools.library._get_store")
+    @patch("zotpilot.tools.library._get_store_optional")
     @patch("zotpilot.tools.library._get_zotero")
-    def test_get_paper_details_not_found(self, mock_get_zotero, mock_get_store):
+    def test_get_paper_details_not_found(self, mock_get_zotero, mock_get_store_opt):
         from zotpilot.tools.library import get_paper_details
 
         mock_zotero = MagicMock()
@@ -115,13 +115,13 @@ class TestCreateCollection:
 
 class TestFindCitingPapers:
     @patch("zotpilot.tools.citations._get_config")
-    @patch("zotpilot.tools.citations._get_store")
-    def test_find_citing_papers_no_doi(self, mock_get_store, mock_get_config):
+    @patch("zotpilot.tools.citations._get_store_optional")
+    def test_find_citing_papers_no_doi(self, mock_get_store_opt, mock_get_config):
         from zotpilot.tools.citations import find_citing_papers
 
         mock_store = MagicMock()
         mock_store.get_document_meta.return_value = {"doc_id": "DOC1"}  # no "doi" key
-        mock_get_store.return_value = mock_store
+        mock_get_store_opt.return_value = mock_store
 
         with pytest.raises(ToolError, match="no DOI"):
             find_citing_papers("DOC1")

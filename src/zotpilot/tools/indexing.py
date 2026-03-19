@@ -5,7 +5,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_retriever, _get_store, _get_zotero, _get_config, ToolError
+from ..state import mcp, _get_retriever, _get_store, _get_store_optional, _get_zotero, _get_config, ToolError
 from ..config import Config
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,13 @@ def index_library(
 @mcp.tool()
 def get_index_stats() -> dict:
     """Get index statistics and list of unindexed papers. Call first to check readiness."""
+    _config = _get_config()
+    if _config.embedding_provider == "none":
+        return {
+            "total_documents": 0,
+            "mode": "no-rag",
+            "message": "Indexing disabled in No-RAG mode. Use advanced_search, get_notes, list_tags, etc. for basic features. Configure an embedding provider to enable semantic search.",
+        }
     _get_retriever()  # Ensure initialized
     store = _get_store()
     _config = _get_config()

@@ -6,7 +6,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_retriever, _get_reranker, _get_config, ToolError
+from ..state import mcp, _get_retriever, _get_reranker, _get_config, _get_store_optional, ToolError
 from ..reranker import VALID_SECTIONS, VALID_QUARTILES
 
 logger = logging.getLogger(__name__)
@@ -15,9 +15,15 @@ logger = logging.getLogger(__name__)
 @mcp.tool()
 def get_reranking_config() -> dict:
     """Get current reranking weights and valid section/quartile names."""
+    _config = _get_config()
+    if _config.embedding_provider == "none":
+        return {
+            "enabled": False,
+            "mode": "no-rag",
+            "message": "Reranking unavailable in No-RAG mode. Configure an embedding provider to enable semantic search.",
+        }
     _get_retriever()  # Ensure initialized
     reranker = _get_reranker()
-    _config = _get_config()
 
     return {
         "enabled": _config.rerank_enabled,

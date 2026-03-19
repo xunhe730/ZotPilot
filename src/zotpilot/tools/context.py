@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_store, ToolError
+from ..state import mcp, _get_store, _get_config, ToolError
 
 
 @mcp.tool()
@@ -17,6 +17,12 @@ def get_passage_context(
 ) -> dict:
     """Expand context around a search result passage. Pass table_page+table_index for table context lookup."""
     window = max(1, min(window, 5))
+    _config = _get_config()
+    if _config.embedding_provider == "none":
+        raise ToolError(
+            "Passage context requires indexing. "
+            "Configure an embedding provider and run index_library() first."
+        )
     store = _get_store()
 
     # Handle table context lookup
