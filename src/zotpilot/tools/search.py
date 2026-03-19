@@ -3,6 +3,9 @@ import time
 import logging
 from collections import defaultdict
 from dataclasses import replace
+from typing import Annotated
+
+from pydantic import Field
 
 from ..state import (
     mcp, _get_retriever, _get_reranker, _get_store, _get_config, _get_zotero,
@@ -22,61 +25,20 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 def search_papers(
-    query: str,
-    top_k: int = 10,
-    context_chunks: int = 1,
-    year_min: int | None = None,
-    year_max: int | None = None,
-    author: str | None = None,
-    tag: str | None = None,
-    collection: str | None = None,
-    chunk_types: list[str] | None = None,
-    section_weights: dict[str, float] | None = None,
-    journal_weights: dict[str, float] | None = None,
-    required_terms: list[str] | None = None,
+    query: Annotated[str, Field(description="Natural language search query")],
+    top_k: Annotated[int, Field(description="Number of results", ge=1, le=50)] = 10,
+    context_chunks: Annotated[int, Field(description="Adjacent chunks to include for context", ge=0, le=3)] = 1,
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
+    tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
+    collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
+    required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,
 ) -> list[dict]:
-    """
-    Semantic search over research paper chunks.
-
-    Returns relevant passages with surrounding context.
-
-    Results are reranked by a composite score combining semantic similarity,
-    document section, and journal quartile. chunk_types and section_weights
-    are orthogonal dimensions -- use chunk_types to select what kind of
-    content (text, figures, tables) and section_weights to prefer where
-    in the paper it appears.
-
-    Combine semantic search with exact word matching by passing
-    required_terms. Each term must appear as a whole word (case-insensitive)
-    in the passage text for the result to be included. This is useful for
-    ensuring results contain specific acronyms, identifiers, or keywords
-    that semantic search alone might miss.
-
-    Args:
-        query: Natural language search query
-        top_k: Number of results (1-50)
-        context_chunks: Adjacent chunks to include (0-3)
-        year_min: Minimum publication year filter
-        year_max: Maximum publication year filter
-        author: Filter by author name (case-insensitive substring match)
-        tag: Filter by Zotero tag (case-insensitive substring match)
-        collection: Filter by Zotero collection name (substring match)
-        chunk_types: Filter by content type. Valid values: text, figure,
-            table. Pass a list to include multiple (e.g. ["text", "table"]).
-            Omit or pass null to search all types.
-        section_weights: Override section relevance weights. Keys are section
-            labels: abstract, introduction, background, methods, results,
-            discussion, conclusion, references, appendix, preamble, table,
-            unknown. Values are 0.0-1.0. Set a section to 0 to exclude it.
-        journal_weights: Override journal quartile weights. Keys: Q1, Q2,
-            Q3, Q4, unknown. Values are 0.0-1.0.
-        required_terms: List of words that must appear in the passage text
-            (case-insensitive whole-word match). All terms must be present.
-            Use this to combine semantic search with exact keyword filtering.
-
-    Returns:
-        List of results with passage text, context, and metadata
-    """
+    """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -139,50 +101,18 @@ def search_papers(
 
 @mcp.tool()
 def search_topic(
-    query: str,
-    num_papers: int = 10,
-    year_min: int | None = None,
-    year_max: int | None = None,
-    author: str | None = None,
-    tag: str | None = None,
-    collection: str | None = None,
-    chunk_types: list[str] | None = None,
-    section_weights: dict[str, float] | None = None,
-    journal_weights: dict[str, float] | None = None,
+    query: Annotated[str, Field(description="Natural language topic description")],
+    num_papers: Annotated[int, Field(description="Number of distinct papers to return", ge=1, le=50)] = 10,
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
+    tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
+    collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
 ) -> list[dict]:
-    """
-    Find the most relevant papers for a topic, deduplicated by document.
-
-    Searches across all chunks, then groups by paper. Each paper is scored
-    by both its average composite relevance and its best single chunk.
-    Results are sorted by average composite score.
-
-    Papers are scored using composite relevance combining similarity, section,
-    and journal quality. chunk_types and section_weights are orthogonal --
-    use chunk_types to select content kind and section_weights to prefer
-    where in the paper it appears.
-
-    Args:
-        query: Natural language topic description
-        num_papers: Number of distinct papers to return (1-50)
-        year_min: Minimum publication year filter
-        year_max: Maximum publication year filter
-        author: Filter by author name (case-insensitive substring match)
-        tag: Filter by Zotero tag (case-insensitive substring match)
-        collection: Filter by Zotero collection name (substring match)
-        chunk_types: Filter by content type. Valid values: text, figure,
-            table. Pass a list to include multiple (e.g. ["text", "figure"]).
-            Omit or pass null to search all types.
-        section_weights: Override section relevance weights. Keys are section
-            labels: abstract, introduction, background, methods, results,
-            discussion, conclusion, references, appendix, preamble, table,
-            unknown. Values are 0.0-1.0. Set a section to 0 to exclude it.
-        journal_weights: Override journal quartile weights. Keys: Q1, Q2,
-            Q3, Q4, unknown. Values are 0.0-1.0.
-
-    Returns:
-        List of per-paper results with scores and best passage
-    """
+    """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -298,36 +228,12 @@ def search_topic(
 
 @mcp.tool()
 def search_boolean(
-    query: str,
-    operator: str = "AND",
-    year_min: int | None = None,
-    year_max: int | None = None,
+    query: Annotated[str, Field(description="Space-separated search terms (case-insensitive)")],
+    operator: Annotated[str, Field(description="AND (all terms required) or OR (any term)")] = "AND",
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
 ) -> list[dict]:
-    """
-    Boolean full-text search using Zotero's native word index.
-
-    Use for exact word matching with AND/OR logic. Unlike semantic search,
-    this finds exact word matches only (no synonyms or similar meaning).
-
-    This searches the full text of PDFs that Zotero has indexed. Words are
-    tokenized by Zotero's indexer, so punctuation and hyphenation affect
-    matching (e.g., "heart-rate" is two words: "heart" and "rate").
-
-    Limitations:
-    - No phrase search ("heart rate" searches for both words, not the phrase)
-    - No stemming ("running" won't match "run")
-    - Requires Zotero to have indexed the PDFs
-
-    Args:
-        query: Space-separated search terms (case-insensitive)
-        operator: "AND" (all terms required) or "OR" (any term matches)
-        year_min: Minimum publication year filter
-        year_max: Maximum publication year filter
-
-    Returns:
-        List of matching papers with metadata (no passages - use search_papers
-        for passage retrieval on specific papers)
-    """
+    """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""
     zotero = _get_zotero()
     matching_keys = zotero.search_fulltext(query, operator)
 
@@ -370,50 +276,16 @@ def search_boolean(
 
 @mcp.tool()
 def search_tables(
-    query: str,
-    top_k: int = 10,
-    year_min: int | None = None,
-    year_max: int | None = None,
-    author: str | None = None,
-    tag: str | None = None,
-    collection: str | None = None,
-    journal_weights: dict[str, float] | None = None,
+    query: Annotated[str, Field(description="Search query for table content")],
+    top_k: Annotated[int, Field(description="Number of tables to return", ge=1, le=30)] = 10,
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
+    tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
+    collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
 ) -> list[dict]:
-    """
-    Search for tables in indexed papers.
-
-    Searches table content (headers, cells, captions) semantically.
-    Returns tables as markdown with metadata. Use this for table-specific
-    searches; for mixed content searches (e.g. tables in results sections),
-    use search_papers with chunk_types=["table"] and section_weights.
-
-    Results are reranked by composite score combining semantic similarity
-    and journal quartile. Tables are assigned section="table" with
-    default weight 0.9.
-
-    Args:
-        query: Search query describing desired table content
-        top_k: Number of tables to return (1-30)
-        year_min: Minimum publication year filter
-        year_max: Maximum publication year filter
-        author: Filter by author name (case-insensitive substring match)
-        tag: Filter by Zotero tag (case-insensitive substring match)
-        collection: Filter by Zotero collection name (substring match)
-        journal_weights: Override journal quartile weights. Keys: Q1, Q2,
-            Q3, Q4, unknown. Values are 0.0-1.0.
-
-    Returns:
-        List of matching tables with:
-        - doc_title, authors, year, citation_key: Bibliographic info
-        - page: Page number where table appears
-        - table_index: Index of table on page
-        - caption: Table caption if detected
-        - table_markdown: Full table as markdown
-        - num_rows, num_cols: Table dimensions
-        - relevance_score: Semantic similarity (0-1)
-        - composite_score: Reranked score (similarity * section * journal)
-        - doc_id: Document ID for use with get_passage_context
-    """
+    """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""
     start = time.perf_counter()
 
     # Validate journal_weights if provided
@@ -485,45 +357,15 @@ def search_tables(
 
 @mcp.tool()
 def search_figures(
-    query: str,
-    top_k: int = 10,
-    year_min: int | None = None,
-    year_max: int | None = None,
-    author: str | None = None,
-    tag: str | None = None,
-    collection: str | None = None,
+    query: Annotated[str, Field(description="Search query for figure captions")],
+    top_k: Annotated[int, Field(description="Number of figures to return", ge=1, le=30)] = 10,
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
+    tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
+    collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
 ) -> list[dict]:
-    """
-    Search for figures by caption content.
-
-    Searches figure captions semantically. Returns figures with
-    their captions, page numbers, and paths to extracted images.
-    Use this for figure-specific searches; for mixed content searches
-    (e.g. figures in results sections), use search_papers with
-    chunk_types=["figure"] and section_weights.
-
-    Figures without detected captions are included as "orphans"
-    with a generic description like "Figure on page X".
-
-    Args:
-        query: Search query for figure captions
-        top_k: Number of figures to return (1-30)
-        year_min: Minimum publication year filter
-        year_max: Maximum publication year filter
-        author: Filter by author name (case-insensitive substring match)
-        tag: Filter by Zotero tag (case-insensitive substring match)
-        collection: Filter by Zotero collection name (substring match)
-
-    Returns:
-        List of matching figures with:
-        - doc_title, authors, year, citation_key: Bibliographic info
-        - page_num: Page number where figure appears
-        - figure_index: Index of figure on page
-        - caption: Figure caption (empty string for orphans)
-        - image_path: Path to extracted PNG image
-        - relevance_score: Semantic similarity (0-1)
-        - doc_id: Document ID for use with other tools
-    """
+    """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""
     start = time.perf_counter()
     top_k = max(1, min(top_k, 30))
     store = _get_store()

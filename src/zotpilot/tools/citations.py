@@ -1,23 +1,18 @@
 """Citation graph tools: citing papers, references, citation counts."""
+from typing import Annotated
+
+from pydantic import Field
+
 from ..state import mcp, _get_store, _get_config, ToolError
 from ..config import Config
 
 
 @mcp.tool()
-def find_citing_papers(doc_id: str, limit: int = 20) -> list[dict]:
-    """
-    Find papers that cite a given document.
-
-    Requires the document to have a DOI. Uses OpenAlex API for citation data.
-    Rate-limited to 1 request/second (or 10/second if openalex_email configured).
-
-    Args:
-        doc_id: Document ID (Zotero item key) from search results
-        limit: Maximum number of citing papers to return (1-100)
-
-    Returns:
-        List of citing papers with title, authors, year, DOI, and citation count
-    """
+def find_citing_papers(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+    limit: Annotated[int, Field(description="Max citing papers to return", ge=1, le=100)] = 20,
+) -> list[dict]:
+    """Find papers that cite a given document. Requires DOI. Uses OpenAlex API."""
     store = _get_store()
     meta = store.get_document_meta(doc_id)
     if not meta:
@@ -43,20 +38,11 @@ def find_citing_papers(doc_id: str, limit: int = 20) -> list[dict]:
 
 
 @mcp.tool()
-def find_references(doc_id: str, limit: int = 50) -> list[dict]:
-    """
-    Find papers that a document references (its bibliography).
-
-    Requires the document to have a DOI. Uses OpenAlex API.
-    Rate-limited to 1 request/second (or 10/second if openalex_email configured).
-
-    Args:
-        doc_id: Document ID (Zotero item key) from search results
-        limit: Maximum number of references to return (1-100)
-
-    Returns:
-        List of referenced papers with title, authors, year, DOI, and citation count
-    """
+def find_references(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+    limit: Annotated[int, Field(description="Max references to return", ge=1, le=100)] = 50,
+) -> list[dict]:
+    """Find papers referenced by a document (its bibliography). Requires DOI."""
     store = _get_store()
     meta = store.get_document_meta(doc_id)
     if not meta:
@@ -82,18 +68,10 @@ def find_references(doc_id: str, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
-def get_citation_count(doc_id: str) -> dict:
-    """
-    Get citation count and reference count for a document.
-
-    Requires the document to have a DOI. Uses OpenAlex API.
-
-    Args:
-        doc_id: Document ID (Zotero item key) from search results
-
-    Returns:
-        Dict with cited_by_count and reference_count
-    """
+def get_citation_count(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+) -> dict:
+    """Get citation and reference counts for a document. Requires DOI."""
     store = _get_store()
     meta = store.get_document_meta(doc_id)
     if not meta:

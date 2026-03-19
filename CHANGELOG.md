@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.3] - 2026-03-19
+
+### Changed
+- All tool docstrings slimmed to 1-3 sentences (<500 chars each) — total docstring reduced from 17.5 KB to 2.1 KB (-88%)
+- Parameter documentation migrated from docstrings to `Annotated[type, Field(description="...")]` for structured schema generation
+- 5 batch tools merged into 2: `batch_tags(action="add|set|remove")` and `batch_collections(action="add|remove")` — tool count 29 → 26
+
+### Removed
+- `batch_add_tags`, `batch_set_tags`, `batch_remove_tags`, `batch_add_to_collection`, `batch_remove_from_collection` (replaced by `batch_tags` and `batch_collections`)
+
 ## [0.1.2] - 2026-03-19
 
 ### Added
@@ -45,7 +55,7 @@
 
 ### Added
 - Initial release as ZotPilot (repackaged from deep-zotero)
-- 29 MCP tools for search, indexing, citations, and library management
+- 26 MCP tools for search, indexing, citations, and library management
 - Gemini and local embedding providers
 - Section-aware reranking with journal quality weighting
 - PDF extraction with table, figure, and OCR support

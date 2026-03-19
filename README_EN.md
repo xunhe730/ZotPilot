@@ -3,7 +3,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-29_Tools-00B265?style=flat-square" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-26_Tools-00B265?style=flat-square" alt="MCP">
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
   </p>
   <p>
@@ -26,7 +26,7 @@
 
 ZotPilot is an AI Agent Skill that adds semantic search, citation graph queries, and AI-assisted organization to your Zotero library.
 
-It builds a local vector index over your Zotero data, then exposes 29 tools to AI agents via MCP protocol. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, and help you tag and sort your collection. Your papers stay on your machine.
+It builds a local vector index over your Zotero data, then exposes 26 tools to AI agents via MCP protocol. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, and help you tag and sort your collection. Your papers stay on your machine.
 
 ---
 
@@ -171,7 +171,7 @@ Note: this choice is hard to change later. The three providers produce different
 
 ---
 
-## 29 MCP tools
+## 26 MCP tools
 
 <details>
 <summary>Search (6)</summary>
@@ -239,14 +239,14 @@ Note: this choice is hard to change later. The three providers produce different
 
 ## How it works
 
-ZotPilot is an AI Agent Skill: a repository with an instruction file ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads. It starts an MCP server with 29 tools.
+ZotPilot is an AI Agent Skill: a repository with an instruction file ([SKILL.md](SKILL.md)) and a bootstrap script ([scripts/run.py](scripts/run.py)) that your AI agent loads. It starts an MCP server with 26 tools.
 
 ```
 Indexing (run once)
 Zotero SQLite ──→ PDF extraction ──→ Chunking + sections ──→ Embeddings ──→ ChromaDB
 
 Usage (every query)
-AI Agent ──→ 29 MCP tools ──┬── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results
+AI Agent ──→ 26 MCP tools ──┬── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results
                              ├── Citation graph  ──→ OpenAlex
                              ├── Library browse  ──→ Zotero SQLite
                              └── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero

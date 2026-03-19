@@ -1,32 +1,21 @@
 """Context expansion tools."""
 import re
+from typing import Annotated
+
+from pydantic import Field
 
 from ..state import mcp, _get_store, ToolError
 
 
 @mcp.tool()
 def get_passage_context(
-    doc_id: str,
-    chunk_index: int,
-    window: int = 2,
-    table_page: int | None = None,
-    table_index: int | None = None,
+    doc_id: Annotated[str, Field(description="Document ID from search results")],
+    chunk_index: Annotated[int, Field(description="Chunk index from search results")],
+    window: Annotated[int, Field(description="Chunks before/after to include", ge=1, le=5)] = 2,
+    table_page: Annotated[int | None, Field(description="Page number of table (for table context)")] = None,
+    table_index: Annotated[int | None, Field(description="Index of table on page")] = None,
 ) -> dict:
-    """
-    Expand context around a specific passage.
-
-    Use after search_papers to get more context.
-
-    For table chunks (from search_tables), pass table_page and table_index
-    to find the text that references the table and return that with context.
-
-    Args:
-        doc_id: Document ID from search results
-        chunk_index: Chunk index from search results
-        window: Chunks before/after to include (1-5)
-        table_page: Page number of table (for table context lookup)
-        table_index: Index of table on page (for table context lookup)
-    """
+    """Expand context around a search result passage. Pass table_page+table_index for table context lookup."""
     window = max(1, min(window, 5))
     store = _get_store()
 

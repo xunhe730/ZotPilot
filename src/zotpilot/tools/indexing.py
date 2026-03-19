@@ -1,6 +1,9 @@
 """Indexing tools: index_library, get_index_stats."""
 import logging
 from collections import defaultdict
+from typing import Annotated
+
+from pydantic import Field
 
 from ..state import mcp, _get_retriever, _get_store, _get_zotero, _get_config, ToolError
 from ..config import Config
@@ -10,29 +13,13 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 def index_library(
-    force_reindex: bool = False,
-    limit: int | None = None,
-    item_key: str | None = None,
-    title_pattern: str | None = None,
-    no_vision: bool = False,
+    force_reindex: Annotated[bool, Field(description="Delete and rebuild index for matching items")] = False,
+    limit: Annotated[int | None, Field(description="Max items to index, None for all")] = None,
+    item_key: Annotated[str | None, Field(description="Index only this specific item key")] = None,
+    title_pattern: Annotated[str | None, Field(description="Regex to filter items by title (case-insensitive)")] = None,
+    no_vision: Annotated[bool, Field(description="Disable vision-based table extraction")] = False,
 ) -> dict:
-    """
-    Index Zotero PDFs into the vector store.
-
-    Extracts text, tables, and figures from PDFs, chunks them, and stores
-    embeddings in ChromaDB. Incrementally indexes only new/changed documents
-    unless force_reindex is True.
-
-    Args:
-        force_reindex: Delete and rebuild index for all matching items
-        limit: Maximum number of items to index (None = all)
-        item_key: Index only this specific Zotero item key
-        title_pattern: Regex pattern to filter items by title (case-insensitive)
-        no_vision: Disable vision-based table extraction for this run
-
-    Returns:
-        Summary with counts of indexed/failed/skipped items and quality stats
-    """
+    """Index Zotero PDFs into the vector store. Incremental by default; use force_reindex to rebuild."""
     from ..indexer import Indexer
 
     _config = _get_config()
@@ -84,12 +71,7 @@ def index_library(
 
 @mcp.tool()
 def get_index_stats() -> dict:
-    """Get statistics about the indexed collection.
-
-    Also checks for papers in Zotero that have not yet been indexed into the
-    RAG store. If unindexed_count > 0, consider calling index_library() to
-    update the index.
-    """
+    """Get index statistics and list of unindexed papers. Call first to check readiness."""
     _get_retriever()  # Ensure initialized
     store = _get_store()
     _config = _get_config()

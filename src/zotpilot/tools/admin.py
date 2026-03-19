@@ -2,6 +2,9 @@
 import json
 import logging
 from pathlib import Path
+from typing import Annotated
+
+from pydantic import Field
 
 from ..state import mcp, _get_retriever, _get_reranker, _get_config, ToolError
 from ..reranker import VALID_SECTIONS, VALID_QUARTILES
@@ -11,12 +14,7 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 def get_reranking_config() -> dict:
-    """
-    Get current reranking configuration.
-
-    Returns section weights, journal quartile weights, alpha exponent,
-    and valid section names for use with section_weights parameter.
-    """
+    """Get current reranking weights and valid section/quartile names."""
     _get_retriever()  # Ensure initialized
     reranker = _get_reranker()
     _config = _get_config()
@@ -37,26 +35,10 @@ def get_reranking_config() -> dict:
 
 
 @mcp.tool()
-def get_vision_costs(last_n: int = 10) -> dict:
-    """
-    Get vision API batch usage and cost summary.
-
-    Reads the vision cost log written during table extraction and returns
-    a summary of token usage, costs, and per-session breakdowns.
-
-    Args:
-        last_n: Number of most recent log entries to include in detail (default 10)
-
-    Returns:
-        Dict with:
-        - total_cost_usd: Total spend across all runs
-        - total_tables: Total number of table extractions logged
-        - avg_cost_per_table_usd: Mean cost per table
-        - tokens: Breakdown of input, output, cache_write, cache_read totals
-        - sessions: Per-session summary (session_id, first_timestamp, table_count, cost_usd)
-        - recent_entries: Last N log entries in chronological order
-        - log_path: Absolute path to the cost log file
-    """
+def get_vision_costs(
+    last_n: Annotated[int, Field(description="Recent log entries to include in detail", ge=0)] = 10,
+) -> dict:
+    """Get vision API usage and cost summary from table extraction."""
     _config = _get_config()
 
     log_path = Path(_config.chroma_db_path).parent / "vision_costs.json"

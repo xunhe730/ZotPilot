@@ -1,4 +1,8 @@
 """Library browsing tools: collections, tags, paper details, overview."""
+from typing import Annotated
+
+from pydantic import Field
+
 from ..state import mcp, _get_zotero, _get_store, ToolError
 
 
@@ -9,28 +13,16 @@ def _invalidate_collection_cache():
 
 @mcp.tool()
 def list_collections() -> list[dict]:
-    """
-    List all Zotero collections (folders) with their keys and hierarchy.
-
-    Returns a list of collections, each with:
-    - key: Zotero item key for the collection
-    - name: collection display name
-    - parent_key: key of parent collection, or null if top-level
-    """
+    """List all Zotero collections (folders) with keys and hierarchy."""
     return _get_zotero().get_all_collections()
 
 
 @mcp.tool()
-def get_collection_papers(collection_key: str, limit: int = 100) -> list[dict]:
-    """
-    Get all papers in a specific Zotero collection.
-
-    Args:
-        collection_key: The Zotero key of the collection (from list_collections)
-        limit: Maximum number of papers to return (default 100)
-
-    Returns a list of papers with key, title, authors, year, publication, doi, tags.
-    """
+def get_collection_papers(
+    collection_key: Annotated[str, Field(description="Collection key from list_collections")],
+    limit: Annotated[int, Field(description="Max papers to return", ge=1)] = 100,
+) -> list[dict]:
+    """Get papers in a specific Zotero collection."""
     zotero = _get_zotero()
     all_items = zotero.get_all_items_with_pdfs()
     result = []
@@ -62,31 +54,19 @@ def get_collection_papers(collection_key: str, limit: int = 100) -> list[dict]:
 
 
 @mcp.tool()
-def list_tags(limit: int = 200) -> list[dict]:
-    """
-    List all tags in the Zotero library with usage counts.
-
-    Args:
-        limit: Maximum number of tags to return, sorted by frequency (default 200)
-
-    Returns a list of {name, count} dicts sorted by usage count descending.
-    """
+def list_tags(
+    limit: Annotated[int, Field(description="Max tags to return", ge=1)] = 200,
+) -> list[dict]:
+    """List all tags in the library sorted by usage count."""
     tags = _get_zotero().get_all_tags()
     return tags[:limit]
 
 
 @mcp.tool()
-def get_paper_details(item_key: str) -> dict:
-    """
-    Get complete metadata for a paper by its Zotero item key.
-
-    Args:
-        item_key: The Zotero item key (e.g. "FRF9ACAJ")
-
-    Returns full metadata including title, authors, year, publication, DOI,
-    abstract, tags, collections, citation key, and whether it has been indexed
-    for semantic search.
-    """
+def get_paper_details(
+    item_key: Annotated[str, Field(description="Zotero item key")],
+) -> dict:
+    """Get complete metadata for a paper including abstract, tags, and index status."""
     zotero = _get_zotero()
     item = zotero.get_item(item_key)
     if item is None:
@@ -123,19 +103,11 @@ def get_paper_details(item_key: str) -> dict:
 
 
 @mcp.tool()
-def get_library_overview(limit: int = 100, offset: int = 0) -> dict:
-    """
-    Get a paginated overview of all papers in the Zotero library.
-
-    Args:
-        limit: Number of papers per page (default 100)
-        offset: Starting index for pagination (default 0)
-
-    Returns:
-    - total: total number of papers with PDFs
-    - papers: list of {key, title, authors, year, publication, tags, indexed}
-    - offset/limit for pagination
-    """
+def get_library_overview(
+    limit: Annotated[int, Field(description="Papers per page", ge=1)] = 100,
+    offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
+) -> dict:
+    """Paginated overview of all papers in the library."""
     zotero = _get_zotero()
     all_items = zotero.get_all_items_with_pdfs()
 

@@ -91,7 +91,7 @@ Enter: name=`zotpilot`, command=`zotpilot`, transport=`stdio`.
 
 ### 3. Tell user to restart
 
-Say: "Setup complete! Please restart your AI agent (or run `/mcp` in Claude Code) to activate ZotPilot's 29 tools. After restarting, ask me again and I'll index your papers and start searching."
+Say: "Setup complete! Please restart your AI agent (or run `/mcp` in Claude Code) to activate ZotPilot's 26 tools. After restarting, ask me again and I'll index your papers and start searching."
 
 **IMPORTANT:** Stop here. Do NOT attempt to use MCP tools (search_papers, etc.) until the user restarts. The MCP server is not available until after restart.
 

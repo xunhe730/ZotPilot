@@ -1,6 +1,6 @@
 # ZotPilot Tool Guide
 
-You have access to a Zotero library through ZotPilot's 29 MCP tools. This guide tells you how to use them effectively. Follow these instructions precisely — they encode hard-won knowledge about tool behavior, parameter choices, and failure modes.
+You have access to a Zotero library through ZotPilot's 26 MCP tools. This guide tells you how to use them effectively. Follow these instructions precisely — they encode hard-won knowledge about tool behavior, parameter choices, and failure modes.
 
 ## Before you start: check readiness
 
