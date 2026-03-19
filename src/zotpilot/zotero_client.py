@@ -665,6 +665,49 @@ class ZoteroClient:
         finally:
             conn.close()
 
+    def get_libraries(self) -> list[dict]:
+        """List available Zotero libraries (user library + groups)."""
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            results = []
+            # User library is always present
+            user_count = conn.execute("""
+                SELECT COUNT(*) FROM items
+                WHERE itemTypeID NOT IN (1, 14)
+                  AND itemID NOT IN (SELECT itemID FROM deletedItems)
+            """).fetchone()[0]
+            results.append({
+                "library_id": "1",
+                "library_type": "user",
+                "name": "My Library",
+                "item_count": user_count,
+            })
+
+            # Check for groups
+            if self._table_exists(conn, "groups"):
+                groups = conn.execute("""
+                    SELECT g.groupID, g.name,
+                           (SELECT COUNT(*) FROM items i
+                            JOIN groupItems gi ON i.itemID = gi.itemID
+                            WHERE gi.groupID = g.groupID
+                              AND i.itemTypeID NOT IN (1, 14)
+                              AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                           ) AS itemCount
+                    FROM groups g
+                    ORDER BY g.name
+                """).fetchall()
+                for g in groups:
+                    results.append({
+                        "library_id": str(g["groupID"]),
+                        "library_type": "group",
+                        "name": g["name"],
+                        "item_count": g["itemCount"],
+                    })
+            return results
+        finally:
+            conn.close()
+
     ADVANCED_SEARCH_BASE_SQL = """
     SELECT
         base.itemID,

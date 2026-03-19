@@ -2,11 +2,14 @@
 import json
 import logging
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
-from ..state import mcp, _get_retriever, _get_reranker, _get_config, _get_store_optional, ToolError
+from ..state import (
+    mcp, _get_retriever, _get_reranker, _get_config, _get_zotero,
+    _get_store_optional, _set_library_override, _clear_library_override, ToolError,
+)
 from ..reranker import VALID_SECTIONS, VALID_QUARTILES
 
 logger = logging.getLogger(__name__)
@@ -124,4 +127,28 @@ def get_vision_costs(
         "sessions": sessions,
         "recent_entries": recent,
         "log_path": log_path.name,
+    }
+
+
+@mcp.tool()
+def switch_library(
+    library_id: Annotated[str | None, Field(description="Library/group ID. None to list available.")] = None,
+    library_type: Annotated[Literal["user", "group", "default"], Field(description="'default' resets to user library")] = "group",
+) -> dict:
+    """List libraries or switch active library context."""
+    if library_id is None:
+        # List available libraries
+        zotero = _get_zotero()
+        return {"libraries": zotero.get_libraries()}
+
+    if library_type == "default":
+        _clear_library_override()
+        return {"switched": True, "library_type": "user", "message": "Reset to default user library"}
+
+    _set_library_override(library_id, library_type)
+    return {
+        "switched": True,
+        "library_id": library_id,
+        "library_type": library_type,
+        "message": f"Switched to {library_type} library {library_id}. All tools now operate on this library.",
     }

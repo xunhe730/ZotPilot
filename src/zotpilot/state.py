@@ -236,6 +236,30 @@ def _get_writer():
     return _writer
 
 
+_api_reader = None
+
+
+def _get_api_reader():
+    """Lazy-initialize ZoteroApiReader (read-only Pyzotero Web API)."""
+    global _api_reader, _config
+    if _api_reader is None:
+        with _init_lock:
+            if _api_reader is None:
+                if _config is None:
+                    _config = Config.load()
+                if not _config.zotero_api_key:
+                    raise ToolError("ZOTERO_API_KEY not set -- annotation reading unavailable")
+                if not _config.zotero_user_id:
+                    raise ToolError("ZOTERO_USER_ID not set -- annotation reading unavailable")
+                from .zotero_api_reader import ZoteroApiReader
+                _api_reader = ZoteroApiReader(
+                    _config.zotero_api_key,
+                    _config.zotero_user_id,
+                    _config.zotero_library_type,
+                )
+    return _api_reader
+
+
 def _get_config():
     """Ensure _config is loaded and return it."""
     global _config
@@ -244,3 +268,34 @@ def _get_config():
             if _config is None:
                 _config = Config.load()
     return _config
+
+
+# Library override for switch_library
+_library_override: dict | None = None
+
+
+def _reset_singletons():
+    """Tear down all cached singletons. Called by switch_library."""
+    global _retriever, _store, _reranker, _config, _zotero, _writer, _api_reader
+    with _init_lock:
+        _retriever = None
+        _store = None
+        _reranker = None
+        _config = None
+        _zotero = None
+        _writer = None
+        _api_reader = None
+
+
+def _set_library_override(library_id: str, library_type: str):
+    """Set library override and reset singletons."""
+    global _library_override
+    _library_override = {"library_id": library_id, "library_type": library_type}
+    _reset_singletons()
+
+
+def _clear_library_override():
+    """Clear library override and reset singletons."""
+    global _library_override
+    _library_override = None
+    _reset_singletons()

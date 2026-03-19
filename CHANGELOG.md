@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-03-19
+
+### Added
+- `switch_library` tool — list available libraries (user + groups) or switch active library context. Resets all singletons on switch via `_reset_singletons()`
+- `get_annotations` tool — read highlights and comments via Zotero Web API (requires ZOTERO_API_KEY). Uses new `ZoteroApiReader` (read-only pyzotero client, separate from `ZoteroWriter`)
+- `_get_api_reader()` singleton in state.py for annotation reads
+- `get_libraries()` method in ZoteroClient (SQLite, includes group libraries)
+- Tool count: 30 → 32
+
 ## [0.2.0] - 2026-03-19
 
 ### Added

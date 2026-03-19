@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_zotero, _get_store, _get_store_optional, ToolError
+from ..state import mcp, _get_zotero, _get_store, _get_store_optional, _get_api_reader, ToolError
 
 
 def _invalidate_collection_cache():
@@ -167,3 +167,12 @@ def get_feeds(
     else:
         items = zotero.get_feed_items(library_id, limit=limit)
         return {"library_id": library_id, "items": items, "total": len(items)}
+
+
+@mcp.tool()
+def get_annotations(
+    item_key: Annotated[str | None, Field(description="Item key. None for all annotations.")] = None,
+    limit: Annotated[int, Field(description="Max annotations", ge=1, le=200)] = 50,
+) -> list[dict]:
+    """Get highlights and comments. Requires ZOTERO_API_KEY."""
+    return _get_api_reader().get_annotations(item_key=item_key, limit=limit)
