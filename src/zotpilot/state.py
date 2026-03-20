@@ -208,7 +208,13 @@ def _get_zotero():
                 if _config is None:
                     _config = Config.load()
                 from .zotero_client import ZoteroClient
-                _zotero = ZoteroClient(_config.zotero_data_dir)
+                if _library_override and _library_override["library_type"] == "group":
+                    lib_id = ZoteroClient.resolve_group_library_id(
+                        _config.zotero_data_dir, int(_library_override["library_id"])
+                    )
+                    _zotero = ZoteroClient(_config.zotero_data_dir, library_id=lib_id)
+                else:
+                    _zotero = ZoteroClient(_config.zotero_data_dir)
     return _zotero
 
 

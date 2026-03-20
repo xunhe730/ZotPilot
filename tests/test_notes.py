@@ -20,7 +20,8 @@ def _create_notes_db(tmp_path: Path) -> Path:
             itemID INTEGER PRIMARY KEY,
             itemTypeID INTEGER,
             dateAdded TEXT DEFAULT '2024-01-01 00:00:00',
-            key TEXT UNIQUE
+            key TEXT UNIQUE,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
         CREATE TABLE itemNotes (
@@ -54,7 +55,7 @@ def _insert_note(
     conn = sqlite3.connect(str(db_path))
     # Parent item (itemTypeID=2 = journalArticle)
     conn.execute(
-        "INSERT OR IGNORE INTO items VALUES (?, 2, '2024-01-01 00:00:00', ?)",
+        "INSERT OR IGNORE INTO items (itemID, itemTypeID, dateAdded, key) VALUES (?, 2, '2024-01-01 00:00:00', ?)",
         (parent_id, parent_key),
     )
     # Title for parent
@@ -68,7 +69,7 @@ def _insert_note(
     )
     # Note item (itemTypeID=1)
     conn.execute(
-        "INSERT INTO items VALUES (?, 1, ?, ?)",
+        "INSERT INTO items (itemID, itemTypeID, dateAdded, key) VALUES (?, 1, ?, ?)",
         (note_id, date_added, note_key),
     )
     conn.execute(

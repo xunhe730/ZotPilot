@@ -52,6 +52,7 @@ class ZoteroClient:
             FROM items
             WHERE items.itemTypeID NOT IN (1, 14)
               AND items.itemID NOT IN (SELECT itemID FROM deletedItems)
+              AND items.libraryID = ?
         ),
         titles AS (
             SELECT itemData.itemID, itemDataValues.value AS title
@@ -147,10 +148,27 @@ class ZoteroClient:
     ORDER BY base_items.itemID;
     """
 
-    def __init__(self, data_dir: Path):
+    @classmethod
+    def resolve_group_library_id(cls, data_dir: Path, group_id: int) -> int:
+        """Look up the SQLite libraryID for a Zotero group."""
+        db_path = Path(data_dir) / "zotero.sqlite"
+        conn = sqlite3.connect(_sqlite_uri(db_path), uri=True)
+        try:
+            row = conn.execute(
+                "SELECT libraryID FROM groups WHERE groupID = ?",
+                (group_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Group {group_id} not found in Zotero database")
+            return row[0]
+        finally:
+            conn.close()
+
+    def __init__(self, data_dir: Path, library_id: int = 1):
         self.data_dir = Path(data_dir)
         self.db_path = self.data_dir / "zotero.sqlite"
         self.bbt_db_path = self.data_dir / "better-bibtex.sqlite"
+        self.library_id = library_id
         if not self.db_path.exists():
             raise FileNotFoundError(f"Zotero database not found: {self.db_path}")
 
@@ -198,7 +216,7 @@ class ZoteroClient:
         conn.row_factory = sqlite3.Row
 
         try:
-            cursor = conn.execute(self.ITEMS_WITH_PDFS_SQL)
+            cursor = conn.execute(self.ITEMS_WITH_PDFS_SQL, (self.library_id,))
             rows = cursor.fetchall()
         finally:
             conn.close()
@@ -228,15 +246,18 @@ class ZoteroClient:
                 SELECT COUNT(*) FROM items
                 WHERE itemTypeID NOT IN (1, 14)
                   AND itemID NOT IN (SELECT itemID FROM deletedItems)
-            """).fetchone()[0]
+                  AND libraryID = ?
+            """, (self.library_id,)).fetchone()[0]
 
             # IDs of items that have at least one PDF attachment
             pdf_item_ids = set(r[0] for r in conn.execute("""
                 SELECT DISTINCT COALESCE(ia.parentItemID, ia.itemID)
                 FROM itemAttachments ia
+                JOIN items ON COALESCE(ia.parentItemID, ia.itemID) = items.itemID
                 WHERE ia.contentType = 'application/pdf'
                   AND ia.linkMode IN (0, 1, 2)
-            """).fetchall())
+                  AND items.libraryID = ?
+            """, (self.library_id,)).fetchall())
 
             # Items with only non-PDF attachments (excluding those that also have PDFs)
             if pdf_item_ids:
@@ -248,9 +269,10 @@ class ZoteroClient:
                     JOIN items base ON COALESCE(ia.parentItemID, ia.itemID) = base.itemID
                     WHERE base.itemTypeID NOT IN (1, 14)
                       AND base.itemID NOT IN (SELECT itemID FROM deletedItems)
+                      AND base.libraryID = ?
                       AND COALESCE(ia.parentItemID, ia.itemID) NOT IN ({placeholders})
                     GROUP BY ia.contentType
-                """, list(pdf_item_ids)).fetchall()
+                """, [self.library_id] + list(pdf_item_ids)).fetchall()
             else:
                 non_pdf_rows = conn.execute("""
                     SELECT ia.contentType,
@@ -259,8 +281,9 @@ class ZoteroClient:
                     JOIN items base ON COALESCE(ia.parentItemID, ia.itemID) = base.itemID
                     WHERE base.itemTypeID NOT IN (1, 14)
                       AND base.itemID NOT IN (SELECT itemID FROM deletedItems)
+                      AND base.libraryID = ?
                     GROUP BY ia.contentType
-                """).fetchall()
+                """, (self.library_id,)).fetchall()
 
             non_pdf_types = {r[0] or "(null)": r[1] for r in non_pdf_rows}
             items_with_non_pdf = sum(non_pdf_types.values())
@@ -285,9 +308,10 @@ class ZoteroClient:
                 ) t ON base.itemID = t.itemID
                 WHERE base.itemTypeID NOT IN (1, 14)
                   AND base.itemID NOT IN (SELECT itemID FROM deletedItems)
+                  AND base.libraryID = ?
                   AND ia.contentType = 'application/pdf'
                   AND ia.linkMode IN (0, 1, 2)
-            """).fetchall()
+            """, (self.library_id,)).fetchall()
         finally:
             conn.close()
 
@@ -454,6 +478,7 @@ class ZoteroClient:
     ) item_tags ON notes.itemID = item_tags.itemID
     WHERE notes.itemTypeID = 1
       AND notes.itemID NOT IN (SELECT itemID FROM deletedItems)
+      AND notes.libraryID = ?
 """
 
     def _row_to_item(self, row, citation_keys: dict[str, str]) -> ZoteroItem:
@@ -499,7 +524,7 @@ class ZoteroClient:
         conn.row_factory = sqlite3.Row
         try:
             sql = self.NOTES_SQL
-            params = []
+            params = [self.library_id]
             conditions = []
 
             if item_key:
@@ -587,10 +612,11 @@ class ZoteroClient:
             JOIN itemAttachments ia ON fiw.itemID = ia.itemID
             JOIN items ON ia.parentItemID = items.itemID
             WHERE fiw.wordID IN ({placeholders})
+              AND items.libraryID = ?
             GROUP BY items."key"
             HAVING COUNT(DISTINCT fiw.wordID) = ?
         """
-        results = conn.execute(sql, word_ids + [len(words)]).fetchall()
+        results = conn.execute(sql, word_ids + [self.library_id, len(words)]).fetchall()
         return {r[0] for r in results}
 
     def _search_fulltext_or(self, conn: sqlite3.Connection, words: list[str]) -> set[str]:
@@ -603,8 +629,9 @@ class ZoteroClient:
             JOIN itemAttachments ia ON fiw.itemID = ia.itemID
             JOIN items ON ia.parentItemID = items.itemID
             WHERE fw.word IN ({placeholders})
+              AND items.libraryID = ?
         """
-        results = conn.execute(sql, words).fetchall()
+        results = conn.execute(sql, words + [self.library_id]).fetchall()
         return {r[0] for r in results}
 
     # =========================================================================
@@ -621,8 +648,9 @@ class ZoteroClient:
                        p.key AS parentKey
                 FROM collections c
                 LEFT JOIN collections p ON c.parentCollectionID = p.collectionID
+                WHERE c.libraryID = ?
                 ORDER BY c.collectionName
-            """).fetchall()
+            """, (self.library_id,)).fetchall()
             return [
                 {"key": r["key"], "name": r["collectionName"], "parent_key": r["parentKey"]}
                 for r in rows
@@ -685,8 +713,9 @@ class ZoteroClient:
                 WHERE c.key = ?
                   AND i.itemTypeID NOT IN (1, 14)
                   AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                  AND i.libraryID = ?
                 LIMIT ?
-            """, (collection_key, limit)).fetchall()
+            """, (collection_key, self.library_id, limit)).fetchall()
             return [
                 {
                     "key": r["itemKey"],
@@ -714,9 +743,10 @@ class ZoteroClient:
                 JOIN itemTags ON tags.tagID = itemTags.tagID
                 JOIN items ON itemTags.itemID = items.itemID
                 WHERE items.itemID NOT IN (SELECT itemID FROM deletedItems)
+                  AND items.libraryID = ?
                 GROUP BY tags.tagID, tags.name
                 ORDER BY count DESC, tags.name
-            """).fetchall()
+            """, (self.library_id,)).fetchall()
             return [{"name": r["name"], "count": r["count"]} for r in rows]
         finally:
             conn.close()
@@ -854,6 +884,7 @@ class ZoteroClient:
     ) item_collections ON base.itemID = item_collections.itemID
     WHERE base.itemTypeID NOT IN (1, 14)
       AND base.itemID NOT IN (SELECT itemID FROM deletedItems)
+      AND base.libraryID = ?
 """
 
     _ADVANCED_FIELDS = {"title", "author", "year", "tag", "collection", "publication", "doi"}
@@ -885,7 +916,7 @@ class ZoteroClient:
             return []
 
         where_clauses = []
-        params = []
+        params = [self.library_id]  # First param is for libraryID = ? in base SQL
 
         for cond in conditions:
             field = cond.get("field", "")

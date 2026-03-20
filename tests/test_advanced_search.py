@@ -20,7 +20,8 @@ def _create_search_db(tmp_path: Path) -> Path:
             itemID INTEGER PRIMARY KEY,
             itemTypeID INTEGER,
             dateAdded TEXT DEFAULT '2024-01-01',
-            key TEXT UNIQUE
+            key TEXT UNIQUE,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
         CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
@@ -68,7 +69,7 @@ def _insert_item(
     """Insert an item with full metadata into the test DB."""
     conn = sqlite3.connect(str(db_path))
     conn.execute(
-        "INSERT INTO items VALUES (?, 2, '2024-01-01', ?)",
+        "INSERT INTO items (itemID, itemTypeID, dateAdded, key) VALUES (?, 2, '2024-01-01', ?)",
         (item_id, key),
     )
 

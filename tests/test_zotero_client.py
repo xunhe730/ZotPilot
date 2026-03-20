@@ -16,7 +16,8 @@ def zotero_db(tmp_path):
         CREATE TABLE items (
             itemID INTEGER PRIMARY KEY,
             itemTypeID INTEGER,
-            key TEXT UNIQUE
+            key TEXT UNIQUE,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
         CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
@@ -36,7 +37,8 @@ def zotero_db(tmp_path):
         CREATE TABLE itemTags (itemID INTEGER, tagID INTEGER);
         CREATE TABLE collections (
             collectionID INTEGER PRIMARY KEY, collectionName TEXT,
-            parentCollectionID INTEGER, key TEXT
+            parentCollectionID INTEGER, key TEXT,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE collectionItems (collectionID INTEGER, itemID INTEGER);
         CREATE TABLE fulltextWords (wordID INTEGER PRIMARY KEY, word TEXT);
@@ -50,7 +52,7 @@ def zotero_db(tmp_path):
         INSERT INTO fields VALUES (5, 'abstractNote');
 
         -- Insert a test item (itemTypeID 2 = journalArticle)
-        INSERT INTO items VALUES (1, 2, 'ITEM001');
+        INSERT INTO items (itemID, itemTypeID, key) VALUES (1, 2, 'ITEM001');
 
         -- Title
         INSERT INTO itemDataValues VALUES (1, 'Test Paper Title');
@@ -77,7 +79,7 @@ def zotero_db(tmp_path):
         INSERT INTO itemCreators VALUES (1, 1, 1, 0);
 
         -- PDF attachment
-        INSERT INTO items VALUES (2, 14, 'ATT001');
+        INSERT INTO items (itemID, itemTypeID, key) VALUES (2, 14, 'ATT001');
         INSERT INTO itemAttachments VALUES (2, 1, 'application/pdf', 0, 'storage:test.pdf');
 
         -- Tag
@@ -85,7 +87,7 @@ def zotero_db(tmp_path):
         INSERT INTO itemTags VALUES (1, 1);
 
         -- Collection
-        INSERT INTO collections VALUES (1, 'AI Papers', NULL, 'COL001');
+        INSERT INTO collections (collectionID, collectionName, parentCollectionID, key) VALUES (1, 'AI Papers', NULL, 'COL001');
         INSERT INTO collectionItems VALUES (1, 1);
 
         -- Fulltext

@@ -89,7 +89,7 @@ class TestGetFeeds:
         """Old Zotero without feeds table."""
         db_path = tmp_path / "zotero.sqlite"
         conn = sqlite3.connect(str(db_path))
-        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT)")
+        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT, libraryID INTEGER DEFAULT 1)")
         conn.close()
         client = ZoteroClient(tmp_path)
         assert client.get_feeds() == []
@@ -119,7 +119,7 @@ class TestGetFeeds:
     def test_get_feed_items_no_table(self, tmp_path):
         db_path = tmp_path / "zotero.sqlite"
         conn = sqlite3.connect(str(db_path))
-        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT)")
+        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT, libraryID INTEGER DEFAULT 1)")
         conn.close()
         client = ZoteroClient(tmp_path)
         assert client.get_feed_items(1) == []
