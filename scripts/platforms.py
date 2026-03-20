@@ -80,6 +80,17 @@ def _home() -> Path:
     return Path.home()
 
 
+def _zotpilot_command() -> str:
+    """Return the reliable command to launch zotpilot.
+
+    Prefers the absolute path to the installed binary, which avoids PATH
+    issues when MCP clients spawn the server in their own environment.
+    Falls back to bare 'zotpilot' if the binary cannot be located.
+    """
+    path = shutil.which("zotpilot")
+    return path if path else "zotpilot"
+
+
 # ---------------------------------------------------------------------------
 # Config file paths (per-platform)
 # ---------------------------------------------------------------------------
@@ -199,12 +210,13 @@ def _strip_jsonc_comments(text: str) -> str:
 
 def _register_claude_code(env: dict[str, str]) -> bool:
     """Register via `claude mcp add`."""
+    zp = _zotpilot_command()
     subprocess.run(["claude", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
     cmd = ["claude", "mcp", "add", "-s", "user"]
     for k, v in env.items():
         cmd.extend(["-e", f"{k}={v}"])
-    cmd.extend(["zotpilot", "--", "zotpilot"])
+    cmd.extend(["zotpilot", "--", zp])
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -214,12 +226,13 @@ def _register_claude_code(env: dict[str, str]) -> bool:
 
 def _register_codex(env: dict[str, str]) -> bool:
     """Register via `codex mcp add`."""
+    zp = _zotpilot_command()
     subprocess.run(["codex", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
     cmd = ["codex", "mcp", "add", "zotpilot"]
     for k, v in env.items():
         cmd.extend(["--env", f"{k}={v}"])
-    cmd.extend(["--", "zotpilot"])
+    cmd.extend(["--", zp])
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -233,12 +246,13 @@ def _register_gemini(env: dict[str, str]) -> bool:
     Syntax: gemini mcp add [options] <name> <command> [args...]
     No -- separator; command is a positional argument.
     """
+    zp = _zotpilot_command()
     subprocess.run(["gemini", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
     cmd = ["gemini", "mcp", "add", "-s", "user"]
     for k, v in env.items():
         cmd.extend(["-e", f"{k}={v}"])
-    cmd.extend(["zotpilot", "zotpilot"])  # <name> <command>, no --
+    cmd.extend(["zotpilot", zp])  # <name> <command>, no --
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -282,13 +296,14 @@ def _write_mcp_config(config_path: Path, env: dict[str, str]) -> bool:
                 pass
             existing = {}
 
-    # Build zotpilot MCP entry
+    # Build zotpilot MCP entry (use absolute path for reliability)
+    zp = _zotpilot_command()
     if is_opencode:
-        entry: dict = {"type": "local", "command": ["zotpilot"]}
+        entry: dict = {"type": "local", "command": [zp]}
         if env:
             entry["environment"] = env
     else:
-        entry = {"type": "stdio", "command": "zotpilot", "args": []}
+        entry = {"type": "stdio", "command": zp, "args": []}
         if env:
             entry["env"] = env
 
@@ -413,22 +428,31 @@ def register(
 
 def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
     """Print manual registration instructions when auto-registration fails."""
+    zp = _zotpilot_command()
     if plat == "claude-code":
         env_flags = " ".join(f"-e {k}={v}" for k, v in env.items())
-        print(f"    Manual: claude mcp add -s user {env_flags} zotpilot -- zotpilot")
+        print(f"    Manual: claude mcp add -s user {env_flags} zotpilot -- {zp}")
     elif plat == "codex":
         env_flags = " ".join(f"--env {k}={v}" for k, v in env.items())
-        print(f"    Manual: codex mcp add zotpilot {env_flags} -- zotpilot")
+        print(f"    Manual: codex mcp add zotpilot {env_flags} -- {zp}")
     elif plat == "gemini":
         env_flags = " ".join(f"-e {k}={v}" for k, v in env.items())
-        print(f"    Manual: gemini mcp add -s user {env_flags} zotpilot zotpilot")
+        print(f"    Manual: gemini mcp add -s user {env_flags} zotpilot {zp}")
     else:
         config_path = _mcp_config_path(plat)
-        entry = {"type": "stdio", "command": "zotpilot", "args": []}
-        if env:
-            entry["env"] = env
+        is_opencode = "opencode" in str(config_path) if config_path else False
+        if is_opencode:
+            mcp_key = "mcp"
+            entry: dict = {"type": "local", "command": [zp]}
+            if env:
+                entry["environment"] = env
+        else:
+            mcp_key = "mcpServers"
+            entry = {"type": "stdio", "command": zp, "args": []}
+            if env:
+                entry["env"] = env
         print(f"    Manual: Add to {config_path}:")
-        print(f'    {{"mcpServers": {{"zotpilot": {json.dumps(entry)}}}}}')
+        print(f'    {{"{mcp_key}": {{"zotpilot": {json.dumps(entry)}}}}}')
 
 
 # ---------------------------------------------------------------------------
