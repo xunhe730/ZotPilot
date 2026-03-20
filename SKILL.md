@@ -66,7 +66,7 @@ Ask the user: "Do you want to be able to tag and organize papers from AI? If yes
 
 If yes:
 1. Go to **https://www.zotero.org/settings/keys**
-2. **User ID**: The numeric ID shown at the top of the page (e.g. `16568173`). This is NOT your username — it's a number.
+2. **User ID**: The numeric ID shown at the top of the page (e.g. `12345678`). This is NOT your username — it's a number.
 3. Click **"Create new private key"**, check "Allow library access" + "Allow write access", save
 4. Copy the generated key
 
@@ -179,7 +179,7 @@ Write tools require Zotero Web API credentials. If user gets "ZOTERO_API_KEY not
 
 Go back to **Step 2** (Configure Zotero Web API) in **First-Time Setup** and re-register the MCP server with all credentials.
 
-Common pitfall: `ZOTERO_USER_ID` must be the **numeric ID** (e.g. `16568173`), not the username (e.g. `xunhe730`). Find it at https://www.zotero.org/settings/keys. Run `zotpilot doctor` to validate.
+Common pitfall: `ZOTERO_USER_ID` must be the **numeric ID** (e.g. `12345678`), not the username (e.g. `your_username`). Find it at https://www.zotero.org/settings/keys. Run `zotpilot doctor` to validate.
 
 **Single-item tools:** `add_item_tags`, `set_item_tags`, `remove_item_tags`, `add_to_collection`, `remove_from_collection`, `create_collection`
 
