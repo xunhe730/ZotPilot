@@ -94,9 +94,7 @@ This auto-detects the user's AI agent platform(s) and registers accordingly. Sup
 
 If auto-detection fails, specify explicitly: `python3 scripts/run.py register --platform claude-code`
 
-### 4. Verify and restart
-
-Run: `python3 scripts/run.py status --json`
+### 4. Restart
 
 Tell the user: "Setup complete! Please restart your AI agent to activate ZotPilot's tools. After restarting, ask me again and I'll index your papers."
 
@@ -139,7 +137,7 @@ After completion, proceed to the user's original request.
 | Paper details | `get_paper_details` | `item_key` |
 | Who cites this? | `find_citing_papers` | `doc_id` |
 | Tag/organize one paper | `add_item_tags`, `add_to_collection` | `item_key` |
-| Batch tag/organize many papers | `batch_add_tags`, `batch_add_to_collection` | `items` or `item_keys` |
+| Batch tag/organize many papers | `batch_tags`, `batch_collections` | `items` or `item_keys`, `action` |
 
 ### Workflow chains
 
@@ -150,7 +148,7 @@ search_topic → get_paper_details (top 5) → find_references → search_papers
 search_topic(num_papers=20) → report count, year range, key authors, top passages
 
 **Organize by theme (batch):**
-search_topic → create_collection → batch_add_to_collection(item_keys=[...], collection_key) → batch_add_tags(items=[{item_key, tags}])
+search_topic → create_collection → batch_collections(action="add", item_keys=[...], collection_key) → batch_tags(action="add", items=[{item_key, tags}])
 
 **Find specific paper:**
 search_boolean first (exact terms) → fallback to search_papers (semantic) → get_paper_details
@@ -185,7 +183,7 @@ Common pitfall: `ZOTERO_USER_ID` must be the **numeric ID** (e.g. `16568173`), n
 
 **Single-item tools:** `add_item_tags`, `set_item_tags`, `remove_item_tags`, `add_to_collection`, `remove_from_collection`, `create_collection`
 
-**Batch tools (max 100 items per call):** `batch_add_tags`, `batch_set_tags`, `batch_remove_tags`, `batch_add_to_collection`, `batch_remove_from_collection`
+**Batch tools (max 100 items per call):** `batch_tags(action="add|set|remove")`, `batch_collections(action="add|remove")`
 
 Batch tools accept `items: [{item_key, tags}]` (for tag ops) or `item_keys: [str]` + `collection_key` (for collection ops). Partial failures are reported per-item without rollback.
 
