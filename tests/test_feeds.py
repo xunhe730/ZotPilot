@@ -16,7 +16,8 @@ def _create_feeds_db(tmp_path):
             itemID INTEGER PRIMARY KEY,
             itemTypeID INTEGER,
             dateAdded TEXT DEFAULT '2024-01-01',
-            key TEXT UNIQUE
+            key TEXT UNIQUE,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
         CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
@@ -27,13 +28,12 @@ def _create_feeds_db(tmp_path):
         CREATE TABLE creators (creatorID INTEGER PRIMARY KEY, firstName TEXT, lastName TEXT);
         CREATE TABLE feeds (
             libraryID INTEGER PRIMARY KEY,
+            name TEXT,
             url TEXT,
-            title TEXT,
             lastCheck TEXT
         );
         CREATE TABLE feedItems (
             itemID INTEGER PRIMARY KEY,
-            libraryID INTEGER,
             guid TEXT,
             readTime TEXT
         );
@@ -46,7 +46,7 @@ def _insert_feed(db_path, library_id, title, url, last_check=None):
     conn = sqlite3.connect(str(db_path))
     conn.execute(
         "INSERT INTO feeds VALUES (?, ?, ?, ?)",
-        (library_id, url, title, last_check),
+        (library_id, title, url, last_check),
     )
     conn.commit()
     conn.close()
@@ -54,10 +54,10 @@ def _insert_feed(db_path, library_id, title, url, last_check=None):
 
 def _insert_feed_item(db_path, item_id, key, library_id, title, read=False):
     conn = sqlite3.connect(str(db_path))
-    conn.execute("INSERT INTO items VALUES (?, 2, '2024-02-01', ?)", (item_id, key))
+    conn.execute("INSERT INTO items VALUES (?, 2, '2024-02-01', ?, ?)", (item_id, key, library_id))
     conn.execute(
-        "INSERT INTO feedItems VALUES (?, ?, ?, ?)",
-        (item_id, library_id, f"guid-{key}", "2024-02-01" if read else None),
+        "INSERT INTO feedItems VALUES (?, ?, ?)",
+        (item_id, f"guid-{key}", "2024-02-01" if read else None),
     )
     vid = item_id * 10 + 1
     conn.execute("INSERT INTO itemDataValues VALUES (?, ?)", (vid, title))

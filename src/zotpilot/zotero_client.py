@@ -684,13 +684,12 @@ class ZoteroClient:
                 "item_count": user_count,
             })
 
-            # Check for groups
+            # Check for groups (groups link to libraries via libraryID; items link via items.libraryID)
             if self._table_exists(conn, "groups"):
                 groups = conn.execute("""
                     SELECT g.groupID, g.name,
                            (SELECT COUNT(*) FROM items i
-                            JOIN groupItems gi ON i.itemID = gi.itemID
-                            WHERE gi.groupID = g.groupID
+                            WHERE i.libraryID = g.libraryID
                               AND i.itemTypeID NOT IN (1, 14)
                               AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
                            ) AS itemCount
@@ -989,16 +988,18 @@ class ZoteroClient:
             if not self._table_exists(conn, "feeds"):
                 return []
             rows = conn.execute("""
-                SELECT f.libraryID, f.url, f.title,
+                SELECT f.libraryID, f.url, f.name,
                        f.lastCheck,
-                       (SELECT COUNT(*) FROM feedItems fi WHERE fi.libraryID = f.libraryID) AS itemCount
+                       (SELECT COUNT(*) FROM feedItems fi
+                        JOIN items i ON fi.itemID = i.itemID
+                        WHERE i.libraryID = f.libraryID) AS itemCount
                 FROM feeds f
-                ORDER BY f.title
+                ORDER BY f.name
             """).fetchall()
             return [
                 {
                     "library_id": row["libraryID"],
-                    "name": row["title"] or "",
+                    "name": row["name"] or "",
                     "url": row["url"] or "",
                     "item_count": row["itemCount"],
                     "last_check": row["lastCheck"] or "",
@@ -1055,7 +1056,7 @@ class ZoteroClient:
                     JOIN fields f ON id.fieldID = f.fieldID
                     WHERE f.fieldName = 'url'
                 ) urls ON fi.itemID = urls.itemID
-                WHERE fi.libraryID = ?
+                WHERE i.libraryID = ?
                 ORDER BY i.dateAdded DESC
                 LIMIT ?
             """, (library_id, limit)).fetchall()

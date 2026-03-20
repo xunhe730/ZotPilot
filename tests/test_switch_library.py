@@ -12,22 +12,26 @@ def _create_lib_db(tmp_path, with_groups=False):
     conn.executescript("""
         CREATE TABLE items (
             itemID INTEGER PRIMARY KEY, itemTypeID INTEGER,
-            dateAdded TEXT DEFAULT '2024-01-01', key TEXT UNIQUE
+            dateAdded TEXT DEFAULT '2024-01-01', key TEXT UNIQUE,
+            libraryID INTEGER DEFAULT 1
         );
         CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
     """)
-    # Insert some items
-    conn.execute("INSERT INTO items VALUES (1, 2, '2024-01-01', 'ITEM1')")
-    conn.execute("INSERT INTO items VALUES (2, 2, '2024-01-01', 'ITEM2')")
-    conn.execute("INSERT INTO items VALUES (3, 1, '2024-01-01', 'NOTE1')")  # note, excluded
+    # Insert some items (libraryID=1 = user library)
+    conn.execute("INSERT INTO items VALUES (1, 2, '2024-01-01', 'ITEM1', 1)")
+    conn.execute("INSERT INTO items VALUES (2, 2, '2024-01-01', 'ITEM2', 1)")
+    conn.execute("INSERT INTO items VALUES (3, 1, '2024-01-01', 'NOTE1', 1)")  # note, excluded
 
     if with_groups:
         conn.executescript("""
-            CREATE TABLE groups (groupID INTEGER PRIMARY KEY, name TEXT);
-            CREATE TABLE groupItems (itemID INTEGER, groupID INTEGER);
-            INSERT INTO groups VALUES (100, 'Lab Group');
-            INSERT INTO groupItems VALUES (1, 100);
+            CREATE TABLE libraries (libraryID INTEGER PRIMARY KEY, type TEXT NOT NULL, editable INT NOT NULL DEFAULT 1, filesEditable INT NOT NULL DEFAULT 1, version INT NOT NULL DEFAULT 0, storageVersion INT NOT NULL DEFAULT 0, lastSync INT NOT NULL DEFAULT 0, archived INT NOT NULL DEFAULT 0);
+            INSERT INTO libraries VALUES (1, 'user', 1, 1, 0, 0, 0, 0);
+            INSERT INTO libraries VALUES (2, 'group', 1, 1, 0, 0, 0, 0);
+            CREATE TABLE groups (groupID INTEGER PRIMARY KEY, libraryID INT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 0);
+            INSERT INTO groups VALUES (100, 2, 'Lab Group', '', 0);
         """)
+        # Add an item in the group library
+        conn.execute("INSERT INTO items VALUES (10, 2, '2024-01-01', 'GITEM1', 2)")
     conn.commit()
     conn.close()
     return db_path
