@@ -103,9 +103,10 @@ def _zotpilot_command() -> str:
         )
         if r.returncode == 0:
             bin_dir = r.stdout.strip()
-            candidate = Path(bin_dir) / "zotpilot"
-            if candidate.exists():
-                return str(candidate)
+            for name in ("zotpilot", "zotpilot.exe"):
+                candidate = Path(bin_dir) / name
+                if candidate.exists():
+                    return str(candidate)
 
     # 3. Last resort
     return "zotpilot"
