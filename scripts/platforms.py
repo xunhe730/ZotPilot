@@ -226,6 +226,60 @@ def _strip_jsonc_comments(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Skill installation (Tier 1 only)
+# ---------------------------------------------------------------------------
+
+# The repo root (where SKILL.md lives)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def install_skill(platforms: list[str] | None = None) -> dict[str, bool]:
+    """Symlink the ZotPilot repo into each Tier 1 platform's skills directory.
+
+    Uses symlinks so one clone serves all platforms. If the target already
+    exists (clone or symlink), skips without error.
+
+    Returns {platform: success}.
+    """
+    if not platforms:
+        platforms = [p for p in detect_platforms() if PLATFORMS[p]["tier"] == 1]
+
+    results = {}
+    for plat in platforms:
+        info = PLATFORMS.get(plat, {})
+        skills_dir = info.get("skills_dir")
+        if not skills_dir:
+            continue
+
+        target = Path(skills_dir).expanduser() / "zotpilot"
+
+        # Already installed (clone or symlink)
+        if target.exists() or target.is_symlink():
+            # Check if it points to the same repo
+            real = target.resolve()
+            if real == _REPO_ROOT:
+                print(f"  {info['label']}: already linked")
+                results[plat] = True
+            else:
+                print(f"  {info['label']}: {target} already exists (points to {real})")
+                results[plat] = True
+            continue
+
+        # Create parent dir and symlink
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(_REPO_ROOT)
+            print(f"  {info['label']}: linked {target} -> {_REPO_ROOT}")
+            results[plat] = True
+        except OSError as e:
+            print(f"  {info['label']}: FAILED to create symlink: {e}", file=sys.stderr)
+            print(f"    Manual: ln -s {_REPO_ROOT} {target}", file=sys.stderr)
+            results[plat] = False
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # CLI-based registration (Tier 1)
 # ---------------------------------------------------------------------------
 
@@ -419,6 +473,14 @@ def register(
             return {}
         print(f"Detected platforms: {', '.join(PLATFORMS[p]['label'] for p in platforms)}")
 
+    # Install skill (symlink) for Tier 1 platforms
+    tier1 = [p for p in platforms if PLATFORMS.get(p, {}).get("tier") == 1]
+    if tier1:
+        print("\nInstalling skill:")
+        install_skill(tier1)
+
+    # Register MCP server
+    print("\nRegistering MCP server:")
     results = {}
     for plat in platforms:
         if plat not in _REGISTER_FNS:
