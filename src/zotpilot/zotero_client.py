@@ -356,6 +356,7 @@ class ZoteroClient:
             WHERE items.itemTypeID NOT IN (1, 14)
               AND items.itemID NOT IN (SELECT itemID FROM deletedItems)
               AND items."key" = ?
+              AND items.libraryID = ?
         ),
         titles AS (
             SELECT itemData.itemID, itemDataValues.value AS title
@@ -507,7 +508,7 @@ class ZoteroClient:
         conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            cursor = conn.execute(self.SINGLE_ITEM_SQL, (item_key,))
+            cursor = conn.execute(self.SINGLE_ITEM_SQL, (item_key, self.library_id))
             row = cursor.fetchone()
         finally:
             conn.close()
@@ -682,7 +683,7 @@ class ZoteroClient:
                             ORDER BY ic.orderIndex),
                            '[No Author]'
                        ) AS authors,
-                       (SELECT idv.value FROM itemData id
+                       (SELECT CAST(substr(idv.value, 1, 4) AS INTEGER) FROM itemData id
                         JOIN itemDataValues idv ON id.valueID = idv.valueID
                         JOIN fields f ON id.fieldID = f.fieldID
                         WHERE id.itemID = i.itemID AND f.fieldName = 'date') AS year,
@@ -762,8 +763,8 @@ class ZoteroClient:
                 JOIN itemData id ON i.itemID = id.itemID
                 JOIN itemDataValues idv ON id.valueID = idv.valueID
                 JOIN fields f ON id.fieldID = f.fieldID
-                WHERE i.key = ? AND f.fieldName = 'abstractNote'
-            """, (item_key,)).fetchone()
+                WHERE i.key = ? AND i.libraryID = ? AND f.fieldName = 'abstractNote'
+            """, (item_key, self.library_id)).fetchone()
             return row[0] if row else ""
         finally:
             conn.close()

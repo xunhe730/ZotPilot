@@ -191,3 +191,72 @@ class TestLibraryFilter:
         _create_multi_library_db(tmp_path)
         with pytest.raises(ValueError, match="Group 999 not found"):
             ZoteroClient.resolve_group_library_id(tmp_path, 999)
+
+    def test_get_item_filtered_by_library(self, tmp_path):
+        """get_item() should not return items from another library."""
+        _create_multi_library_db(tmp_path)
+        user_client = ZoteroClient(tmp_path, library_id=1)
+        group_client = ZoteroClient(tmp_path, library_id=2)
+        # User client can see USER1, not GRP1
+        assert user_client.get_item("USER1") is not None
+        assert user_client.get_item("GRP1") is None
+        # Group client can see GRP1, not USER1
+        assert group_client.get_item("GRP1") is not None
+        assert group_client.get_item("USER1") is None
+
+    def test_get_item_abstract_filtered_by_library(self, tmp_path):
+        """get_item_abstract() should not return abstracts from another library."""
+        db_path = _create_multi_library_db(tmp_path)
+        # Add abstracts to both items
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("INSERT INTO itemDataValues VALUES (201, 'User abstract')")
+        conn.execute("INSERT INTO itemData VALUES (1, 5, 201)")  # fieldID 5 = abstractNote
+        conn.execute("INSERT INTO itemDataValues VALUES (202, 'Group abstract')")
+        conn.execute("INSERT INTO itemData VALUES (3, 5, 202)")
+        conn.commit()
+        conn.close()
+
+        user_client = ZoteroClient(tmp_path, library_id=1)
+        group_client = ZoteroClient(tmp_path, library_id=2)
+        assert user_client.get_item_abstract("USER1") == "User abstract"
+        assert user_client.get_item_abstract("GRP1") == ""
+        assert group_client.get_item_abstract("GRP1") == "Group abstract"
+        assert group_client.get_item_abstract("USER1") == ""
+
+
+class TestCollectionItemsYear:
+    def test_year_is_integer_not_date_string(self, tmp_path):
+        """get_collection_items() should return year as integer, not raw date string."""
+        db_path = tmp_path / "zotero.sqlite"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript("""
+            CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER,
+                               dateAdded TEXT, key TEXT UNIQUE, libraryID INTEGER DEFAULT 1);
+            CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);
+            CREATE TABLE fields (fieldID INTEGER PRIMARY KEY, fieldName TEXT);
+            INSERT INTO fields VALUES (1, 'title'), (7, 'date');
+            CREATE TABLE itemData (itemID INTEGER, fieldID INTEGER, valueID INTEGER);
+            CREATE TABLE itemDataValues (valueID INTEGER PRIMARY KEY, value TEXT);
+            CREATE TABLE itemCreators (itemID INTEGER, creatorID INTEGER, orderIndex INTEGER);
+            CREATE TABLE creators (creatorID INTEGER PRIMARY KEY, firstName TEXT, lastName TEXT);
+            CREATE TABLE itemTags (itemID INTEGER, tagID INTEGER);
+            CREATE TABLE tags (tagID INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE collections (collectionID INTEGER PRIMARY KEY, collectionName TEXT,
+                                     parentCollectionID INTEGER, key TEXT UNIQUE,
+                                     libraryID INTEGER DEFAULT 1);
+            CREATE TABLE collectionItems (collectionID INTEGER, itemID INTEGER, orderIndex INTEGER DEFAULT 0);
+            INSERT INTO collections VALUES (1, 'Test', NULL, 'COL1', 1);
+            INSERT INTO items (itemID, itemTypeID, dateAdded, key) VALUES (1, 2, '2024-01-01', 'ITEM1');
+            INSERT INTO itemDataValues VALUES (1, 'Paper Title');
+            INSERT INTO itemData VALUES (1, 1, 1);
+            INSERT INTO itemDataValues VALUES (2, '2023-06-15');
+            INSERT INTO itemData VALUES (1, 7, 2);
+            INSERT INTO collectionItems VALUES (1, 1, 0);
+        """)
+        conn.commit()
+        conn.close()
+
+        client = ZoteroClient(tmp_path)
+        items = client.get_collection_items("COL1")
+        assert len(items) == 1
+        assert items[0]["year"] == 2023  # integer, not "2023-06-15"
