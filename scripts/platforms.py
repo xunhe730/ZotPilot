@@ -81,14 +81,34 @@ def _home() -> Path:
 
 
 def _zotpilot_command() -> str:
-    """Return the reliable command to launch zotpilot.
+    """Return the reliable absolute path to the zotpilot binary.
 
-    Prefers the absolute path to the installed binary, which avoids PATH
-    issues when MCP clients spawn the server in their own environment.
-    Falls back to bare 'zotpilot' if the binary cannot be located.
+    Resolution order:
+    1. shutil.which() — works when binary is already on PATH
+    2. uv tool dir --bin — finds uv's bin directory even right after
+       a fresh `uv tool install` in the same process (PATH not yet updated)
+    3. Falls back to bare 'zotpilot' as last resort
     """
+    # 1. Try PATH lookup
     path = shutil.which("zotpilot")
-    return path if path else "zotpilot"
+    if path:
+        return path
+
+    # 2. Ask uv where it installs tool binaries
+    uv = shutil.which("uv")
+    if uv:
+        r = subprocess.run(
+            [uv, "tool", "dir", "--bin"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            bin_dir = r.stdout.strip()
+            candidate = Path(bin_dir) / "zotpilot"
+            if candidate.exists():
+                return str(candidate)
+
+    # 3. Last resort
+    return "zotpilot"
 
 
 # ---------------------------------------------------------------------------
