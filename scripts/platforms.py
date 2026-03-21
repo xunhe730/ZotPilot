@@ -40,12 +40,7 @@ PLATFORMS = {
         "tier": 1,
         "binary": "opencode",
         "label": "OpenCode",
-        # Windows: OpenCode config lives in %APPDATA%\opencode\, match that location
-        "skills_dir": (
-            str(Path(os.environ.get("APPDATA", "~")) / "opencode" / "skills")
-            if platform.system() == "Windows"
-            else "~/.config/opencode/skills"
-        ),
+        "skills_dir": "~/.config/opencode/skills",
     },
     "gemini": {
         "tier": 1,
