@@ -78,25 +78,110 @@ def _find_zotpilot_after_pip() -> list[str] | None:
     return None
 
 
+def _is_uv_tool_installed(uv: str) -> bool:
+    """Check if zotpilot binary exists in uv's tool bin directory."""
+    try:
+        r = subprocess.run(
+            _uv_args(uv) + ["tool", "dir", "--bin"],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            bin_dir = Path(r.stdout.strip())
+            return (bin_dir / "zotpilot").exists() or (bin_dir / "zotpilot.exe").exists()
+    except (FileNotFoundError, OSError):
+        pass
+    return False
+
+
+def _get_source_version() -> str | None:
+    """Read version from pyproject.toml in SKILL_DIR."""
+    toml = SKILL_DIR / "pyproject.toml"
+    if not toml.exists():
+        return None
+    try:
+        for line in toml.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("version"):
+                # version = "0.1.2"
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def _get_installed_version(uv: str) -> str | None:
+    """Get version of zotpilot installed as a uv tool.
+
+    Parses `uv tool list` output which looks like:
+        zotpilot v0.1.2
+        - zotpilot
+    """
+    try:
+        r = subprocess.run(
+            _uv_args(uv) + ["tool", "list"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                if line.startswith("zotpilot "):
+                    # "zotpilot v0.1.2" → "0.1.2"
+                    ver_part = line.split()[-1]
+                    return ver_part.lstrip("v")
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def _needs_upgrade(uv: str) -> bool:
+    """Check if installed zotpilot is outdated vs source pyproject.toml."""
+    source_ver = _get_source_version()
+    if not source_ver:
+        return False
+    installed_ver = _get_installed_version(uv)
+    if not installed_ver:
+        return False  # can't determine (pip install or no uv) → skip upgrade
+    return installed_ver != source_ver
+
+
 def _ensure_zotpilot(uv: str) -> list[str] | None:
     """Install zotpilot CLI if needed.
 
     Returns an override command list when pip-installed (binary outside uv),
     or None when uv tool run should be used (the normal case).
+
+    Resolution order:
+    1. shutil.which() — binary on PATH
+    2. _find_zotpilot_after_pip() — pip-installed binary (Windows %APPDATA%, ~/.local/bin)
+    3. _is_uv_tool_installed() — uv's tool bin dir (not on PATH but uv tool run works)
+    4. Fresh install via uv tool install
+    5. pip fallback if uv fails
+    After finding an existing install, checks version and upgrades if needed.
     """
+    # 1. Check PATH
     if shutil.which("zotpilot"):
-        return None  # already on PATH, uv tool run will work
+        return None
+
+    # 2. Check pip-installed locations (binary outside uv)
+    pip_cmd = _find_zotpilot_after_pip()
+    if pip_cmd:
+        return pip_cmd
+
+    # 3. Check uv tool bin dir (installed but not on PATH — common on Windows)
+    if _is_uv_tool_installed(uv):
+        return None  # uv tool run still works
+
+    # 4. Not installed anywhere — install now
     print("ZotPilot CLI not found. Installing...", file=sys.stderr)
     uv_cmd = _uv_args(uv)
     result = subprocess.run(
-        uv_cmd + ["tool", "install", "--force", "--reinstall", str(SKILL_DIR)],
+        uv_cmd + ["tool", "install", str(SKILL_DIR)],
         capture_output=True,
         text=True,
     )
     if result.returncode == 0:
         print("ZotPilot CLI installed successfully.", file=sys.stderr)
         return None  # uv tool run works
-    # uv tool install failed — try pip install
+
+    # 5. uv tool install failed — pip fallback
     print(
         f"uv tool install failed:\n{result.stderr}\n"
         "Falling back to pip install...",
@@ -171,6 +256,20 @@ def main():
 
     uv = _ensure_uv()
     pip_cmd = _ensure_zotpilot(uv)
+
+    # Check if installed version is outdated vs source pyproject.toml
+    if _needs_upgrade(uv):
+        print("ZotPilot CLI outdated. Upgrading...", file=sys.stderr)
+        uv_cmd = _uv_args(uv)
+        r = subprocess.run(
+            uv_cmd + ["tool", "install", "--reinstall", str(SKILL_DIR)],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            print("ZotPilot CLI upgraded successfully.", file=sys.stderr)
+            pip_cmd = None  # use uv tool run after upgrade
+        else:
+            print(f"Upgrade failed (non-fatal): {r.stderr}", file=sys.stderr)
 
     # All other subcommands delegate to zotpilot CLI.
     # pip_cmd is set only when installed via pip fallback (binary outside uv).
