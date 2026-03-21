@@ -127,11 +127,14 @@ pip install zotpilot  # or: uv tool install zotpilot
 **2. Register the MCP server:**
 
 ```bash
-# Auto-detect platform and register (recommended):
+# Tier 1 (source checkout) — auto-installs the CLI:
 python3 scripts/run.py register
 
+# Tier 2 (pip/uv install) — CLI already on PATH:
+zotpilot register
+
 # Specify platform:
-python3 scripts/run.py register --platform claude-code
+python3 scripts/run.py register --platform claude-code  # or: zotpilot register --platform claude-code
 
 # With credentials:
 python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>

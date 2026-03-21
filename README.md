@@ -59,7 +59,7 @@ Agent 会 clone 仓库、装 CLI、配好 Zotero、注册 MCP 服务器。重启
 | 平台 | 目标路径 |
 |------|----------|
 | Claude Code | `~/.claude/skills/zotpilot` |
-| Codex CLI | `~/.codex/skills/zotpilot` |
+| Codex CLI | `~/.agents/skills/zotpilot` |
 | OpenCode | `~/.config/opencode/skills/zotpilot` |
 | Gemini CLI | `~/.gemini/skills/zotpilot` |
 
@@ -72,7 +72,7 @@ Agent 会 clone 仓库、装 CLI、配好 Zotero、注册 MCP 服务器。重启
 git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
 
 # Codex CLI
-git clone https://github.com/xunhe730/ZotPilot.git ~/.codex/skills/zotpilot
+git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
 
 # OpenCode
 git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
@@ -91,11 +91,14 @@ pip install zotpilot  # 或 uv tool install zotpilot
 > **Windows 用户**：将下方命令中的 `python3` 替换为 `python`
 
 ```bash
-# 自动检测平台并注册（推荐）：
+# Tier 1（源码安装）— 自动安装 CLI：
 python3 scripts/run.py register
 
+# Tier 2（pip/uv 安装）— CLI 已在 PATH：
+zotpilot register
+
 # 指定平台：
-python3 scripts/run.py register --platform claude-code
+python3 scripts/run.py register --platform claude-code  # 或: zotpilot register --platform claude-code
 
 # 带凭证注册：
 python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
@@ -121,9 +124,10 @@ python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zote
 <summary>或者手动配置</summary>
 
 ```bash
-python3 scripts/run.py register \
-  --zotero-api-key <zotero密钥> \
-  --zotero-user-id <用户ID>
+# Tier 1（源码安装）：
+python3 scripts/run.py register --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
+# Tier 2（pip/uv 安装）：
+zotpilot register --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
 ```
 
 自动检测平台并重新注册。重启 agent。
@@ -324,7 +328,7 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 ### 文件结构
 
 ```
-~/.claude/skills/zotpilot/          # 或 ~/.codex/skills/zotpilot/（Codex）
+~/.claude/skills/zotpilot/          # 或 ~/.agents/skills/zotpilot/（Codex）
 ├── SKILL.md                        # 决策树：安装 → 索引 → 研究
 ├── scripts/run.py                  # 引导脚本：自动安装 CLI + 委托执行
 ├── references/                     # 参考文档
@@ -445,7 +449,7 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 
 | 症状 | 怎么办 |
 |------|------|
-| 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.codex/skills/`、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/` |
+| 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.agents/skills/`、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/` |
 | `zotpilot: command not found` | `python3 scripts/run.py status`（会自动装）；Windows 用 `python` |
 | MCP 工具没出来 | 重新注册 MCP 服务器然后重启 |
 | 搜出来是空的 | 先跑 `zotpilot index`，或者换个更宽泛的搜索词 |
