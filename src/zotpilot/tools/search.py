@@ -219,6 +219,8 @@ def search_topic(
             "best_passage": best_hit.text,
             "best_passage_page": best_hit.page_num,
             "best_passage_context": best_hit.full_context(),
+            "tags": best_hit.tags,
+            "collections": best_hit.collections,
         })
 
     paper_results.sort(key=lambda p: p["avg_composite_score"], reverse=True)

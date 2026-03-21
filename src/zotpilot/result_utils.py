@@ -19,6 +19,8 @@ def _stored_chunk_to_retrieval_result(chunk) -> RetrievalResult:
         publication=meta.get("publication", ""),
         section=meta.get("section", "table"),  # Tables default to "table" section
         section_confidence=meta.get("section_confidence", 1.0),
+        tags=meta.get("tags", ""),
+        collections=meta.get("collections", ""),
         journal_quartile=meta.get("journal_quartile"),
     )
 
@@ -67,4 +69,6 @@ def _result_to_dict(r) -> dict:
         "doc_id": r.doc_id,
         "item_key": r.doc_id,
         "chunk_index": r.chunk_index,
+        "tags": r.tags,
+        "collections": r.collections,
     }
