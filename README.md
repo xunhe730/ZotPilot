@@ -91,11 +91,14 @@ pip install zotpilot  # 或 uv tool install zotpilot
 > **Windows 用户**：将下方命令中的 `python3` 替换为 `python`
 
 ```bash
-# 自动检测平台并注册（推荐）：
+# Tier 1（源码安装）— 自动安装 CLI：
 python3 scripts/run.py register
 
+# Tier 2（pip/uv 安装）— CLI 已在 PATH：
+zotpilot register
+
 # 指定平台：
-python3 scripts/run.py register --platform claude-code
+python3 scripts/run.py register --platform claude-code  # 或: zotpilot register --platform claude-code
 
 # 带凭证注册：
 python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
@@ -121,9 +124,10 @@ python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zote
 <summary>或者手动配置</summary>
 
 ```bash
-python3 scripts/run.py register \
-  --zotero-api-key <zotero密钥> \
-  --zotero-user-id <用户ID>
+# Tier 1（源码安装）：
+python3 scripts/run.py register --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
+# Tier 2（pip/uv 安装）：
+zotpilot register --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
 ```
 
 自动检测平台并重新注册。重启 agent。
