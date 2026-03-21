@@ -125,6 +125,8 @@ pip install zotpilot  # 或 uv tool install zotpilot
 
 **2. 注册 MCP 服务器：**
 
+> **Windows 用户**：将下方命令中的 `python3` 替换为 `python`
+
 ```bash
 # 自动检测平台并注册（推荐）：
 python3 scripts/run.py register
@@ -144,7 +146,7 @@ python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zote
 
 你说"搜我的 Zotero"时，Skill 会走一遍安装流程：
 
-1. 检测到缺少 `zotpilot` 命令，自动通过 `uv tool install` 安装
+1. 检测到缺少 `zotpilot` 命令，自动安装（优先 `uv tool install`，失败则 fallback 到 `pip install`）
 2. 检测 Zotero 数据目录，问你选哪个嵌入模型
 3. 注册 MCP 服务器（如果还没注册的话）
 4. 你重启一次，MCP 工具生效
@@ -298,8 +300,17 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 ### 数据存储
 
 ```
-~/.config/zotpilot/config.json      # 配置文件（Zotero 路径、嵌入模型选择）
-~/.local/share/zotpilot/chroma/     # 向量索引
+# Linux
+~/.config/zotpilot/config.json
+~/.local/share/zotpilot/chroma/
+
+# macOS
+~/Library/Application Support/zotpilot/config.json
+~/Library/Application Support/zotpilot/chroma/
+
+# Windows
+%APPDATA%\zotpilot\config.json
+%APPDATA%\zotpilot\chroma\
 ```
 
 ---
@@ -425,7 +436,7 @@ python3 scripts/run.py register \
 | 症状 | 怎么办 |
 |------|------|
 | 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.agents/skills/`、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/` |
-| `zotpilot: command not found` | `python3 scripts/run.py status`（会自动装） |
+| `zotpilot: command not found` | `python3 scripts/run.py status`（会自动装）；Windows 用 `python` |
 | MCP 工具没出来 | 重新注册 MCP 服务器然后重启 |
 | 搜出来是空的 | 先跑 `zotpilot index`，或者换个更宽泛的搜索词 |
 | `GEMINI_API_KEY not set` | 设环境变量，或 `zotpilot setup --non-interactive --provider local` 换本地模型 |
