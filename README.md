@@ -92,13 +92,13 @@ pip install zotpilot  # 或 uv tool install zotpilot
 
 ```bash
 # 自动检测平台并注册（推荐）：
-zotpilot register
+python3 scripts/run.py register
 
 # 指定平台：
-zotpilot register --platform claude-code
+python3 scripts/run.py register --platform claude-code
 
 # 带凭证注册：
-zotpilot register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
+python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
 ```
 
 支持：Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf、Cline、Roo Code。

@@ -58,12 +58,12 @@ Verify: `zotpilot status` should show "Documents: N" with N > 0.
 ## Step 5: Register MCP server
 
 ```bash
-zotpilot register --gemini-key <the-users-key>
+python3 scripts/run.py register --gemini-key <the-users-key>
 ```
 
 This auto-detects the AI agent platform and registers the MCP server. Supports Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf, Cline, and Roo Code.
 
-If auto-detection fails, specify explicitly: `zotpilot register --platform claude-code`
+If auto-detection fails, specify explicitly: `python3 scripts/run.py register --platform claude-code`
 
 After registration, the user needs to restart their AI agent for the MCP server to connect.
 

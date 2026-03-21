@@ -127,14 +127,17 @@ pip install zotpilot  # or: uv tool install zotpilot
 **2. Register the MCP server:**
 
 ```bash
-# Auto-detect platform and register (recommended):
+# Tier 1 (source checkout) — auto-installs the CLI:
+python3 scripts/run.py register
+
+# Tier 2 (pip/uv install) — CLI already on PATH:
 zotpilot register
 
 # Specify platform:
-zotpilot register --platform claude-code
+python3 scripts/run.py register --platform claude-code  # or: zotpilot register --platform claude-code
 
 # With credentials:
-zotpilot register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
+python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
 ```
 
 Supports: Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf, Cline, Roo Code.
@@ -330,7 +333,7 @@ Search and citation tools work without extra setup. Tagging and collection manag
 <summary>Manual configuration</summary>
 
 ```bash
-zotpilot register \
+python3 scripts/run.py register \
   --gemini-key <your-gemini-key> \
   --zotero-api-key <your-zotero-key> \
   --zotero-user-id <your-user-id>
