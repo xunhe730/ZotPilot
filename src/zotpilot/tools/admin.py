@@ -130,7 +130,9 @@ def get_vision_costs(
     }
 
 
-@mcp.tool()
+# DISABLED: switch_library is disabled until multi-library indexing/RAG is implemented.
+# The single Chroma "chunks" collection has no library_id in metadata, so search results
+# and index stats leak across libraries. Re-enable once per-library collection isolation is added.
 def switch_library(
     library_id: Annotated[str | None, Field(description="Library/group ID. None to list available.")] = None,
     library_type: Annotated[Literal["user", "group", "default"], Field(description="'default' resets to user library")] = "group",

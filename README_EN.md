@@ -128,13 +128,13 @@ pip install zotpilot  # or: uv tool install zotpilot
 
 ```bash
 # Auto-detect platform and register (recommended):
-python3 scripts/run.py register
+zotpilot register
 
 # Specify platform:
-python3 scripts/run.py register --platform claude-code
+zotpilot register --platform claude-code
 
 # With credentials:
-python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
+zotpilot register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
 ```
 
 Supports: Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf, Cline, Roo Code.
@@ -330,7 +330,7 @@ Search and citation tools work without extra setup. Tagging and collection manag
 <summary>Manual configuration</summary>
 
 ```bash
-python3 scripts/run.py register \
+zotpilot register \
   --gemini-key <your-gemini-key> \
   --zotero-api-key <your-zotero-key> \
   --zotero-user-id <your-user-id>

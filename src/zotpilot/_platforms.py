@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# TODO: This is a copy of scripts/platforms.py for wheel distribution.
+# Deduplicate once install bootstrap is reworked. Keep in sync manually.
 """Cross-platform MCP server registration for ZotPilot.
 
 Supports:

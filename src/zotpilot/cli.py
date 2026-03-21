@@ -37,7 +37,7 @@ def cmd_setup(args):
             print(
                 f"Note: {opt} is not a setup argument — API keys go in MCP config.\n"
                 f"Pass it to 'register' instead:\n"
-                f"  {_py} scripts/run.py register {opt} <key>"
+                f"  zotpilot register {opt} <key>"
             )
 
     non_interactive = getattr(args, "non_interactive", False)
@@ -395,6 +395,20 @@ def cmd_doctor(args):
     return 1 if has_fail else 0
 
 
+def cmd_register(args):
+    """Register ZotPilot MCP server on AI agent platforms."""
+    from ._platforms import register
+
+    results = register(
+        platforms=args.platforms,
+        gemini_key=args.gemini_key,
+        dashscope_key=args.dashscope_key,
+        zotero_api_key=args.zotero_api_key,
+        zotero_user_id=args.zotero_user_id,
+    )
+    return 0 if results and all(results.values()) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="zotpilot",
@@ -445,6 +459,16 @@ def main(argv: list[str] | None = None) -> int:
     sub_doctor.add_argument("--json", action="store_true", help="Output as JSON")
     sub_doctor.add_argument("--full", action="store_true", help="Include slow checks (API connectivity)")
     sub_doctor.set_defaults(func=cmd_doctor)
+
+    # register
+    sub_register = subparsers.add_parser("register", help="Register ZotPilot MCP server")
+    sub_register.add_argument("--platform", action="append", dest="platforms",
+                              help="Target platform (repeatable). Auto-detects if omitted.")
+    sub_register.add_argument("--gemini-key", dest="gemini_key")
+    sub_register.add_argument("--dashscope-key", dest="dashscope_key")
+    sub_register.add_argument("--zotero-api-key", dest="zotero_api_key")
+    sub_register.add_argument("--zotero-user-id", dest="zotero_user_id")
+    sub_register.set_defaults(func=cmd_register)
 
     args = parser.parse_args(argv)
 

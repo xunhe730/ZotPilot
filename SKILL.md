@@ -94,13 +94,13 @@ Run the cross-platform registration command with ALL credentials the user has:
 
 ```bash
 # Minimal (search only):
-python3 scripts/run.py register
+zotpilot register
 
 # With Gemini embeddings:
-python3 scripts/run.py register --gemini-key <key>
+zotpilot register --gemini-key <key>
 
 # Full setup (search + write + Gemini):
-python3 scripts/run.py register \
+zotpilot register \
   --gemini-key <key> \
   --zotero-api-key <key> \
   --zotero-user-id <numeric-id>
@@ -108,7 +108,7 @@ python3 scripts/run.py register \
 
 This auto-detects the user's AI agent platform(s) and registers accordingly. Supports Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf, Cline, and Roo Code.
 
-If auto-detection fails, specify explicitly: `python3 scripts/run.py register --platform claude-code`
+If auto-detection fails, specify explicitly: `zotpilot register --platform claude-code`
 
 ### 4. Restart
 
