@@ -227,6 +227,8 @@ def cmd_index(args):
 
     max_pages = args.max_pages if args.max_pages is not None else config.max_pages
 
+    batch_size = args.batch_size if args.batch_size > 0 else None
+
     indexer = Indexer(config)
     result = indexer.index_all(
         force_reindex=args.force,
@@ -234,6 +236,7 @@ def cmd_index(args):
         item_key=args.item_key,
         title_pattern=args.title,
         max_pages=max_pages,
+        batch_size=batch_size,
     )
 
     print(f"\nIndexing complete:")
@@ -424,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("--max-pages", type=int, default=None,
         help="Skip PDFs longer than N pages (default: 40, 0=no limit)")
     sub_index.add_argument("--no-vision", action="store_true", help="Disable vision extraction")
+    sub_index.add_argument("--batch-size", type=int, default=0,
+        help="Process N items per call (default: 0 = all at once)")
     sub_index.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)

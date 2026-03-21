@@ -134,6 +134,7 @@ class Indexer:
         item_key: str | None = None,
         title_pattern: str | None = None,
         max_pages: int = 0,
+        batch_size: int | None = None,
     ) -> dict:
         """
         Index all PDFs in Zotero library.
@@ -143,12 +144,24 @@ class Indexer:
             limit: Maximum number of items to index
             item_key: If provided, only index this specific Zotero item key
             title_pattern: If provided, only index items matching this regex pattern
+            max_pages: Skip PDFs longer than N pages (0 = no limit)
+            batch_size: Process at most N items per call (None/0 = all at once)
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
         """
         items = self.zotero.get_all_items_with_pdfs()
         items = [i for i in items if i.pdf_path and i.pdf_path.exists()]
+        # Deduplicate by item_key (defensive: SQL should already deduplicate)
+        seen_keys: set[str] = set()
+        unique_items: list[ZoteroItem] = []
+        for item in items:
+            if item.item_key not in seen_keys:
+                seen_keys.add(item.item_key)
+                unique_items.append(item)
+        if len(unique_items) < len(items):
+            logger.info(f"Deduplicated {len(items) - len(unique_items)} duplicate item(s)")
+        items = unique_items
         logger.info(f"Discovered {len(items)} papers with PDFs in Zotero library")
 
         # Apply filters
@@ -174,10 +187,6 @@ class Indexer:
             logger.info(f"Limit applied: processing at most {limit} papers")
 
         if force_reindex:
-            existing = self.store.get_indexed_doc_ids()
-            item_keys = {i.item_key for i in items}
-            for doc_id in existing & item_keys:
-                self.store.delete_document(doc_id)
             indexed_ids = set()
             empty_docs: dict[str, str] = {}
         else:
@@ -185,12 +194,12 @@ class Indexer:
             empty_docs = self._load_empty_docs()
 
         # Check for config mismatch
-        current_hash = _config_hash(self.config)
+        config_hash = _config_hash(self.config)
         stored_hash = None
         if self._config_hash_path.exists():
             stored_hash = self._config_hash_path.read_text().strip()
 
-        if stored_hash and stored_hash != current_hash and not force_reindex:
+        if stored_hash and stored_hash != config_hash and not force_reindex:
             logger.warning(
                 "Config has changed since last index (chunk_size, overlap, embedding, or section settings). "
                 "Run with --force to re-index, otherwise results may be inconsistent."
@@ -244,6 +253,18 @@ class Indexer:
                 except Exception:
                     short_items.append(item)
             to_index = short_items
+
+        # Batch slicing: record total before cutting
+        total_to_index = len(to_index)
+        if batch_size is not None and batch_size > 0:
+            to_index = to_index[:batch_size]
+
+        # Deferred force_reindex deletion: only delete docs in current batch
+        if force_reindex:
+            existing = self.store.get_indexed_doc_ids()
+            keys_to_delete = {item.item_key for item in to_index}
+            for doc_id in keys_to_delete & existing:
+                self.store.delete_document(doc_id)
 
         reindex_count = len(reindex_reasons)
         n_skipped = sum(1 for r in results if r.status == "skipped")
@@ -347,11 +368,11 @@ class Indexer:
                 )
 
         # ---- Phase 3: Index each document (chunk, store, etc.) ----
-        total_to_index = len(doc_extractions)
+        total_to_store = len(doc_extractions)
         index_times: list[float] = []
         phase3_start = time.perf_counter()
-        if total_to_index > 0:
-            logger.info(f"Indexing: chunking and storing {total_to_index} papers")
+        if total_to_store > 0:
+            logger.info(f"Indexing: chunking and storing {total_to_store} papers")
 
         for idx, (item_key, (item, extraction)) in enumerate(doc_extractions.items(), 1):
             t0 = time.perf_counter()
@@ -384,21 +405,21 @@ class Indexer:
                     reason=f"{type(e).__name__}: {e}"))
 
             index_times.append(time.perf_counter() - t0)
-            if idx % log_interval == 0 or idx == total_to_index:
+            if idx % log_interval == 0 or idx == total_to_store:
                 avg_t = sum(index_times) / len(index_times)
-                remaining = total_to_index - idx
+                remaining = total_to_store - idx
                 eta_secs = avg_t * remaining
                 eta_str = f"{eta_secs / 60:.1f}m" if eta_secs >= 60 else f"{eta_secs:.0f}s"
                 logger.info(
-                    f"Indexing: {idx}/{total_to_index} papers "
+                    f"Indexing: {idx}/{total_to_store} papers "
                     f"({avg_t:.1f}s avg, ETA {eta_str})"
                 )
 
         phase3_elapsed = time.perf_counter() - phase3_start
-        if total_to_index > 0:
+        if total_to_store > 0:
             logger.info(
-                f"Indexing complete: {total_to_index} papers in "
-                f"{phase3_elapsed:.1f}s ({phase3_elapsed / total_to_index:.1f}s avg)"
+                f"Indexing complete: {total_to_store} papers in "
+                f"{phase3_elapsed:.1f}s ({phase3_elapsed / total_to_store:.1f}s avg)"
             )
 
         self._save_empty_docs(empty_docs)
@@ -419,9 +440,14 @@ class Indexer:
             for item, pages in long_items
         ]
 
+        # Batch metadata
+        counts["total_to_index"] = total_to_index
+        counts["batch_size"] = batch_size
+        counts["has_more"] = total_to_index > len(to_index) if batch_size else False
+
         # Save config hash after successful indexing
         if counts["indexed"] > 0 or counts["already_indexed"] > 0:
-            self._config_hash_path.write_text(current_hash)
+            self._config_hash_path.write_text(config_hash)
 
         return {"results": results, **counts}
 

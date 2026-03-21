@@ -269,7 +269,7 @@ python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zote
 
 | 工具 | 说明 |
 |------|------|
-| `index_library` | 索引新论文（增量） |
+| `index_library` | 索引新论文（增量，支持分批：`batch_size=20`，循环调用直到 `has_more=false`） |
 | `switch_library` | 列出/切换文献库（支持群组库） |
 | `get_reranking_config` | 看排序权重 |
 | `get_vision_costs` | 看视觉 API 用量 |
@@ -425,9 +425,10 @@ python3 scripts/run.py register \
 <details>
 <summary>扫描版 PDF / 图表 / 特别长的书怎么办？</summary>
 
-- 扫描版：PyMuPDF 有内置 OCR，自动识别
+- 扫描版：自动 OCR 回退——当 PyMuPDF 提取文本过少时，自动用 Tesseract 全页 OCR 重新提取。需要安装 Tesseract（`brew install tesseract tesseract-lang`）
 - 图表：提取的是标题文字和上下文段落，不是图片本身。图片 PNG 存在本地
 - 超长文献：默认跳过 40 页以上的（`--max-pages` 可以调），也可以用 `--item-key` 单独索引某一篇
+- 分批索引：MCP 默认每次处理 20 篇（`batch_size=20`），Agent 循环调用直到 `has_more=false`。CLI 默认一次全跑
 - 表格修复：可选功能，用 Claude Haiku 重新提取复杂表格，需要 `ANTHROPIC_API_KEY`
 
 </details>

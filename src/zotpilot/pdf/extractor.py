@@ -256,9 +256,37 @@ def extract_document(
         header=False,
         footer=False,
         show_progress=False,
+        ocr_language=ocr_language,
     )
 
     page_chunks: list[dict] = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
+
+    # If too little text extracted, retry with PyMuPDF's built-in full-page OCR
+    # (pymupdf4llm's should_ocr_page() skips "photo-like" pages in scanned PDFs)
+    _OCR_MIN_CHARS_PER_PAGE = 50
+    total_chars = sum(len(chunk.get("text", "").strip()) for chunk in page_chunks)
+    if len(page_chunks) > 0 and total_chars < _OCR_MIN_CHARS_PER_PAGE * len(page_chunks):
+        try:
+            doc = pymupdf.open(str(pdf_path))
+            ocr_texts: list[str] = []
+            for page in doc:
+                tp = page.get_textpage_ocr(language=ocr_language, dpi=300, full=True)
+                ocr_texts.append(page.get_text(textpage=tp))
+            doc.close()
+            ocr_total = sum(len(t.strip()) for t in ocr_texts)
+            if ocr_total > total_chars:
+                # OCR produced more text — rebuild chunks with new dicts
+                page_chunks = [
+                    {**chunk, "text": ocr_texts[i], "page_boxes": []}
+                    if i < len(ocr_texts)
+                    else chunk
+                    for i, chunk in enumerate(page_chunks)
+                ]
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"OCR fallback failed for {pdf_path.name}: {e}"
+            )
 
     # Build pages and full markdown
     pages: list[PageExtraction] = []

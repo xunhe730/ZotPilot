@@ -251,7 +251,7 @@ Note: this choice is hard to change later. The three providers produce different
 
 | Tool | What it does |
 |------|-------------|
-| `index_library` | Index new papers (incremental) |
+| `index_library` | Index new papers (incremental, supports batching: `batch_size=20`, loop until `has_more=false`) |
 | `switch_library` | List/switch libraries (supports group libraries) |
 | `get_reranking_config` | View ranking weights |
 | `get_vision_costs` | Check vision API usage |
@@ -398,9 +398,10 @@ Alibaba Cloud's `text-embedding-v3`, 1024 dimensions. No VPN needed in China, ¥
 <details>
 <summary>Scanned PDFs / figures / long documents?</summary>
 
-- Scanned PDFs: PyMuPDF has built-in OCR
+- Scanned PDFs: automatic OCR fallback — when PyMuPDF extracts too little text, retries with Tesseract full-page OCR. Requires Tesseract (`brew install tesseract tesseract-lang`)
 - Figures: captions and surrounding text are indexed, not the image itself. PNG files saved locally
 - Long documents: skipped above 40 pages by default (`--max-pages` to adjust), `--item-key` to index specific ones
+- Batch indexing: MCP defaults to 20 items per call (`batch_size=20`), agent loops until `has_more=false`. CLI processes all at once by default
 - Table repair: optional, uses Claude Haiku to fix complex tables, requires `ANTHROPIC_API_KEY`
 
 </details>

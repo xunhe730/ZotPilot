@@ -114,15 +114,25 @@ class ZoteroClient:
             GROUP BY items.itemID
         ),
         pdfs AS (
-            SELECT
-                COALESCE(ia.parentItemID, ia.itemID) AS parentItemID,
-                items."key" AS attachmentKey,
-                ia.linkMode,
-                ia.path
-            FROM itemAttachments ia
-            JOIN items ON ia.itemID = items.itemID
-            WHERE ia.contentType = 'application/pdf'
-              AND ia.linkMode IN (0, 1, 2)
+            SELECT parentItemID, attachmentKey, linkMode, path
+            FROM (
+                SELECT
+                    COALESCE(ia.parentItemID, ia.itemID) AS parentItemID,
+                    items."key" AS attachmentKey,
+                    ia.linkMode,
+                    ia.path,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(ia.parentItemID, ia.itemID)
+                        ORDER BY
+                            CASE WHEN ia.linkMode = 1 THEN 0 ELSE 1 END,  -- prefer imported file (0=URL, 1=imported, 2=linked)
+                            ia.itemID DESC
+                    ) AS rn
+                FROM itemAttachments ia
+                JOIN items ON ia.itemID = items.itemID
+                WHERE ia.contentType = 'application/pdf'
+                  AND ia.linkMode IN (0, 1, 2)
+            )
+            WHERE rn = 1
         )
     SELECT
         base_items.itemKey,
@@ -418,15 +428,25 @@ class ZoteroClient:
             GROUP BY items.itemID
         ),
         pdfs AS (
-            SELECT
-                COALESCE(ia.parentItemID, ia.itemID) AS parentItemID,
-                items."key" AS attachmentKey,
-                ia.linkMode,
-                ia.path
-            FROM itemAttachments ia
-            JOIN items ON ia.itemID = items.itemID
-            WHERE ia.contentType = 'application/pdf'
-              AND ia.linkMode IN (0, 1, 2)
+            SELECT parentItemID, attachmentKey, linkMode, path
+            FROM (
+                SELECT
+                    COALESCE(ia.parentItemID, ia.itemID) AS parentItemID,
+                    items."key" AS attachmentKey,
+                    ia.linkMode,
+                    ia.path,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(ia.parentItemID, ia.itemID)
+                        ORDER BY
+                            CASE WHEN ia.linkMode = 1 THEN 0 ELSE 1 END,  -- prefer imported file (0=URL, 1=imported, 2=linked)
+                            ia.itemID DESC
+                    ) AS rn
+                FROM itemAttachments ia
+                JOIN items ON ia.itemID = items.itemID
+                WHERE ia.contentType = 'application/pdf'
+                  AND ia.linkMode IN (0, 1, 2)
+            )
+            WHERE rn = 1
         )
     SELECT
         base_items.itemKey,

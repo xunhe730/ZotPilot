@@ -18,9 +18,12 @@ def index_library(
     item_key: Annotated[str | None, Field(description="Index only this specific item key")] = None,
     title_pattern: Annotated[str | None, Field(description="Regex to filter items by title (case-insensitive)")] = None,
     no_vision: Annotated[bool, Field(description="Disable vision-based table extraction")] = False,
+    batch_size: Annotated[int, Field(description="Items per batch (default 20). Set 0 for all at once. Call repeatedly until has_more=false.")] = 20,
+    max_pages: Annotated[int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")] = None,
 ) -> dict:
-    """Index Zotero PDFs into the vector store. Incremental by default; use force_reindex to rebuild."""
+    """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all."""
     from ..indexer import Indexer
+    from dataclasses import replace as dc_replace
 
     _config = _get_config()
 
@@ -29,9 +32,14 @@ def index_library(
         raise ToolError(f"Config errors: {'; '.join(errors)}")
 
     config = _config
-    if no_vision:
-        from dataclasses import replace as dc_replace
-        config = dc_replace(_config, vision_enabled=False)
+
+    # Batch mode defaults to no_vision to avoid many small vision API calls
+    if batch_size > 0 and not no_vision:
+        config = dc_replace(config, vision_enabled=False)
+    elif no_vision:
+        config = dc_replace(config, vision_enabled=False)
+
+    effective_max_pages = max_pages if max_pages is not None else config.max_pages
 
     indexer = Indexer(config)
     result = indexer.index_all(
@@ -39,6 +47,8 @@ def index_library(
         limit=limit,
         item_key=item_key,
         title_pattern=title_pattern,
+        max_pages=effective_max_pages,
+        batch_size=batch_size if batch_size > 0 else None,
     )
 
     # Clear query embedding cache so new documents are findable
@@ -66,6 +76,11 @@ def index_library(
         "already_indexed": result["already_indexed"],
         "quality_distribution": result.get("quality_distribution"),
         "extraction_stats": result.get("extraction_stats"),
+        "long_documents": result.get("long_documents", []),
+        "skipped_long": result.get("skipped_long", 0),
+        "total_to_index": result.get("total_to_index", 0),
+        "has_more": result.get("has_more", False),
+        "vision_enabled": config.vision_enabled,
     }
 
 
