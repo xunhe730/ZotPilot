@@ -495,13 +495,6 @@ uv run ruff check src/
 
 ---
 
-```bash
-git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-# 重启 Claude Code，跟 AI 说"搜一下我的 Zotero"
-```
-
----
-
 <div align="center">
   <p>
     <a href="https://github.com/xunhe730/ZotPilot/issues">报告问题</a> &middot;

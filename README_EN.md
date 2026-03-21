@@ -465,13 +465,6 @@ Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-```bash
-git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-# Restart Claude Code, then tell your AI: "search my Zotero"
-```
-
----
-
 <div align="center">
   <p>
     <a href="https://github.com/xunhe730/ZotPilot/issues">Report a bug</a> &middot;
