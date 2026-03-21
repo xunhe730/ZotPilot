@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/banner.png" alt="ZotPilot" width="720">
+  <img src="assets/banner.jpg" alt="ZotPilot" width="720">
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
