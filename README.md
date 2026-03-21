@@ -1,4 +1,5 @@
 <div align="center">
+  <p><em>🧭 Your AI Pilot for Zotero</em></p>
   <img src="assets/banner.jpg" alt="ZotPilot" width="100%">
 
   <p>
