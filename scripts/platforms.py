@@ -242,8 +242,13 @@ def print_skill_hints(platforms: list[str]) -> None:
         info = PLATFORMS[plat]
         skills_dir = info.get("skills_dir", "")
         target = Path(skills_dir).expanduser() / "zotpilot"
-        if target.exists() or target.is_symlink():
+        skill_md = target / "SKILL.md"
+        if skill_md.is_file():
             print(f"  {info['label']}: skill found at {target}")
+        elif target.is_symlink():
+            print(f"  {info['label']}: BROKEN symlink at {target} — re-clone repo")
+        elif target.exists():
+            print(f"  {info['label']}: {target} exists but missing SKILL.md — re-clone repo")
         else:
             print(f"  {info['label']}: skill NOT found — clone repo to {target}")
 
