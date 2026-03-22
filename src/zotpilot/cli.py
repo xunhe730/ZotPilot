@@ -1,9 +1,15 @@
 """CLI entry point for ZotPilot."""
 import argparse
+import dataclasses
+import importlib.metadata
 import json
 import logging
+import shutil
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from .config import Config, _default_config_dir
@@ -544,6 +550,354 @@ def cmd_config(args):
     return 0
 
 
+@dataclasses.dataclass
+class SkillDir:
+    path: Path
+    is_symlink: bool
+    is_broken_symlink: bool
+    is_duplicate: bool
+
+
+def _uv_bin_dir(uv_cmd: list[str]) -> "Path | None":
+    """Run `uv tool dir --bin` and return the path, or None on failure."""
+    try:
+        result = subprocess.run(
+            uv_cmd + ["tool", "dir", "--bin"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return Path(result.stdout.strip())
+        return None
+    except Exception:
+        return None
+
+
+def _detect_cli_installer() -> "tuple[str, list[str] | None]":
+    """Detect how zotpilot CLI was installed.
+
+    Returns (installer, uv_cmd) where installer is one of:
+    'editable', 'uv', 'pip', 'unknown'
+    """
+    # Step 1: Check for editable install via direct_url.json
+    try:
+        dist = importlib.metadata.distribution("zotpilot")
+        direct_url_text = dist.read_text("direct_url.json")
+        if direct_url_text:
+            data = json.loads(direct_url_text)
+            dir_info = data.get("dir_info", {})
+            if dir_info.get("editable"):
+                return ("editable", None)
+    except importlib.metadata.PackageNotFoundError:
+        return ("unknown", None)
+    except json.JSONDecodeError:
+        return ("unknown", None)  # malformed direct_url.json — conservative fallback
+    except Exception:
+        pass
+
+    # Step 2: uv detection via shutil.which("uv")
+    argv0 = Path(sys.argv[0]).resolve()
+    uv_path = shutil.which("uv")
+    if uv_path:
+        bin_dir = _uv_bin_dir(["uv"])
+        if bin_dir and str(argv0).startswith(str(bin_dir)):
+            return ("uv", ["uv"])
+        # uv binary found but bin_dir lookup failed — try python -m uv as fallback
+        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
+        if bin_dir and str(argv0).startswith(str(bin_dir)):
+            return ("uv", [sys.executable, "-m", "uv"])
+    else:
+        # Try via sys.executable -m uv
+        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
+        if bin_dir and str(argv0).startswith(str(bin_dir)):
+            return ("uv", [sys.executable, "-m", "uv"])
+
+    # Step 4 / default: metadata found but not editable and not uv → pip
+    return ("pip", None)
+
+
+def _is_zotpilot_skill_repo(path: Path) -> bool:
+    """Check if path is a valid ZotPilot skill repo.
+
+    Requires: SKILL.md exists + frontmatter name: zotpilot + scripts/run.py exists.
+    """
+    try:
+        skill_md = path / "SKILL.md"
+        if not skill_md.exists():
+            return False
+        if not (path / "scripts" / "run.py").exists():
+            return False
+        # Parse frontmatter
+        content = skill_md.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        if not lines or lines[0].strip() != "---":
+            return False
+        in_front = False
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            if line.startswith("name:"):
+                name = line[len("name:"):].strip()
+                if name == "zotpilot":
+                    in_front = True
+                    break
+        return in_front
+    except Exception:
+        return False
+
+
+def _get_current_version() -> str:
+    """Return the currently installed zotpilot version."""
+    try:
+        return importlib.metadata.version("zotpilot")
+    except Exception:
+        try:
+            from . import __version__
+            return __version__
+        except Exception:
+            return "unknown"
+
+
+def _get_latest_pypi_version() -> "str | None":
+    """Fetch the latest zotpilot version from PyPI. Returns None on any error."""
+    try:
+        with urllib.request.urlopen("https://pypi.org/pypi/zotpilot/json", timeout=5) as resp:
+            data = json.loads(resp.read())
+            return data["info"]["version"]
+    except Exception:
+        return None
+
+
+def _get_skill_dirs() -> list[SkillDir]:
+    """Collect and deduplicate zotpilot skill directories across all platforms."""
+    from ._platforms import PLATFORMS
+
+    candidates: list[Path] = []
+    for info in PLATFORMS.values():
+        skills_dir = info.get("skills_dir")
+        if not skills_dir:
+            continue
+        path = Path(skills_dir).expanduser() / "zotpilot"
+        if path.is_symlink() or path.exists():
+            candidates.append(path)
+
+    # Dedup by realpath: group entries by resolved path
+    # Broken symlinks use path itself as key
+    seen: dict[Path, list[Path]] = {}
+    for p in candidates:
+        if p.is_symlink() and not p.exists():
+            key = p  # broken symlink — unique key
+        else:
+            key = p.resolve()
+        seen.setdefault(key, []).append(p)
+
+    result: list[SkillDir] = []
+    for key, paths in seen.items():
+        # Sort: non-symlinks first, then symlinks
+        paths_sorted = sorted(paths, key=lambda x: (x.is_symlink(), str(x)))
+        for i, p in enumerate(paths_sorted):
+            is_sym = p.is_symlink()
+            is_broken = is_sym and not p.exists()
+            if is_broken:
+                # broken symlinks are never canonical but not marked as duplicate
+                result.append(SkillDir(path=p, is_symlink=True, is_broken_symlink=True, is_duplicate=False))
+            else:
+                result.append(SkillDir(
+                    path=p,
+                    is_symlink=is_sym,
+                    is_broken_symlink=False,
+                    is_duplicate=(i > 0),
+                ))
+
+    return result
+
+
+def cmd_update(args):
+    """Upgrade ZotPilot CLI and skill files."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Step 1: Version info
+    old_ver = _get_current_version()
+
+    if not args.dry_run:
+        latest = _get_latest_pypi_version()
+        if latest:
+            print(f"  Installed: {old_ver}")
+            print(f"  Latest:    {latest}")
+        else:
+            print(f"  Installed: {old_ver}")
+            print("  Latest:    (PyPI unreachable)")
+            warnings.append("PyPI unreachable")
+    else:
+        latest = None
+        print(f"[dry-run] current version: {old_ver} (PyPI check skipped)")
+
+    # Step 2: --check mode — just report, always exit 0
+    if args.check:
+        if latest is None:
+            print("Warning: Cannot reach PyPI to check for updates")
+        elif old_ver == latest:
+            print(f"Already up to date ({old_ver})")
+        else:
+            print(f"Update available: {old_ver} → {latest}")
+        return 0
+
+    # Step 3: CLI update (unless --skill-only)
+    if not args.skill_only:
+        installer, uv_cmd = _detect_cli_installer()
+        if installer == "editable":
+            print("Dev install detected — update by running git pull in the repo")
+            warnings.append("editable install: CLI update skipped")
+        elif installer == "uv":
+            cmd = uv_cmd + ["tool", "upgrade", "zotpilot"]
+            if args.dry_run:
+                print(f"[dry-run] Would run: {' '.join(cmd)}")
+            else:
+                try:
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    print(result.stdout.strip() or "CLI updated.")
+                except FileNotFoundError:
+                    manual = " ".join(uv_cmd + ["tool", "upgrade", "zotpilot"])
+                    print(f"Command not found ({cmd[0]}) — run manually: {manual}")
+                    errors.append(f"{cmd[0]} not found")
+                except subprocess.CalledProcessError as e:
+                    print(e.stderr)
+                    errors.append("CLI update failed")
+                    return 1
+        elif installer == "pip":
+            cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "zotpilot"]
+            if args.dry_run:
+                print(f"[dry-run] Would run: {' '.join(cmd)}")
+            else:
+                try:
+                    result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    print(result.stdout.strip() or "CLI updated.")
+                except FileNotFoundError:
+                    print(f"Command not found ({cmd[0]}) — run manually: pip install --upgrade zotpilot")
+                    errors.append(f"{cmd[0]} not found")
+                except subprocess.CalledProcessError as e:
+                    print(e.stderr)
+                    errors.append("CLI update failed")
+                    return 1
+        else:  # unknown
+            print("Cannot determine installer. Update manually:")
+            print("  uv tool upgrade zotpilot")
+            print("  # or:")
+            print("  pip install --upgrade zotpilot")
+            errors.append("installer unknown: cannot auto-update CLI")
+
+    # Step 4: Skill update (unless --cli-only)
+    if not args.cli_only:
+        all_dirs = _get_skill_dirs()
+        print(f"Found {len(all_dirs)} skill directory(ies):")
+        for sd in all_dirs:
+            if sd.is_broken_symlink:
+                target = "(target missing)"
+                tag = " [broken symlink]"
+            elif sd.is_symlink:
+                target = str(sd.path.resolve())
+                tag = " [symlink]"
+            elif sd.is_duplicate:
+                target = str(sd.path.resolve())
+                tag = " [duplicate]"
+            else:
+                target = str(sd.path.resolve())
+                tag = ""
+            print(f"  {sd.path}{tag} → {target}")
+
+        for sd in all_dirs:
+            if sd.is_broken_symlink:
+                print(f"Warning: {sd.path} is a broken symlink (target missing) — re-clone to fix")
+                warnings.append(f"broken symlink: {sd.path}")
+                continue
+            if sd.is_symlink:
+                print(f"Skipping {sd.path} — symlink to {sd.path.resolve()} (update the source repo manually)")
+                warnings.append(f"symlink skipped: {sd.path}")
+                continue
+            if sd.is_duplicate:
+                print(f"Skipping {sd.path} — same physical dir already updated")
+                warnings.append(f"duplicate skipped: {sd.path}")
+                continue
+            skill_dir = sd.path
+            if not (skill_dir / ".git").exists():
+                print(f"Warning: {skill_dir} not a git repo")
+                print(f"Reinstall: git clone https://github.com/xunhe730/ZotPilot.git {skill_dir}")
+                warnings.append(f"not a git repo: {skill_dir}")
+                continue
+            if not _is_zotpilot_skill_repo(skill_dir):
+                print(f"Warning: {skill_dir} does not match ZotPilot skill signature — skipping")
+                print(f"Reinstall: git clone https://github.com/xunhe730/ZotPilot.git {skill_dir}")
+                warnings.append(f"identity check failed: {skill_dir}")
+                continue
+            # Remote URL check — informational only, never a skip gate
+            try:
+                r_remote = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    cwd=skill_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                if r_remote.returncode == 0:
+                    url = r_remote.stdout.strip()
+                    if url and "ZotPilot" not in url and "xunhe730" not in url:
+                        print(f"Note: {skill_dir} remote URL {url!r} does not look like the canonical ZotPilot repo")
+                        warnings.append(f"non-canonical remote: {skill_dir}")
+            except FileNotFoundError:
+                pass
+            # Dirty tree check
+            try:
+                r = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=skill_dir,
+                    capture_output=True,
+                    text=True,
+                )
+            except FileNotFoundError:
+                print(f"git not found in PATH — run manually: cd {skill_dir} && git pull")
+                errors.append(f"git not in PATH: {skill_dir}")
+                continue
+            if r.returncode != 0:
+                print(f"Warning: {skill_dir} git status failed (returncode={r.returncode}) — skipping")
+                warnings.append(f"git status failed: {skill_dir}")
+                continue
+            if r.stdout.strip():
+                print(f"Warning: {skill_dir} has uncommitted changes — skipping to avoid data loss")
+                warnings.append(f"dirty working tree: {skill_dir}")
+                continue
+            if args.dry_run:
+                print(f"[dry-run] Would run: git pull --ff-only in {skill_dir}")
+            else:
+                try:
+                    r = subprocess.run(
+                        ["git", "pull", "--ff-only"],
+                        cwd=skill_dir,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if r.returncode != 0:
+                        print(r.stderr)
+                        errors.append(f"git pull failed: {skill_dir}")
+                    else:
+                        lines = r.stdout.strip().splitlines()
+                        print(lines[0] if lines else "Already up to date.")
+                except FileNotFoundError:
+                    print(f"git not found in PATH — run manually: cd {skill_dir} && git pull")
+                    errors.append(f"git not in PATH: {skill_dir}")
+
+    # Step 5: Post-update summary
+    if not args.dry_run:
+        new_ver = _get_current_version()
+        if new_ver != old_ver:
+            print(f"✓ {old_ver} → {new_ver}")
+        else:
+            print("Version unchanged in this process — restart terminal to activate new binary")
+        print("Done. Restart your AI agent to load the new version.")
+        print("完成。请重启你的 AI agent 以加载新版本。")
+
+    return 1 if errors else 0
+
+
 def cmd_register(args):
     """Register ZotPilot MCP server on AI agent platforms."""
     from ._platforms import register
@@ -627,6 +981,18 @@ def main(argv: list[str] | None = None) -> int:
 
     config_sub.add_parser("path", help="Print config file path")
     sub_config.set_defaults(func=cmd_config)
+
+    # update
+    sub_update = subparsers.add_parser("update", help="Upgrade CLI and skill files")
+    grp = sub_update.add_mutually_exclusive_group()
+    grp.add_argument("--cli-only", action="store_true", help="Only update CLI")
+    grp.add_argument("--skill-only", action="store_true", help="Only update skill files")
+    mode_grp = sub_update.add_mutually_exclusive_group()
+    mode_grp.add_argument("--check", action="store_true",
+        help="Check for updates without installing (always exits 0)")
+    mode_grp.add_argument("--dry-run", action="store_true",
+        help="Preview update actions without making changes (skips PyPI)")
+    sub_update.set_defaults(func=cmd_update)
 
     # register
     sub_register = subparsers.add_parser("register", help="Register ZotPilot MCP server")

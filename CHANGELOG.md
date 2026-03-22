@@ -2,19 +2,44 @@
 
 ## 如何更新 / How to Update
 
-**pip / uv 安装 · Installed via pip or uv**
+**推荐：一条命令更新 CLI 和 skill · Recommended: one command**
 ```bash
-pip install --upgrade zotpilot
-# or / 或
-uv tool upgrade zotpilot
+zotpilot update
+```
+自动探测安装方式（uv / pip），同时更新所有平台的 skill 目录。
+Detects your installer (uv / pip) and updates all skill directories automatically.
+
+```bash
+zotpilot update --check      # 检查是否有新版本，不安装 / check only, no install
+zotpilot update --dry-run    # 预览操作，不执行 / preview actions, no changes
+zotpilot update --cli-only   # 只更新 CLI / CLI only
+zotpilot update --skill-only # 只更新 skill 目录 / skill dirs only
 ```
 
-**git clone 安装 · Installed via git clone (skills directory)**
+**手动更新 · Manual**
+
 ```bash
-cd ~/.claude/skills/zotpilot
+# pip / uv 安装 · pip or uv install
+uv tool upgrade zotpilot
+# or / 或
+pip install --upgrade zotpilot
+
+# git clone 安装（editable / skill 目录）· git clone install
+cd ~/.claude/skills/zotpilot   # 替换为你的实际路径 / replace with your path
 git pull
 ```
-> 替换为你的实际 skills 目录 / Replace with your actual skills directory
+
+---
+
+## [0.3.0] - 2026-03-23
+
+### 新功能 / New Features
+- **一键更新命令**：新增 `zotpilot update` 子命令，自动探测安装方式（uv / pip / editable）并完成 CLI 和所有平台 skill 目录的升级
+  **One-command update**: New `zotpilot update` subcommand — auto-detects your installer (uv / pip / editable) and upgrades the CLI and all platform skill directories in one step
+- 支持 `--check`（查版本不安装）、`--dry-run`（预览不执行）、`--cli-only`、`--skill-only` 四个标志
+  Supports `--check` (version check only), `--dry-run` (preview without changes), `--cli-only`, `--skill-only`
+- Skill 目录升级前自动检查：跳过符号链接、脏工作树、非 ZotPilot 仓库，不会误操作非相关目录
+  Skill dir upgrade safety: automatically skips symlinks, dirty trees, and non-ZotPilot repos before running `git pull`
 
 ---
 

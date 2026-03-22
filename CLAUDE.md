@@ -89,6 +89,33 @@ API keys are always read from environment first, then config file. `Config.save(
 | `ZOTERO_USER_ID` | Numeric Zotero user ID |
 | `S2_API_KEY` | Semantic Scholar (optional, higher rate limit) |
 
+## Version Management
+
+Claude is responsible for version management on this project. When the user says "发版"、"release"、or similar, execute the full flow without asking for sub-confirmations:
+
+### Release flow
+1. **Commit** all staged changes with a conventional commit message (`feat:` / `fix:` / `docs:` etc.)
+2. **Tag** `vX.Y.Z` — must match `pyproject.toml` version (CI validates this)
+3. **Push** commit + tag: `git push && git push --tags`
+4. CI (`release.yml`) auto-publishes to PyPI and creates the GitHub Release from CHANGELOG
+
+### Version bump rules
+- `patch` (0.x.**Z**): bug fixes, doc updates, test additions
+- `minor` (0.**Y**.0): new user-facing features (new CLI subcommand, new MCP tool)
+- `major` (**X**.0.0): breaking changes to MCP tool signatures or config format
+
+### Per-release checklist
+- [ ] `pyproject.toml` version bumped
+- [ ] `src/zotpilot/__init__.py` `__version__` in sync
+- [ ] `CHANGELOG.md` has a `## [X.Y.Z] - YYYY-MM-DD` entry at the top
+- [ ] `README.md` reflects any new commands or features
+- [ ] `uv run pytest -q` passes (coverage ≥ 29%)
+- [ ] commit → tag → push
+
+### CHANGELOG format
+Follow the bilingual (中文 / English) format already established in CHANGELOG.md.
+The CI `awk` extractor reads between the first two `## [` headers — keep that structure intact.
+
 ## Key design patterns
 
 - **Singleton pattern with double-checked locking**: all expensive objects initialized once per server process, reset on `switch_library`.
