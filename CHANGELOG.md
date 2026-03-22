@@ -1,18 +1,20 @@
 # Changelog
 
-> 如何更新 / How to Update
->
-> **PyPI 安装（pip/uv）：**
-> ```bash
-> pip install --upgrade zotpilot
-> # 或 / or
-> uv tool upgrade zotpilot
-> ```
-> **Git clone 安装（skills 目录）：**
-> ```bash
-> cd ~/.claude/skills/zotpilot   # 或对应目录 / or your skills directory
-> git pull
-> ```
+## 如何更新 / How to Update
+
+**pip / uv 安装 · Installed via pip or uv**
+```bash
+pip install --upgrade zotpilot
+# or / 或
+uv tool upgrade zotpilot
+```
+
+**git clone 安装 · Installed via git clone (skills directory)**
+```bash
+cd ~/.claude/skills/zotpilot
+git pull
+```
+> 替换为你的实际 skills 目录 / Replace with your actual skills directory
 
 ---
 
