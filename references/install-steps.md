@@ -57,6 +57,15 @@ Verify: `zotpilot status` should show "Documents: N" with N > 0.
 
 ## Step 5: Register MCP server
 
+Set the API key as an environment variable first (recommended):
+
+```bash
+export GEMINI_API_KEY=<the-users-key>
+python3 scripts/run.py register
+```
+
+Alternative (key appears in shell history):
+
 ```bash
 python3 scripts/run.py register --gemini-key <the-users-key>
 ```

@@ -90,18 +90,25 @@ pip install zotpilot  # 或 uv tool install zotpilot
 
 > **Windows 用户**：将下方命令中的 `python3` 替换为 `python`
 
-```bash
-# Tier 1（源码安装）— 自动安装 CLI：
-python3 scripts/run.py register
+有两种方式传 API key 给 MCP 服务器：
 
-# Tier 2（pip/uv 安装）— CLI 已在 PATH：
-zotpilot register
+**方式 A（推荐）：注册时通过 CLI 参数传入。** `register` 会把 key 写进 MCP 客户端的配置文件（如 `settings.local.json`），客户端启动时注入给服务器。所有 MCP 客户端都支持。注意：key 会留在 shell history 和配置文件明文中。
+
+**方式 B：设系统环境变量。** 在 shell profile 里 `export GEMINI_API_KEY=<key>`，服务器启动时自动读取。适合 Claude Code / Codex / Gemini CLI 等从终端启动的客户端；Cursor / Windsurf 等 IDE 可能不继承 shell 环境变量，用方式 A 更可靠。
+
+```bash
+# Tier 1（源码安装）— 带 key 注册（推荐，所有客户端都支持）：
+python3 scripts/run.py register --gemini-key <key>
+
+# Tier 2（pip/uv 安装）：
+zotpilot register --gemini-key <key>
+
+# 不带 key（需要环境变量已设好）：
+python3 scripts/run.py register          # Tier 1
+zotpilot register                        # Tier 2
 
 # 指定平台：
 python3 scripts/run.py register --platform claude-code  # 或: zotpilot register --platform claude-code
-
-# 带凭证注册：
-python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
 ```
 
 支持：Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf、Cline、Roo Code。

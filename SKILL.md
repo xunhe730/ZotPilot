@@ -90,16 +90,23 @@ If no, skip — search/read tools will still work without it.
 
 ### 3. Register MCP server
 
-Run the cross-platform registration command with ALL credentials the user has:
+**Preferred: set environment variables first** (avoids keys in shell history):
 
 ```bash
-# Minimal (search only):
+export GEMINI_API_KEY=<key>          # or DASHSCOPE_API_KEY for DashScope
+export ZOTERO_API_KEY=<key>          # optional, for write operations
+export ZOTERO_USER_ID=<numeric-id>   # optional, for write operations
+```
+
+Then register without key flags — keys from env are auto-detected:
+
+```bash
 python3 scripts/run.py register
+```
 
-# With Gemini embeddings:
-python3 scripts/run.py register --gemini-key <key>
+**Alternative: pass keys as CLI flags** (convenient but leaves keys in shell history):
 
-# Full setup (search + write + Gemini):
+```bash
 python3 scripts/run.py register \
   --gemini-key <key> \
   --zotero-api-key <key> \

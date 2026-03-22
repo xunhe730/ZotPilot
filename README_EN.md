@@ -126,20 +126,25 @@ pip install zotpilot  # or: uv tool install zotpilot
 
 **2. Register the MCP server:**
 
-```bash
-# Tier 1 (source checkout) — auto-installs the CLI:
-python3 scripts/run.py register
+Two ways to pass API keys to the MCP server:
 
-# Tier 2 (pip/uv install) — CLI already on PATH:
-zotpilot register
+**Method A (recommended):** Pass keys via CLI flags during registration. `register` writes them into the MCP client config (e.g. `settings.local.json`), which injects them at server startup. Works with all MCP clients. Note: keys appear in shell history and plaintext config files.
+
+**Method B:** Set system environment variables (`export GEMINI_API_KEY=<key>` in shell profile). The server reads them at startup. Works for terminal-based clients (Claude Code, Codex, Gemini CLI); IDE-based clients (Cursor, Windsurf) may not inherit shell env vars — use Method A for those.
+
+```bash
+# Tier 1 (source checkout) — with key (recommended):
+python3 scripts/run.py register --gemini-key <key>
+
+# Tier 2 (pip/uv install):
+zotpilot register --gemini-key <key>
+
+# Without keys (requires env vars already set):
+python3 scripts/run.py register          # Tier 1
+zotpilot register                        # Tier 2
 
 # Specify platform:
 python3 scripts/run.py register --platform claude-code  # or: zotpilot register --platform claude-code
-
-# With credentials (Tier 1):
-python3 scripts/run.py register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
-# With credentials (Tier 2):
-zotpilot register --gemini-key <key> --zotero-api-key <key> --zotero-user-id <id>
 ```
 
 Supports: Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf, Cline, Roo Code.
