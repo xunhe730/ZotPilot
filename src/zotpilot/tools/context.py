@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_store, _get_config, ToolError
+from ..state import ToolError, _get_config, _get_store, mcp
 
 
 @mcp.tool()
@@ -114,7 +114,7 @@ def _get_table_reference_context(
         table_ref = table_num_match.group(0)  # "Table 1" or "Table I"
     else:
         # Fallback: search for any table reference near this page
-        table_ref = f"Table"
+        table_ref = "Table"
 
     # Search text chunks for reference to this table
     ref_pattern = re.compile(re.escape(table_ref), re.IGNORECASE)

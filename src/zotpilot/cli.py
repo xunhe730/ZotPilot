@@ -68,7 +68,7 @@ def cmd_setup(args):
         # Provider from flag
         embedding_provider = getattr(args, "provider", None) or "gemini"
         if embedding_provider not in ("gemini", "dashscope", "local"):
-            print(f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini', 'dashscope', or 'local'.", file=sys.stderr)
+            print(f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini', 'dashscope', or 'local'.", file=sys.stderr)  # noqa: E501
             return 1
 
     else:
@@ -81,7 +81,7 @@ def cmd_setup(args):
 
         if detected:
             print(f"  Found: {detected}")
-            response = input(f"  Use this path? [Y/n] ").strip().lower()
+            response = input("  Use this path? [Y/n] ").strip().lower()
             if response in ("n", "no"):
                 zotero_dir = input("  Enter Zotero data directory: ").strip()
             else:
@@ -187,7 +187,7 @@ def cmd_setup(args):
         import os as _os
         if gemini_api_key and not _os.environ.get("GEMINI_API_KEY"):
             masked = gemini_api_key[:4] + "..." + gemini_api_key[-4:] if len(gemini_api_key) > 8 else "****"
-            print(f"\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
+            print("\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
             print(f"    export GEMINI_API_KEY='{masked}'  # (masked for security)")
 
         print("\n" + "=" * 40)
@@ -245,7 +245,7 @@ def cmd_index(args):
         batch_size=batch_size,
     )
 
-    print(f"\nIndexing complete:")
+    print("\nIndexing complete:")
     print(f"  Indexed:         {result['indexed']}")
     print(f"  Already indexed: {result['already_indexed']}")
     print(f"  Skipped (empty): {result['skipped']}")
@@ -266,7 +266,7 @@ def cmd_index(args):
 
     failures = [r for r in result["results"] if r.status == "failed"]
     if failures:
-        print(f"\nFailures:")
+        print("\nFailures:")
         for f in failures:
             print(f"  {f.item_key}: {f.reason}")
 
@@ -274,7 +274,7 @@ def cmd_index(args):
         print(f"\nSkipped {result['skipped_long']} long documents (>{max_pages} pages):")
         for doc in result["long_documents"]:
             print(f"  {doc['item_key']}: {doc['title']} ({doc['pages']} pages)")
-        print(f"\nTo index these, re-run with: zotpilot index --max-pages 0")
+        print("\nTo index these, re-run with: zotpilot index --max-pages 0")
 
     if result["indexed"] > 0:
         logging.getLogger(__name__).info(
@@ -338,12 +338,12 @@ def cmd_status(args):
     print(f"  Vision enabled:     {config.vision_enabled}")
 
     if blocking_errors:
-        print(f"\n  Config errors:")
+        print("\n  Config errors:")
         for e in blocking_errors:
             print(f"    ✗ {e}")
         return 1
     if api_warnings:
-        print(f"\n  Warnings:")
+        print("\n  Warnings:")
         for w in api_warnings:
             print(f"    ⚠ {w} (OK if set in MCP config via 'register')")
 
@@ -355,7 +355,7 @@ def cmd_status(args):
         store = VectorStore(config.chroma_db_path, embedder)
         doc_ids = store.get_indexed_doc_ids()
         total = store.count()
-        print(f"\n  Index stats:")
+        print("\n  Index stats:")
         print(f"    Documents: {len(doc_ids)}")
         print(f"    Chunks:    {total}")
         if doc_ids:
@@ -503,11 +503,6 @@ def cmd_config(args):
 
     if subcmd == "list":
         cfg = Config.load()
-        # Show raw file data too for credential source display
-        raw: dict = {}
-        if config_path.exists():
-            with open(config_path) as f:
-                raw = json.load(f)
         for field in sorted(known_fields):
             val = getattr(cfg, field, None)
             if val is None:

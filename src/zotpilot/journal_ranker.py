@@ -10,6 +10,7 @@ import csv
 import logging
 import re
 from pathlib import Path
+
 from rapidfuzz import fuzz, process
 
 logger = logging.getLogger(__name__)

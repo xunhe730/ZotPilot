@@ -1,2 +1,2 @@
 """MCP tool modules. Import all to trigger decorator registration."""
-from . import search, context, library, indexing, citations, write_ops, admin, ingestion
+from . import admin, citations, context, indexing, ingestion, library, search, write_ops  # noqa: F401

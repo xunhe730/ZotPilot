@@ -1,7 +1,7 @@
 """Gemini embedding provider."""
+import concurrent.futures
 import logging
 import time
-import concurrent.futures
 
 logger = logging.getLogger(__name__)
 

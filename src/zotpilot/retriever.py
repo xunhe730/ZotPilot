@@ -1,6 +1,6 @@
 """Search with automatic context expansion."""
-from .models import StoredChunk, RetrievalResult
 from .interfaces import VectorStoreProtocol
+from .models import RetrievalResult
 
 
 class Retriever:

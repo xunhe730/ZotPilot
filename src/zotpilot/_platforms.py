@@ -158,8 +158,8 @@ def _mcp_config_path(plat: str) -> Path | None:
             "gemini": home / ".gemini" / "settings.json",
             "cursor": home / ".cursor" / "mcp.json",
             "windsurf": appdata / "windsurf" / "mcp_config.json",
-            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
-            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
+            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",  # noqa: E501
+            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",  # noqa: E501
         }
     else:  # macOS / Linux
         is_mac = platform.system() == "Darwin"
@@ -169,8 +169,8 @@ def _mcp_config_path(plat: str) -> Path | None:
             "gemini": home / ".gemini" / "settings.json",
             "cursor": home / ".cursor" / "mcp.json",
             "windsurf": home / ".codeium" / "windsurf" / "mcp_config.json",
-            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",
-            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",
+            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",  # noqa: E501
+            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",  # noqa: E501
         }
     return paths.get(plat)
 

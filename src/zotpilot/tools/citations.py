@@ -3,7 +3,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_store, _get_store_optional, _get_zotero, _get_config, ToolError
+from ..state import ToolError, _get_config, _get_store_optional, _get_zotero, mcp
 
 
 def _get_doi(doc_id: str) -> str:

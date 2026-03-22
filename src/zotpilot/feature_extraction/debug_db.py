@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import sqlite3
 
-
 EXTENDED_SCHEMA = """\
 CREATE TABLE IF NOT EXISTS vision_agent_results (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,

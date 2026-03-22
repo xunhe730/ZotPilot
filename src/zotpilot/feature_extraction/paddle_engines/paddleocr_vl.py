@@ -92,7 +92,7 @@ def _start_vllm_server(
         )
 
     _log.info("Starting vLLM Docker container via %s ...", compose)
-    print(f"[paddleocr-vl] Starting vLLM Docker container...", flush=True)
+    print("[paddleocr-vl] Starting vLLM Docker container...", flush=True)
 
     # Pull image first (can take minutes for multi-GB images).
     _log.info("Pulling Docker image (this may take several minutes on first run)...")

@@ -5,7 +5,7 @@ using keyword matching only. No position-based guessing.
 """
 from __future__ import annotations
 
-from ..models import SectionSpan, CONFIDENCE_FALLBACK
+from ..models import CONFIDENCE_FALLBACK, SectionSpan
 
 # Category keywords mapped to labels, ordered by weight (highest first).
 # When multiple keywords match, highest-weighted category wins.

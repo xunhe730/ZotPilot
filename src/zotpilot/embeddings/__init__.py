@@ -1,8 +1,8 @@
 """Embedding providers for ZotPilot."""
-from .gemini import GeminiEmbedder, EmbeddingError
-from .local import LocalEmbedder
-from .dashscope import DashScopeEmbedder
 from .base import EmbedderProtocol
+from .dashscope import DashScopeEmbedder
+from .gemini import EmbeddingError, GeminiEmbedder
+from .local import LocalEmbedder
 
 
 def create_embedder(config):
@@ -41,4 +41,4 @@ def create_embedder(config):
         )
 
 
-__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "EmbeddingError", "EmbedderProtocol"]
+__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "EmbeddingError", "EmbedderProtocol"]  # noqa: E501

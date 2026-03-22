@@ -1,5 +1,6 @@
 """Read-only Zotero Web API client for data not reliably available via SQLite."""
 from __future__ import annotations
+
 from pyzotero import zotero
 
 

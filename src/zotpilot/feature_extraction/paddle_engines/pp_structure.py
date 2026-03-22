@@ -82,8 +82,6 @@ def _parse_html_table(html: str) -> tuple[list[str], list[list[str]], str]:
 
         # Determine which column slots are already occupied by rowspans
         col = 0
-        raw_iter = iter(raw_cells)
-        consumed = False
 
         def next_free_col() -> int:
             nonlocal col

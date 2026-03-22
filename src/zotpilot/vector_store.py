@@ -1,12 +1,14 @@
 """ChromaDB vector storage with chunk management."""
 import logging
 import re
-import chromadb
-from chromadb.config import Settings
 from pathlib import Path
 from typing import TYPE_CHECKING
-from .models import Chunk, StoredChunk
+
+import chromadb
+from chromadb.config import Settings
+
 from .interfaces import EmbedderProtocol
+from .models import Chunk, StoredChunk
 
 if TYPE_CHECKING:
     from .models import ExtractedTable

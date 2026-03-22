@@ -16,8 +16,8 @@ import pymupdf
 
 from .vision_api import TableVisionSpec
 from .vision_extract import (
-    AgentResponse,
     VISION_FIRST_SYSTEM,
+    AgentResponse,
     build_common_ctx,
     parse_agent_response,
     render_table_region,

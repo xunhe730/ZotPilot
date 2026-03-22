@@ -2,6 +2,7 @@
 All dataclasses for the system. No dependencies on implementation modules.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING

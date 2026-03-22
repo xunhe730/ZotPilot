@@ -8,13 +8,13 @@ from pathlib import Path
 from typing import Protocol
 
 from .models import (
-    ZoteroItem,
-    PageExtraction,
-    DocumentExtraction,
     Chunk,
-    StoredChunk,
+    DocumentExtraction,
+    PageExtraction,
     RetrievalResult,
     SectionSpan,
+    StoredChunk,
+    ZoteroItem,
 )
 
 

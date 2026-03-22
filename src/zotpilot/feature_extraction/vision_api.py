@@ -10,7 +10,7 @@ import base64
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,11 +18,11 @@ import anthropic
 import pymupdf
 
 from .vision_extract import (
+    VISION_FIRST_SYSTEM,
     AgentResponse,
     build_common_ctx,
     parse_agent_response,
     render_table_region,
-    VISION_FIRST_SYSTEM,
 )
 
 logger = logging.getLogger(__name__)

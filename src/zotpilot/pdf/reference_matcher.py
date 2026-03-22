@@ -1,8 +1,10 @@
 """Map tables/figures to the chunks that first reference them."""
 from __future__ import annotations
+
 import re
 from bisect import bisect_right
-from ..models import Chunk, ExtractedTable, ExtractedFigure
+
+from ..models import Chunk, ExtractedFigure, ExtractedTable
 
 
 def match_references(

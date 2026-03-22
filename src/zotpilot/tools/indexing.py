@@ -5,8 +5,7 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import mcp, _get_retriever, _get_store, _get_store_optional, _get_zotero, _get_config, ToolError
-from ..config import Config
+from ..state import ToolError, _get_config, _get_retriever, _get_store, _get_zotero, mcp
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +17,13 @@ def index_library(
     item_key: Annotated[str | None, Field(description="Index only this specific item key")] = None,
     title_pattern: Annotated[str | None, Field(description="Regex to filter items by title (case-insensitive)")] = None,
     no_vision: Annotated[bool, Field(description="Disable vision-based table extraction")] = False,
-    batch_size: Annotated[int, Field(description="Items per batch (default 20). Set 0 for all at once. Call repeatedly until has_more=false. Vision extraction is auto-disabled in batch mode; use batch_size=0 for vision.")] = 20,
-    max_pages: Annotated[int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")] = None,
+    batch_size: Annotated[int, Field(description="Items per batch (default 20). Set 0 for all at once. Call repeatedly until has_more=false. Vision extraction is auto-disabled in batch mode; use batch_size=0 for vision.")] = 20,  # noqa: E501
+    max_pages: Annotated[int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")] = None,  # noqa: E501
 ) -> dict:
-    """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all."""
-    from ..indexer import Indexer
+    """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all."""  # noqa: E501
     from dataclasses import replace as dc_replace
+
+    from ..indexer import Indexer
 
     _config = _get_config()
 
@@ -92,7 +92,7 @@ def get_index_stats() -> dict:
         return {
             "total_documents": 0,
             "mode": "no-rag",
-            "message": "Indexing disabled in No-RAG mode. Use advanced_search, get_notes, list_tags, etc. for basic features. Configure an embedding provider to enable semantic search.",
+            "message": "Indexing disabled in No-RAG mode. Use advanced_search, get_notes, list_tags, etc. for basic features. Configure an embedding provider to enable semantic search.",  # noqa: E501
         }
     _get_retriever()  # Ensure initialized
     store = _get_store()

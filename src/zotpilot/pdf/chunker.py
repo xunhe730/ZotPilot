@@ -1,5 +1,5 @@
 """Document chunking with overlap and page tracking."""
-from ..models import PageExtraction, Chunk, SectionSpan
+from ..models import Chunk, PageExtraction, SectionSpan
 from .section_classifier import assign_section_with_confidence
 
 

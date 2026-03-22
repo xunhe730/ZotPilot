@@ -12,39 +12,39 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pymupdf
 import pymupdf.layout  # noqa: F401 — activates layout engine, MUST be before pymupdf4llm
 import pymupdf4llm
-import pymupdf
 
+from ..feature_extraction.captions import find_all_captions
+from ..feature_extraction.postprocessors.cell_cleaning import clean_cells
+from ..feature_extraction.vision_extract import compute_all_crops, compute_recrop_bbox
 from ..models import (
-    PageExtraction,
+    CONFIDENCE_GAP_FILL,
+    CONFIDENCE_SCHEME_MATCH,
     DocumentExtraction,
     ExtractedFigure,
     ExtractedTable,
+    PageExtraction,
     SectionSpan,
-    CONFIDENCE_SCHEME_MATCH,
-    CONFIDENCE_GAP_FILL,
 )
-from .section_classifier import categorize_heading
-from ..feature_extraction.vision_extract import compute_all_crops, compute_recrop_bbox
-from ..feature_extraction.postprocessors.cell_cleaning import clean_cells
-from ..feature_extraction.captions import find_all_captions
 from .orphan_recovery import run_recovery
+from .section_classifier import categorize_heading
 
 if TYPE_CHECKING:
-    from ..feature_extraction.vision_api import VisionAPI, TableVisionSpec
+    from ..feature_extraction.vision_api import TableVisionSpec, VisionAPI
 
 logger = logging.getLogger(__name__)
 
 # Pattern for filtering page identifiers from section-header boxes (e.g. "R1356")
 _PAGE_ID_RE = re.compile(r"^R?\d+$")
 
-from ..feature_extraction.captions import (
+from ..feature_extraction.captions import (  # noqa: E402
     _TABLE_CAPTION_RE,
     _TABLE_CAPTION_RE_RELAXED,
     _TABLE_LABEL_ONLY_RE,
-    _FIG_CAPTION_RE as _FIG_CAPTION_RE_COMP,
 )
+
 _CAP_PATTERNS = (_TABLE_CAPTION_RE, _TABLE_CAPTION_RE_RELAXED, _TABLE_LABEL_ONLY_RE)
 
 
@@ -1413,7 +1413,7 @@ def _assign_continuation_captions(tables: list[ExtractedTable]) -> None:
 # Content quality detection
 # ---------------------------------------------------------------------------
 
-_MATH_GREEK_RE = re.compile(r"[\u0391-\u03C9\u2200-\u22FF=\u00b1\u00d7\u00f7\u00b2\u00b3\u2211\u220f\u222b\u2202\u2207]")
+_MATH_GREEK_RE = re.compile(r"[\u0391-\u03C9\u2200-\u22FF=\u00b1\u00d7\u00f7\u00b2\u00b3\u2211\u220f\u222b\u2202\u2207]")  # noqa: E501
 
 def _detect_garbled_spacing(text: str) -> tuple[bool, str]:
     """Flag text where average word length > 25 chars (missing word spaces).
@@ -1585,9 +1585,9 @@ def _compute_completeness(
     tables: list[ExtractedTable],
     figures: list[ExtractedFigure],
     stats: dict,
-) -> "ExtractionCompleteness":
-    from ..models import ExtractionCompleteness
+) -> "ExtractionCompleteness":  # noqa: F821
     from ..feature_extraction.captions import find_all_captions
+    from ..models import ExtractionCompleteness
 
     fig_nums: set[str] = set()
     tab_nums: set[str] = set()
@@ -1602,7 +1602,6 @@ def _compute_completeness(
 
     # At this point, artifacts and false-positive figures have already been
     # removed by extract_document(). Work directly with the cleaned lists.
-    figures_with_captions = sum(1 for f in figures if f.caption)
     tables_with_captions = sum(1 for t in tables if t.caption)
 
     # --- Content quality signals ---

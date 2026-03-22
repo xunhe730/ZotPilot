@@ -5,15 +5,17 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
 from tqdm import tqdm
+
 from .config import Config
-from .zotero_client import ZoteroClient
-from .pdf import extract_document
-from .pdf.chunker import Chunker
 from .embeddings import create_embedder
-from .vector_store import VectorStore
 from .journal_ranker import JournalRanker
 from .models import ZoteroItem
+from .pdf import extract_document
+from .pdf.chunker import Chunker
+from .vector_store import VectorStore
+from .zotero_client import ZoteroClient
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +342,7 @@ class Indexer:
 
         # ---- Phase 2: Resolve vision batch (one API call for all papers) ----
         if self._vision_api and doc_extractions:
-            from .pdf.extractor import resolve_pending_vision, PendingVisionWork
+            from .pdf.extractor import resolve_pending_vision
             pending_count = sum(
                 len(v[1].pending_vision.specs)
                 for v in doc_extractions.values()
@@ -397,7 +399,7 @@ class Indexer:
                     results.append(IndexResult(
                         item.item_key, item.title, "empty", reason=reason,
                         quality_grade=quality_grade))
-                logger.debug(f"Completed {item.item_key}: {n_chunks} chunks, {n_tables} tables, quality {quality_grade}")
+                logger.debug(f"Completed {item.item_key}: {n_chunks} chunks, {n_tables} tables, quality {quality_grade}")  # noqa: E501
             except Exception as e:
                 logger.error(f"Failed to index {item.item_key}: {type(e).__name__}: {e}")
                 results.append(IndexResult(
@@ -507,7 +509,7 @@ class Indexer:
             extraction.sections,
         )
         if not chunks:
-            return 0, 0, f"{len(extraction.pages)} pages, {total_chars} chars but no chunks created", extraction.stats, quality_grade
+            return 0, 0, f"{len(extraction.pages)} pages, {total_chars} chars but no chunks created", extraction.stats, quality_grade  # noqa: E501
         logger.debug(f"  Created {len(chunks)} chunks")
 
         # Look up journal quartile
@@ -536,6 +538,7 @@ class Indexer:
         # Enrich tables/figures with reference context.
         # Only for real captions (Table N / Figure N), not synthetic ones.
         import re
+
         from .pdf.extractor import SYNTHETIC_CAPTION_PREFIX
         from .pdf.reference_matcher import get_reference_context
         _TAB_NUM_RE = re.compile(r"(?:Table|Tab\.?)\s+(\d+)", re.IGNORECASE)
@@ -576,7 +579,7 @@ class Indexer:
             except Exception as e:
                 logger.warning(f"Figure storage failed for {item.item_key}: {e}")
 
-        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")
+        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
         return len(chunks), n_tables, "", extraction.stats, quality_grade
 
     def index_document(self, item: ZoteroItem) -> int:

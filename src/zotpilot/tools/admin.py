@@ -6,11 +6,17 @@ from typing import Annotated, Literal
 
 from pydantic import Field
 
+from ..reranker import VALID_QUARTILES, VALID_SECTIONS
 from ..state import (
-    mcp, _get_retriever, _get_reranker, _get_config, _get_zotero,
-    _get_store_optional, _set_library_override, _clear_library_override, ToolError,
+    ToolError,
+    _clear_library_override,
+    _get_config,
+    _get_reranker,
+    _get_retriever,
+    _get_zotero,
+    _set_library_override,
+    mcp,
 )
-from ..reranker import VALID_SECTIONS, VALID_QUARTILES
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +29,7 @@ def get_reranking_config() -> dict:
         return {
             "enabled": False,
             "mode": "no-rag",
-            "message": "Reranking unavailable in No-RAG mode. Configure an embedding provider to enable semantic search.",
+            "message": "Reranking unavailable in No-RAG mode. Configure an embedding provider to enable semantic search.",  # noqa: E501
         }
     _get_retriever()  # Ensure initialized
     reranker = _get_reranker()
@@ -133,7 +139,7 @@ def get_vision_costs(
 @mcp.tool()
 def switch_library(
     library_id: Annotated[str | None, Field(description="Library/group ID. None to list available.")] = None,
-    library_type: Annotated[Literal["user", "group", "default"], Field(description="'default' resets to user library")] = "group",
+    library_type: Annotated[Literal["user", "group", "default"], Field(description="'default' resets to user library")] = "group",  # noqa: E501
 ) -> dict:
     """List libraries or switch active library context.
 

@@ -2,6 +2,7 @@
 import sqlite3
 from html.parser import HTMLParser
 from pathlib import Path
+
 from .models import ZoteroItem
 
 
@@ -124,7 +125,7 @@ class ZoteroClient:
                     ROW_NUMBER() OVER (
                         PARTITION BY COALESCE(ia.parentItemID, ia.itemID)
                         ORDER BY
-                            CASE WHEN ia.linkMode = 0 THEN 0 ELSE 1 END,  -- prefer imported file (0=imported_file, 1=imported_url, 2=linked)
+                            CASE WHEN ia.linkMode = 0 THEN 0 ELSE 1 END,  -- 0=imported_file, 1=imported_url, 2=linked
                             ia.itemID DESC
                     ) AS rn
                 FROM itemAttachments ia
@@ -438,7 +439,7 @@ class ZoteroClient:
                     ROW_NUMBER() OVER (
                         PARTITION BY COALESCE(ia.parentItemID, ia.itemID)
                         ORDER BY
-                            CASE WHEN ia.linkMode = 0 THEN 0 ELSE 1 END,  -- prefer imported file (0=imported_file, 1=imported_url, 2=linked)
+                            CASE WHEN ia.linkMode = 0 THEN 0 ELSE 1 END,  -- 0=imported_file, 1=imported_url, 2=linked
                             ia.itemID DESC
                     ) AS rn
                 FROM itemAttachments ia
@@ -1033,7 +1034,7 @@ class ZoteroClient:
                 )
             elif op == "isNot":
                 return (
-                    "NOT EXISTS (SELECT 1 FROM collectionItems ci JOIN collections c ON ci.collectionID = c.collectionID "
+                    "NOT EXISTS (SELECT 1 FROM collectionItems ci JOIN collections c ON ci.collectionID = c.collectionID "  # noqa: E501
                     "WHERE ci.itemID = base.itemID AND c.collectionName = ?)",
                     [value],
                 )

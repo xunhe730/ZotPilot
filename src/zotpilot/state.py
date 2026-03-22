@@ -1,19 +1,27 @@
 """Shared state and lazy singletons for ZotPilot MCP server."""
+import logging
 import os
 import sys
-import time
-import logging
 import threading
+import time
+
 from fastmcp import FastMCP
+
 from .config import Config
 
 # Re-exports for backward compatibility (tools other than search.py import from here)
 from .filters import (  # noqa: F401
-    VALID_CHUNK_TYPES, _build_chromadb_filters, _meta_get,
-    _apply_text_filters, _has_text_filters, _apply_required_terms,
+    VALID_CHUNK_TYPES,
+    _apply_required_terms,
+    _apply_text_filters,
+    _build_chromadb_filters,
+    _has_text_filters,
+    _meta_get,
 )
 from .result_utils import (  # noqa: F401
-    _stored_chunk_to_retrieval_result, _merge_results_by_chunk, _result_to_dict,
+    _merge_results_by_chunk,
+    _result_to_dict,
+    _stored_chunk_to_retrieval_result,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,10 +186,10 @@ def _get_retriever():
                         "Configure an embedding provider (gemini/dashscope/local) "
                         "and run index_library() first."
                     )
-                from .vector_store import VectorStore
-                from .retriever import Retriever
-                from .reranker import Reranker
                 from .embeddings import create_embedder
+                from .reranker import Reranker
+                from .retriever import Retriever
+                from .vector_store import VectorStore
 
                 embedder = create_embedder(_config)
                 _store = VectorStore(_config.chroma_db_path, embedder)

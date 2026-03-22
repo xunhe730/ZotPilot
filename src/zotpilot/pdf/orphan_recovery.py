@@ -14,7 +14,7 @@ import re
 
 import pymupdf
 
-from ..models import ExtractedFigure, ExtractedTable, SectionSpan, PageExtraction
+from ..models import ExtractedFigure, ExtractedTable, PageExtraction, SectionSpan
 
 logger = logging.getLogger(__name__)
 

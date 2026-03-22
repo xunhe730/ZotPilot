@@ -3,7 +3,7 @@ from typing import Annotated, Literal, TypedDict
 
 from pydantic import Field
 
-from ..state import mcp, _get_writer, ToolError
+from ..state import ToolError, _get_writer, mcp
 from .library import _invalidate_collection_cache
 
 
@@ -70,7 +70,7 @@ def remove_from_collection(
 @mcp.tool()
 def create_collection(
     name: Annotated[str, Field(description="Display name for the collection")],
-    parent_key: Annotated[str | None, Field(description="Parent collection key for nesting, None for top-level")] = None,
+    parent_key: Annotated[str | None, Field(description="Parent collection key for nesting, None for top-level")] = None,  # noqa: E501
 ) -> dict:
     """Create a new Zotero collection (folder)."""
     result = _get_writer().create_collection(name, parent_key)
@@ -118,7 +118,7 @@ def _batch_tag_result(items: list, operation):
 
 @mcp.tool()
 def batch_tags(
-    action: Annotated[Literal["add", "set", "remove"], Field(description="add=append, set=replace all (destructive), remove=delete specific tags")],
+    action: Annotated[Literal["add", "set", "remove"], Field(description="add=append, set=replace all (destructive), remove=delete specific tags")],  # noqa: E501
     items: Annotated[list[dict], Field(description="List of {item_key, tags} objects. Max 100.")],
 ) -> dict:
     """Batch tag operation on multiple items. Partial failures reported per-item."""
@@ -132,7 +132,7 @@ def batch_tags(
 
 @mcp.tool()
 def batch_collections(
-    action: Annotated[Literal["add", "remove"], Field(description="add=add to collection, remove=remove from collection")],
+    action: Annotated[Literal["add", "remove"], Field(description="add=add to collection, remove=remove from collection")],  # noqa: E501
     item_keys: Annotated[list[str], Field(description="Zotero item keys. Max 100.")],
     collection_key: Annotated[str, Field(description="Target collection key")],
 ) -> dict:

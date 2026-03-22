@@ -6,6 +6,7 @@ to produce a composite relevance score.
 """
 import logging
 from dataclasses import replace
+
 from .models import RetrievalResult
 
 logger = logging.getLogger(__name__)

@@ -1,24 +1,34 @@
 """Search tools: semantic, topic, boolean, tables, figures."""
-import time
 import logging
+import time
 from collections import defaultdict
 from dataclasses import replace
 from typing import Annotated, Literal
 
 from pydantic import Field
 
-from ..state import (
-    mcp, _get_retriever, _get_reranker, _get_store, _get_config, _get_zotero,
-    ToolError,
-)
 from ..filters import (
-    VALID_CHUNK_TYPES, _build_chromadb_filters, _apply_text_filters,
-    _has_text_filters, _apply_required_terms,
+    VALID_CHUNK_TYPES,
+    _apply_required_terms,
+    _apply_text_filters,
+    _build_chromadb_filters,
+    _has_text_filters,
 )
+from ..reranker import validate_journal_weights, validate_section_weights
 from ..result_utils import (
-    _stored_chunk_to_retrieval_result, _merge_results_by_chunk, _result_to_dict,
+    _merge_results_by_chunk,
+    _result_to_dict,
+    _stored_chunk_to_retrieval_result,
 )
-from ..reranker import validate_section_weights, validate_journal_weights, VALID_SECTIONS, VALID_QUARTILES
+from ..state import (
+    ToolError,
+    _get_config,
+    _get_reranker,
+    _get_retriever,
+    _get_store,
+    _get_zotero,
+    mcp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +43,12 @@ def search_papers(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,
-    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,
-    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
-    required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,  # noqa: E501
 ) -> list[dict]:
-    """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""
+    """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -108,11 +118,11 @@ def search_topic(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,
-    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,
-    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
 ) -> list[dict]:
-    """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""
+    """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""  # noqa: E501
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -235,7 +245,7 @@ def search_boolean(
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
 ) -> list[dict]:
-    """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""
+    """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""  # noqa: E501
     zotero = _get_zotero()
     matching_keys = zotero.search_fulltext(query, operator)
 
@@ -285,9 +295,9 @@ def search_tables(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
 ) -> list[dict]:
-    """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""
+    """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""  # noqa: E501
     start = time.perf_counter()
 
     # Validate journal_weights if provided
@@ -367,7 +377,7 @@ def search_figures(
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
 ) -> list[dict]:
-    """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""
+    """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""  # noqa: E501
     start = time.perf_counter()
     top_k = max(1, min(top_k, 30))
     store = _get_store()
@@ -407,7 +417,7 @@ def search_figures(
 
 @mcp.tool()
 def advanced_search(
-    conditions: Annotated[list[dict], Field(description='[{field, op, value}]. Fields: title, author, year, tag, collection, publication, doi. Ops: contains, is, isNot, beginsWith, gt, lt.')],
+    conditions: Annotated[list[dict], Field(description='[{field, op, value}]. Fields: title, author, year, tag, collection, publication, doi. Ops: contains, is, isNot, beginsWith, gt, lt.')],  # noqa: E501
     match: Annotated[Literal["all", "any"], Field(description="all=AND, any=OR")] = "all",
     sort_by: Annotated[str | None, Field(description="Sort: year, title, dateAdded")] = None,
     sort_dir: Annotated[Literal["asc", "desc"], Field(description="Sort direction")] = "desc",

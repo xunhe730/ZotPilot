@@ -1,10 +1,10 @@
 """Configuration management."""
-from dataclasses import dataclass
-from pathlib import Path
 import json
 import logging
 import os
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,6 @@ class Config:
         elif self.embedding_provider == "dashscope" and not self.dashscope_api_key:
             errors.append("DASHSCOPE_API_KEY not set (required for embedding_provider='dashscope')")
         elif self.embedding_provider not in ("gemini", "dashscope", "local", "none"):
-            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")
+            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")  # noqa: E501
 
         return errors
