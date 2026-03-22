@@ -59,9 +59,12 @@ Agent 会 clone 仓库、装 CLI、配好 Zotero、注册 MCP 服务器。重启
 | 平台 | 目标路径 |
 |------|----------|
 | Claude Code | `~/.claude/skills/zotpilot` |
-| Codex CLI | `~/.agents/skills/zotpilot` |
+| Codex（当前主路径） | `~/.agents/skills/zotpilot` |
+| Codex（兼容旧路径） | `~/.codex/skills/zotpilot` |
 | OpenCode | `~/.config/opencode/skills/zotpilot` |
 | Gemini CLI | `~/.gemini/skills/zotpilot` |
+
+Codex 最新实现会优先扫描用户目录下的 `~/.agents/skills`，同时继续兼容旧的 `$CODEX_HOME/skills`（默认通常是 `~/.codex/skills`）。如果你在 Codex 桌面端里看到的是 `~/.codex/skills`，这是兼容路径，不是 ZotPilot 特例。
 
 ### 方式二：手动装
 
@@ -71,14 +74,27 @@ Agent 会 clone 仓库、装 CLI、配好 Zotero、注册 MCP 服务器。重启
 # Claude Code
 git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
 
-# Codex CLI
+# Codex（推荐：当前主路径）
 git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
+
+# Codex（兼容旧路径；部分桌面环境仍会显示/使用这个目录）
+git clone https://github.com/xunhe730/ZotPilot.git ~/.codex/skills/zotpilot
 
 # OpenCode
 git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
 
 # Gemini CLI
 git clone https://github.com/xunhe730/ZotPilot.git ~/.gemini/skills/zotpilot
+```
+
+Windows 对应路径：
+
+```powershell
+# Codex（推荐：当前主路径）
+git clone https://github.com/xunhe730/ZotPilot.git $HOME/.agents/skills/zotpilot
+
+# Codex（兼容旧路径）
+git clone https://github.com/xunhe730/ZotPilot.git $HOME/.codex/skills/zotpilot
 ```
 
 Tier 2 平台（Cursor、Windsurf、Cline、Roo Code）不需要 clone skill，只需要安装 CLI 和注册 MCP：
@@ -336,7 +352,8 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 ### 文件结构
 
 ```
-~/.claude/skills/zotpilot/          # 或 ~/.agents/skills/zotpilot/（Codex）
+~/.claude/skills/zotpilot/          # 或 ~/.agents/skills/zotpilot/（Codex 主路径）
+~/.codex/skills/zotpilot/           # Codex 兼容旧路径
 ├── SKILL.md                        # 决策树：安装 → 索引 → 研究
 ├── scripts/run.py                  # 引导脚本：自动安装 CLI + 委托执行
 ├── references/                     # 参考文档
@@ -457,7 +474,7 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 
 | 症状 | 怎么办 |
 |------|------|
-| 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.agents/skills/`、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/` |
+| 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.agents/skills/`（兼容旧路径 `~/.codex/skills/`）、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/` |
 | `zotpilot: command not found` | `python3 scripts/run.py status`（会自动装）；Windows 用 `python` |
 | MCP 工具没出来 | 重新注册 MCP 服务器然后重启 |
 | 搜出来是空的 | 先跑 `zotpilot index`，或者换个更宽泛的搜索词 |

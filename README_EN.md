@@ -101,6 +101,18 @@ Copy this to your AI agent:
 
 The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. Restart once, then you're ready.
 
+**Skills directory (clone target):**
+
+| Platform | Target path |
+|------|----------|
+| Claude Code | `~/.claude/skills/zotpilot` |
+| Codex (recommended current path) | `~/.agents/skills/zotpilot` |
+| Codex (legacy compatibility path) | `~/.codex/skills/zotpilot` |
+| OpenCode | `~/.config/opencode/skills/zotpilot` |
+| Gemini CLI | `~/.gemini/skills/zotpilot` |
+
+Current Codex builds prefer `~/.agents/skills` for user-installed skills, while still keeping the old `$CODEX_HOME/skills` location for backward compatibility. When `CODEX_HOME` is unset, that legacy path is usually `~/.codex/skills`.
+
 ### Option 2: Manual install
 
 **1. Clone to your skills directory (Tier 1 platforms with Skill support):**
@@ -109,14 +121,27 @@ The agent clones the repo, installs the CLI, configures Zotero, and registers th
 # Claude Code
 git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
 
-# Codex CLI
+# Codex (recommended current path)
 git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
+
+# Codex (legacy compatibility path; some desktop environments still surface this folder)
+git clone https://github.com/xunhe730/ZotPilot.git ~/.codex/skills/zotpilot
 
 # OpenCode
 git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
 
 # Gemini CLI
 git clone https://github.com/xunhe730/ZotPilot.git ~/.gemini/skills/zotpilot
+```
+
+Windows equivalents:
+
+```powershell
+# Codex (recommended current path)
+git clone https://github.com/xunhe730/ZotPilot.git $HOME/.agents/skills/zotpilot
+
+# Codex (legacy compatibility path)
+git clone https://github.com/xunhe730/ZotPilot.git $HOME/.codex/skills/zotpilot
 ```
 
 Tier 2 platforms (Cursor, Windsurf, Cline, Roo Code) don't need the skill clone — just install the CLI and register MCP:
@@ -303,7 +328,8 @@ Design choices:
 ### File structure
 
 ```
-~/.claude/skills/zotpilot/          # or ~/.agents/skills/zotpilot/ (Codex)
+~/.claude/skills/zotpilot/          # or ~/.agents/skills/zotpilot/ (Codex primary path)
+~/.codex/skills/zotpilot/           # Codex legacy compatibility path
 ├── SKILL.md                        # Decision tree: setup → index → research
 ├── scripts/run.py                  # Bootstrap: auto-installs CLI + delegates
 ├── references/                     # Reference docs
@@ -448,7 +474,7 @@ Optional feature. Uses Claude Haiku (via Batch API) to re-extract PDF tables, fi
 
 | Problem | Fix |
 |---------|-----|
-| Skill not found | Verify clone target: Claude Code `~/.claude/skills/`, Codex `~/.agents/skills/`, OpenCode `~/.config/opencode/skills/`, Gemini `~/.gemini/skills/` |
+| Skill not found | Verify clone target: Claude Code `~/.claude/skills/`, Codex `~/.agents/skills/` (legacy compatibility path: `~/.codex/skills/`), OpenCode `~/.config/opencode/skills/`, Gemini `~/.gemini/skills/` |
 | `zotpilot: command not found` | `python3 scripts/run.py status` (auto-installs) |
 | MCP tools not showing up | Re-register MCP server and restart |
 | Empty search results | Run `zotpilot index` first, or try a broader query |
