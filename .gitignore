@@ -21,7 +21,8 @@ venv/
 # Skill runtime data (created on first use)
 data/
 
-# Plans (local only)
+# Plans and ops records (local only)
+.omc/
 docs/superpowers/
 
 # IDE
