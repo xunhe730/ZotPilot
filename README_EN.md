@@ -17,6 +17,8 @@
     <a href="#quick-start">Quick Start</a> &bull;
     <a href="#compared-to-alternatives">Compare</a> &bull;
     <a href="#how-it-works">Architecture</a> &bull;
+    <a href="#how-to-update">Update</a> &bull;
+    <a href="#faq">FAQ</a> &bull;
     <a href="README.md">简体中文</a>
   </p>
 </div>

@@ -17,6 +17,8 @@
     <a href="#快速开始">快速开始</a> &bull;
     <a href="#和其他方案的区别">对比</a> &bull;
     <a href="#工作原理">架构</a> &bull;
+    <a href="#如何更新">更新</a> &bull;
+    <a href="#常见问题">FAQ</a> &bull;
     <a href="README_EN.md">English</a>
   </p>
 </div>
