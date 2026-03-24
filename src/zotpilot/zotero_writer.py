@@ -140,9 +140,14 @@ class ZoteroWriter:
         if not title:
             return []
         try:
-            items = self._zot.items(q=title, qmode="title", limit=limit)
+            items = self._zot.items(q=title, qmode="titleCreatorYear", limit=limit)
         except Exception:
             return []
+        finally:
+            # pyzotero accumulates kwargs in url_params and does not reset them
+            # after a call — clear so search params don't bleed into subsequent
+            # item() / update_item() calls on the same singleton instance.
+            self._zot.url_params = {}
         results: list[str] = []
         for item in items:
             item_url = (item.get("data") or {}).get("url", "")
