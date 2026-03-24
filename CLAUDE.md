@@ -89,6 +89,32 @@ API keys are always read from environment first, then config file. `Config.save(
 | `ZOTERO_USER_ID` | Numeric Zotero user ID |
 | `S2_API_KEY` | Semantic Scholar (optional, higher rate limit) |
 
+## Git Workflow
+
+### Branch Strategy
+
+- **`main`** — 生产分支，仅接受来自 `dev` 的 PR 合并，**禁止直接 push**
+- **`dev`** — 日常开发分支，所有功能和修复都在此分支提交
+
+### Rules
+
+- **NEVER** `git push origin main` 直接推送 main
+- 所有变更通过 PR 从 `dev` → `main` 合并
+- 发版时：在 `dev` 完成 release checklist → 提 PR → 合并到 `main` → 在 `main` 打 tag
+
+### Daily workflow
+
+```bash
+# 确保在 dev 分支
+git checkout dev
+
+# 功能开发完毕后推送
+git push origin dev
+
+# 需要发版时，提 PR
+gh pr create --base main --head dev --title "release: vX.Y.Z"
+```
+
 ## Version Management
 
 Claude is responsible for version management on this project. When the user says "发版"、"release"、or similar, execute the full flow without asking for sub-confirmations:

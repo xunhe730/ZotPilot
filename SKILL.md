@@ -70,6 +70,10 @@ After indexing, check for "Skipped N long documents" — offer to index them wit
 | Search external databases for new papers | `search_academic_databases` | `query`, `limit=20` |
 | Add a paper by DOI/arXiv/URL | `add_paper_by_identifier` | `identifier` |
 | Batch add papers from search results | `ingest_papers` | `papers` (from search_academic_databases) |
+| Capture a URL to Zotero via browser | `save_from_url` | `url`, `collection_key`, `tags` — **requires ZotPilot Connector** |
+| Batch capture URLs to Zotero via browser | `save_urls` | `urls` (list, max 10), `collection_key`, `tags` — **requires ZotPilot Connector** |
+
+> **`save_from_url` prerequisites:** ZotPilot Connector must be installed in Chrome and Chrome must be open. The bridge (`:2619`) auto-starts. Returns `item_key` when found in Zotero within 3s discovery window. Requires `ZOTERO_API_KEY` for `item_key` discovery and routing — without it, save still works but `item_key` is not returned.
 
 ### Workflow chains
 
@@ -87,6 +91,43 @@ search_boolean first (exact terms) → fallback to search_papers (semantic) → 
 
 **Find and add new papers:**
 search_academic_databases → review candidates with user → ingest_papers → index_library
+
+**Agent research discovery** ("帮我调研 X"):
+
+Agent judges routing from context — no mechanical Q&A. Capability reference:
+
+| Situation | Save path | PDF? | Speed |
+|---|---|---|---|
+| User says "要读" / "要索引" / "需要全文" | `save_from_url("doi.org/{doi}")` or `save_urls([...])` | ✅ institutional via browser | ~30s/URL |
+| arXiv paper (any intent) | `add_paper_by_identifier("arxiv:ID")` | ✅ OA free | fast |
+| Only need metadata / references | `ingest_papers([{doi:...}])` | ❌ OA only | fast, batch 50 |
+| URL-only, no DOI/arXiv | `save_from_url(url)` or `save_urls(urls)` | ✅ institutional | ~30s/URL |
+
+Discovery channels (agent picks based on topic):
+- **OpenAlex / Semantic Scholar**: `search_academic_databases(query, year_min=...) `— structured results with abstracts, citation counts, DOIs; S2 tried first, OpenAlex fallback on 429
+- **PubMed**: `mcp__claude_ai_PubMed__search_articles` — biomedical focus
+- **arXiv / DOI direct**: `add_paper_by_identifier` — when identifier is known
+- **Real browser search**: Playwright MCP `browser_navigate` + `browser_snapshot` — Google Scholar, any publisher page, no API limits
+
+Step 1 — Discover: `search_academic_databases(X, limit=20)` (add PubMed for biomedical)
+Step 2 — Evaluate: agent ranks by relevance, citations, recency, journal quality; shows user a curated list (5–10 papers) with one-line rationale each; user only confirms or adjusts
+Step 3 — Ingest:
+  - Papers with arxiv_id → `add_paper_by_identifier("arxiv:ID")`
+  - Papers with DOI, PDF needed → `save_urls(["https://doi.org/{doi}", ...])` (batch, max 10)
+  - Papers with DOI, metadata only → `ingest_papers([{doi:...}])`
+Step 4 — Post-ingest (per item_key, when available): `index_library` → `get_paper_details` → `create_note` → `batch_tags` / `batch_collections`
+
+Alert user when using `save_from_url` / `save_urls`: ~30s per URL, Chrome + Connector must be running.
+
+**Agent research ingest** (via ZotPilot Connector):
+Prerequisites: Chrome open, ZotPilot Connector installed, `ZOTERO_API_KEY` configured
+1. `save_from_url(url)` → get `item_key` from result
+2. `index_library(item_key=...)` → incremental index (only this paper)
+3. `get_paper_details(item_key)` → read abstract, methods, conclusions
+4. `create_note(item_key, content)` → write structured reading note
+5. `add_to_collection(item_key, collection_key)` + `add_item_tags(item_key, tags)` → classify
+
+If `item_key` missing from `save_from_url` result: use `advanced_search(title=result["title"])` to locate the item first.
 
 **Organize library (classification advisor):**
 get_library_overview + list_collections + list_tags → analyze themes via
@@ -112,6 +153,8 @@ oversized collections) → propose collection hierarchy + tag normalization
 | "ZOTERO_API_KEY not set" | Write ops need Zotero Web API credentials — see `references/setup-guide.md` |
 | "Document has no DOI" | Cannot use citation tools for this paper |
 | "No chunks found" | Paper not indexed — run `index_library(item_key="...")` |
+| `save_from_url`: "extension_not_connected" | Chrome not open or ZotPilot Connector not installed/enabled. Open Chrome and check `chrome://extensions/` |
+| `save_from_url`: no `item_key` in result | `ZOTERO_API_KEY` not set, or title match was ambiguous. Use `advanced_search(title=...)` to find the item |
 
 ### Write operations (tags, collections)
 

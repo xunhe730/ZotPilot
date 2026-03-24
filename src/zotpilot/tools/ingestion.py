@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Annotated, Literal
 
@@ -470,6 +471,125 @@ def save_from_url(
         "success": False,
         "error": "Timeout (90s) — extension did not respond. "
                  "Ensure ZotPilot Connector is installed and Chrome is open.",
+    }
+
+
+@mcp.tool()
+def save_urls(
+    urls: Annotated[list[str], Field(description="URLs to save. Max 10 per call.")],
+    collection_key: Annotated[str | None, Field(description="Zotero collection key for all saved items")] = None,
+    tags: Annotated[list[str] | None, Field(description="Tags to apply to all saved items")] = None,
+) -> dict:
+    """Batch save multiple URLs to Zotero via ZotPilot Connector.
+
+    Enqueues all URLs immediately (milliseconds each), then waits concurrently
+    for all results. The extension processes them sequentially, so total time
+    is roughly N × per-URL load time (~30s each).
+
+    Requires: ZotPilot Connector installed in Chrome.
+    Max 10 URLs per call.
+    """
+    import json
+    import urllib.request
+
+    if not urls:
+        raise ToolError("urls list cannot be empty.")
+    if len(urls) > 10:
+        raise ToolError(f"Too many URLs ({len(urls)}). Max 10 per call — split into batches.")
+
+    bridge_url = f"http://127.0.0.1:{DEFAULT_PORT}"
+
+    if not BridgeServer.is_running(DEFAULT_PORT):
+        try:
+            BridgeServer.auto_start(DEFAULT_PORT)
+        except RuntimeError as e:
+            return {"success": False, "error": str(e), "results": []}
+
+    # Enqueue all URLs sequentially (fast — each is a local HTTP POST)
+    # id_to_url built at enqueue time to avoid ordering assumptions
+    id_to_url: dict[str, str] = {}
+    enqueue_errors: list[dict] = []
+    for url in urls:
+        command = {"action": "save", "url": url, "collection_key": collection_key, "tags": tags or []}
+        try:
+            req = urllib.request.Request(
+                f"{bridge_url}/enqueue",
+                data=json.dumps(command).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            resp = urllib.request.urlopen(req, timeout=5)
+            body = json.loads(resp.read())
+            if "error_code" in body:
+                enqueue_errors.append({"url": url, "success": False, **body})
+            else:
+                id_to_url[body["request_id"]] = url
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = json.loads(e.read())
+                enqueue_errors.append({"url": url, "success": False, **err_body})
+            except Exception:
+                enqueue_errors.append({"url": url, "success": False, "error": f"HTTP {e.code}"})
+        except Exception as e:
+            enqueue_errors.append({"url": url, "success": False, "error": str(e)})
+
+    # Poll all request_ids concurrently using threads
+    # Per-URL: 90s timeout. Overall hard cap: 300s.
+    _PER_URL_TIMEOUT = 90.0
+    _OVERALL_TIMEOUT = 300.0
+
+    polled: dict[str, dict] = {}
+    polled_lock = threading.Lock()
+
+    def _poll_one(request_id: str, url: str) -> None:
+        deadline = time.monotonic() + _PER_URL_TIMEOUT
+        while time.monotonic() < deadline:
+            time.sleep(2)
+            try:
+                resp = urllib.request.urlopen(
+                    f"{bridge_url}/result/{request_id}", timeout=5
+                )
+                if resp.status == 200:
+                    result = json.loads(resp.read())
+                    final = _apply_bridge_result_routing(result, collection_key, tags)
+                    with polled_lock:
+                        polled[request_id] = {**final, "url": url}
+                    return
+            except Exception:
+                pass
+        with polled_lock:
+            polled[request_id] = {
+                "url": url,
+                "success": False,
+                "error": "Timeout (90s) — extension did not respond.",
+            }
+
+    threads = [
+        threading.Thread(target=_poll_one, args=(rid, url), daemon=True)
+        for rid, url in id_to_url.items()
+    ]
+    for t in threads:
+        t.start()
+
+    overall_deadline = time.monotonic() + _OVERALL_TIMEOUT
+    for t in threads:
+        remaining = overall_deadline - time.monotonic()
+        if remaining > 0:
+            t.join(timeout=remaining)
+
+    all_results = enqueue_errors + [
+        polled.get(rid, {"url": id_to_url[rid], "success": False, "error": "cancelled"})
+        for rid in id_to_url
+    ]
+
+    succeeded = sum(1 for r in all_results if r.get("success") is True)
+    failed = len(all_results) - succeeded
+
+    return {
+        "total": len(urls),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": all_results,
     }
 
 
