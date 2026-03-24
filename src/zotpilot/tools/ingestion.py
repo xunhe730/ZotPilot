@@ -146,6 +146,77 @@ def add_paper_by_identifier(
     }
 
 
+def _reconstruct_abstract(inverted_index: dict | None) -> str:
+    """Reconstruct plain-text abstract from OpenAlex inverted index format."""
+    if not inverted_index:
+        return ""
+    words: dict[int, str] = {}
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            words[pos] = word
+    return " ".join(words[i] for i in sorted(words))
+
+
+def _search_openalex(
+    query: str,
+    limit: int,
+    year_min: int | None,
+    year_max: int | None,
+    sort_by: str,
+) -> list[dict]:
+    """Search OpenAlex API. Returns papers in the same format as S2 results."""
+    sort_map = {
+        "relevance": "relevance_score:desc",
+        "citationCount": "cited_by_count:desc",
+        "publicationDate": "publication_date:desc",
+    }
+    params: dict = {
+        "search": query,
+        "per-page": min(limit, 200),
+        "sort": sort_map.get(sort_by, "relevance_score:desc"),
+        "select": "id,doi,display_name,authorships,publication_year,cited_by_count,open_access,abstract_inverted_index",
+        "mailto": "zotpilot@example.com",
+    }
+    filters: list[str] = []
+    if year_min:
+        filters.append(f"publication_year:>{year_min - 1}")
+    if year_max:
+        filters.append(f"publication_year:<{year_max + 1}")
+    if filters:
+        params["filter"] = ",".join(filters)
+
+    resp = httpx.get(
+        "https://api.openalex.org/works",
+        params=params,
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+
+    results = []
+    for p in resp.json().get("results", []):
+        doi_raw = p.get("doi") or ""
+        doi = doi_raw.replace("https://doi.org/", "").replace("http://doi.org/", "") or None
+        oa_id = p.get("id", "").replace("https://openalex.org/", "")
+        authors = [
+            a.get("author", {}).get("display_name")
+            for a in (p.get("authorships") or [])[:5]
+            if a.get("author", {}).get("display_name")
+        ]
+        abstract = _reconstruct_abstract(p.get("abstract_inverted_index"))
+        results.append({
+            "title": p.get("display_name"),
+            "authors": authors,
+            "year": p.get("publication_year"),
+            "doi": doi,
+            "arxiv_id": None,
+            "openalex_id": oa_id,
+            "cited_by_count": p.get("cited_by_count"),
+            "abstract_snippet": abstract[:300],
+            "_source": "openalex",
+        })
+    return results
+
+
 @mcp.tool()
 def search_academic_databases(
     query: Annotated[str, Field(description="Search query for academic papers")],
@@ -157,9 +228,14 @@ def search_academic_databases(
         Field(description="Sort order: relevance (default), citationCount, or publicationDate")
     ] = "relevance",
 ) -> list[dict]:
-    """Search Semantic Scholar for academic papers.
-    Does NOT add to Zotero. Use ingest_papers to add selected results to your library."""
+    """Search academic databases for papers. Does NOT add to Zotero.
+    Use ingest_papers to add selected results to your library.
+
+    Tries Semantic Scholar first; falls back to OpenAlex automatically on rate-limit (429)
+    or timeout. Both return the same result shape."""
     config = _get_config()
+
+    # --- Semantic Scholar ---
     params: dict = {
         "query": query,
         "limit": limit,
@@ -175,6 +251,7 @@ def search_academic_databases(
     if config.semantic_scholar_api_key:
         headers["x-api-key"] = config.semantic_scholar_api_key
 
+    s2_error: str | None = None
     try:
         resp = httpx.get(
             "https://api.semanticscholar.org/graph/v1/paper/search",
@@ -182,26 +259,48 @@ def search_academic_databases(
             headers=headers,
             timeout=15.0,
         )
-        resp.raise_for_status()
+        if resp.status_code == 429:
+            s2_error = "rate_limited"
+        else:
+            resp.raise_for_status()
+            papers = resp.json().get("data", [])
+            return [
+                {
+                    "title": p.get("title"),
+                    "authors": [a.get("name") for a in (p.get("authors") or [])[:5]],
+                    "year": p.get("year"),
+                    "doi": (p.get("externalIds") or {}).get("DOI"),
+                    "arxiv_id": (p.get("externalIds") or {}).get("ArXiv"),
+                    "s2_id": p.get("paperId"),
+                    "cited_by_count": p.get("citationCount"),
+                    "abstract_snippet": (p.get("abstract") or "")[:300],
+                    "_source": "semantic_scholar",
+                }
+                for p in papers
+            ]
     except httpx.TimeoutException:
-        raise ToolError("Semantic Scholar search timed out. Try again or reduce limit.")
+        s2_error = "timeout"
     except httpx.HTTPStatusError as e:
-        raise ToolError(f"Semantic Scholar search failed: {e.response.status_code}")
+        s2_error = f"http_{e.response.status_code}"
 
-    papers = resp.json().get("data", [])
-    return [
-        {
-            "title": p.get("title"),
-            "authors": [a.get("name") for a in (p.get("authors") or [])[:5]],
-            "year": p.get("year"),
-            "doi": (p.get("externalIds") or {}).get("DOI"),
-            "arxiv_id": (p.get("externalIds") or {}).get("ArXiv"),
-            "s2_id": p.get("paperId"),
-            "cited_by_count": p.get("citationCount"),
-            "abstract_snippet": (p.get("abstract") or "")[:300],
-        }
-        for p in papers
-    ]
+    # --- OpenAlex fallback ---
+    logger.info(f"S2 unavailable ({s2_error}), falling back to OpenAlex")
+    try:
+        return _search_openalex(query, limit, year_min, year_max, sort_by)
+    except httpx.TimeoutException:
+        raise ToolError(
+            f"Academic search failed: Semantic Scholar ({s2_error}), OpenAlex (timeout). "
+            "Try again later."
+        )
+    except httpx.HTTPStatusError as e:
+        raise ToolError(
+            f"Academic search failed: Semantic Scholar ({s2_error}), "
+            f"OpenAlex (HTTP {e.response.status_code})."
+        )
+    except Exception as e:
+        raise ToolError(
+            f"Academic search failed: Semantic Scholar ({s2_error}), OpenAlex ({e})."
+        )
 
 
 @mcp.tool()
@@ -379,7 +478,8 @@ def _apply_bridge_result_routing(
     collection_key: str | None,
     tags: list[str] | None,
 ) -> dict:
-    """Apply collection/tag routing after a bridge save result.
+    """Apply collection/tag routing after a bridge save result, and always attempt
+    to surface item_key for subsequent pipeline steps (index, note, classify).
 
     Extension result shape:
       {
@@ -394,22 +494,26 @@ def _apply_bridge_result_routing(
         # Save failed — propagate error, no routing possible
         return result
 
-    needs_routing = bool(collection_key) or bool(tags)
-    if not needs_routing:
-        return result
-
     config = _get_config()
     if not config.zotero_api_key:
-        return {
-            **result,
-            "warning": "collection_key and tags ignored — ZOTERO_API_KEY not configured",
-        }
+        # No Web API key — cannot discover item_key or apply routing
+        if collection_key or tags:
+            return {
+                **result,
+                "warning": "collection_key and tags ignored — ZOTERO_API_KEY not configured",
+            }
+        return result
 
     writer = _get_writer()
 
-    # Give Zotero desktop a moment to sync the new item to the web API
-    time.sleep(_ITEM_DISCOVERY_DELAY_S)
+    # Give Zotero desktop a moment to sync the new item to the web API.
+    # Skip the wait when the connector already provided item_key (saveAsWebpage path, ~5%):
+    # the known_key fast-path in _discover_saved_item_key returns immediately without an API call.
+    if not result.get("item_key"):
+        time.sleep(_ITEM_DISCOVERY_DELAY_S)
 
+    # Always attempt item_key discovery — needed for subsequent pipeline steps
+    # (index_library, create_note, add_to_collection) even when no routing requested.
     item_key = _discover_saved_item_key(
         title=result.get("title", ""),
         url=result.get("url", ""),
@@ -417,8 +521,16 @@ def _apply_bridge_result_routing(
         writer=writer,
     )
 
+    out = {**result}
+    if item_key:
+        out["item_key"] = item_key  # surface to caller regardless of routing
+
+    needs_routing = bool(collection_key) or bool(tags)
+    if not needs_routing:
+        return out
+
     if item_key is None:
-        # Could not uniquely identify the saved item
+        # Could not uniquely identify the saved item — count matches for better error message
         discovered = 0
         try:
             discovered = len(writer.find_items_by_url_and_title(
@@ -430,7 +542,7 @@ def _apply_bridge_result_routing(
             warning = "collection_key/tags not applied — item not found in Zotero within discovery window"
         else:
             warning = f"collection_key/tags not applied — ambiguous match ({discovered} items found)"
-        return {**result, "warning": warning}
+        return {**out, "warning": warning}
 
     # Exactly one match — apply routing
     routing_warning = _apply_collection_tag_routing(
@@ -440,7 +552,6 @@ def _apply_bridge_result_routing(
         writer=writer,
     )
 
-    out = {**result}
     if routing_warning:
         out["warning"] = routing_warning
     return out

@@ -247,7 +247,7 @@ class TestSearchAcademicDatabases:
         with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()), \
              patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
             mock_get.side_effect = _httpx.TimeoutException("timeout")
-            with pytest.raises(ToolError, match="timed out"):
+            with pytest.raises(ToolError, match="timeout"):
                 search_academic_databases("test")
 
     def test_http_error_raises_tool_error(self):
