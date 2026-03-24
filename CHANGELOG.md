@@ -31,6 +31,36 @@ git pull
 
 ---
 
+## [0.4.0] - 2026-03-24
+
+### 新功能 / New Features
+- **ZotPilot Connector bridge**：新增 HTTP 轮询桥接服务，让 AI agent 通过 `save_from_url` 工具直接调用 Chrome 扩展保存论文（含机构订阅 PDF）
+  **ZotPilot Connector bridge**: HTTP polling bridge lets AI agents trigger Zotero saves via `save_from_url`, including PDFs behind institutional paywalls
+- **`save_from_url` MCP 工具**：通过真实 Chrome 浏览器（含用户 cookie）保存任意出版商 URL 到 Zotero；自动启动 bridge；发现并返回 `item_key` 供后续 pipeline 使用
+  **`save_from_url` MCP tool**: Save any publisher URL to Zotero via real Chrome with user cookies; auto-starts bridge; discovers and returns `item_key` for downstream pipeline
+- **`save_urls` 批量工具**：一次调用最多 10 个 URL，并发轮询结果，总耗时 ≈ N × 单页加载时间
+  **`save_urls` batch tool**: Up to 10 URLs per call, concurrent result polling, total time ≈ N × per-URL load time
+- **OpenAlex 备用搜索**：`search_academic_databases` 优先 Semantic Scholar，遇到 429/超时自动切换 OpenAlex（`sort=relevance_score:desc`，支持 abstract 重建）
+  **OpenAlex fallback search**: `search_academic_databases` tries S2 first, auto-falls back to OpenAlex on 429/timeout with correct relevance ranking and abstract reconstruction
+- **`bridge` CLI 子命令**：`zotpilot bridge [--port N]` 手动启动 bridge 服务
+  **`bridge` CLI subcommand**: `zotpilot bridge [--port N]` to manually start the bridge
+
+### 修复 / Fixes
+- **JS 重定向页面触发问题**：`agentAPI.js` 中 `_waitForReady` 改为自适应稳定窗口（2000ms），解决 AIP/Cloudflare 中间页被 Zotero 误触发的 bug
+  **JS redirect trigger fix**: `_waitForReady` now uses adaptive 2000ms stability window, fixing Zotero firing on intermediate CF/JS redirect pages instead of the final article
+- **pyzotero `url_params` 泄漏**：`find_items_by_url_and_title` 在 `items()` 调用后清除 `url_params`，避免搜索参数污染后续 `item(key)` 请求
+  **pyzotero `url_params` leak**: Clear `url_params` after `items()` call so search params don't bleed into subsequent `item(key)` requests
+- **Zotero API `qmode` 修复**：`qmode="title"` 改为合法值 `qmode="titleCreatorYear"`
+  **Zotero API `qmode` fix**: Changed invalid `qmode="title"` to valid `qmode="titleCreatorYear"`
+
+### 文档 / Docs
+- **SKILL.md agent 调研工作流**：新增 "Agent research discovery" 4 步工作流，含能力对照表（PDF vs 元数据、调研渠道）和路由判断准则
+  **SKILL.md agent research workflow**: "Agent research discovery" 4-step chain with capability table (PDF vs metadata, discovery channels) and routing heuristics
+- **CLAUDE.md git 工作流**：补充分支策略和日常开发规范
+  **CLAUDE.md git workflow**: Branch strategy and daily development conventions
+
+---
+
 ## [0.3.1] - 2026-03-23
 
 ### 新功能 / New Features

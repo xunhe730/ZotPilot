@@ -195,7 +195,7 @@ class TestGetVersion:
         with patch("importlib.metadata.version", side_effect=Exception("not found")):
             version = _get_current_version()
         # Falls back to zotpilot.__version__
-        assert version == "0.3.1"
+        assert version == "0.4.0"
 
 
 # ---------------------------------------------------------------------------
