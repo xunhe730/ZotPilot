@@ -143,11 +143,10 @@ Display format (show to user before ingesting):
 
 Step 3 — Ingest (after user confirms list):
 
-**De-duplicate first.** Before routing any paper, check if it already exists in Zotero:
-- Use `advanced_search(conditions=[{field:"doi", op:"is", value:"..."}])` for DOI-based lookup
-- If already in library: skip ingest, inform user ("已在库中: Title"), proceed to Step 4 with the existing `item_key`
-- If not found: proceed with routing below
-- Batch check is fine — run all DOI lookups before starting any saves
+**De-duplicate first.** Batch-check all candidate DOIs in a single call before any saves:
+- Use `advanced_search(conditions=[{field:"doi", op:"is", value:"doi1"}, {field:"doi", op:"is", value:"doi2"}, ...], match:"any")` to check all DOIs at once
+- Papers already in library: skip ingest, inform user ("已在库中: Title"), proceed to Step 4 with the existing `item_key`
+- Papers not found: proceed with routing below
 
 Route each **new** paper by priority:
 

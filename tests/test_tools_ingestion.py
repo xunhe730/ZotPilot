@@ -615,3 +615,68 @@ class TestSearchAcademicDatabasesV2:
 
         _, kwargs = mock_get.call_args
         assert kwargs.get("params", {}).get("mailto") == "myemail@institution.edu"
+
+
+# ---------------------------------------------------------------------------
+# _enrich_oa_url
+# ---------------------------------------------------------------------------
+
+class TestEnrichOaUrl:
+    def test_returns_oa_url_when_present(self):
+        from zotpilot.tools.ingestion import _enrich_oa_url
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"open_access": {"is_oa": True, "oa_url": "https://oa.example.com/paper.pdf"}}
+
+        with patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp):
+            result = _enrich_oa_url("10.1234/test")
+
+        assert result == "https://oa.example.com/paper.pdf"
+
+    def test_returns_none_on_404(self):
+        from zotpilot.tools.ingestion import _enrich_oa_url
+        import httpx as _httpx
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        with patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp):
+            result = _enrich_oa_url("10.1234/nonexistent")
+
+        assert result is None
+
+    def test_returns_none_on_network_error(self):
+        from zotpilot.tools.ingestion import _enrich_oa_url
+        import httpx as _httpx
+
+        with patch("zotpilot.tools.ingestion.httpx.get", side_effect=_httpx.TimeoutException("timeout")):
+            result = _enrich_oa_url("10.1234/test")
+
+        assert result is None
+
+    def test_skipped_when_oa_url_already_set(self):
+        """add_paper_by_identifier should NOT call _enrich_oa_url when metadata.oa_url is already set."""
+        metadata = _make_metadata(oa_url="https://already.set/paper.pdf", arxiv_id=None)
+        resolver = _make_resolver(metadata=metadata)
+        writer = _make_writer()
+
+        with patch("zotpilot.tools.ingestion._get_resolver", return_value=resolver), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._enrich_oa_url") as mock_enrich:
+            add_paper_by_identifier("10.1038/test", attach_pdf=True)
+
+        mock_enrich.assert_not_called()
+
+    def test_enrichment_called_when_oa_url_missing(self):
+        """add_paper_by_identifier should call _enrich_oa_url when oa_url is None and no arxiv_id."""
+        metadata = _make_metadata(oa_url=None, arxiv_id=None)
+        resolver = _make_resolver(metadata=metadata)
+        writer = _make_writer()
+
+        with patch("zotpilot.tools.ingestion._get_resolver", return_value=resolver), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._enrich_oa_url", return_value="https://enriched.url/paper.pdf") as mock_enrich:
+            add_paper_by_identifier("10.1038/test", attach_pdf=True)
+
+        mock_enrich.assert_called_once_with("10.1038/test")

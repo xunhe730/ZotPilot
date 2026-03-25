@@ -106,6 +106,10 @@ def add_paper_by_identifier(
 
     metadata = resolver.resolve(identifier)  # raises ToolError on unknown format
 
+    # Enrich oa_url from OpenAlex when CrossRef didn't provide one
+    if attach_pdf and metadata.doi and not metadata.oa_url and not metadata.arxiv_id:
+        metadata.oa_url = _enrich_oa_url(metadata.doi)
+
     if metadata.doi:
         existing = writer.check_duplicate_by_doi(metadata.doi)
         if existing:
@@ -145,6 +149,28 @@ def add_paper_by_identifier(
         "item_type": metadata.item_type,
         "pdf": pdf_status,
     }
+
+
+def _enrich_oa_url(doi: str) -> str | None:
+    """Query OpenAlex by DOI to get an open-access PDF URL.
+
+    Returns the oa_url string if available, or None on any error or missing data.
+    Non-fatal: callers should proceed normally when this returns None.
+    """
+    try:
+        resp = httpx.get(
+            f"https://api.openalex.org/works/doi:{doi}",
+            params={"select": "open_access"},
+            timeout=8.0,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        oa = resp.json().get("open_access") or {}
+        return oa.get("oa_url")
+    except Exception as e:
+        logger.warning("OpenAlex OA enrichment failed for doi:%s — %s", doi, e)
+        return None
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
