@@ -6,6 +6,7 @@ from typing import Annotated
 from pydantic import Field
 
 from ..state import ToolError, _get_api_reader, _get_store_optional, _get_zotero, mcp
+from ..zotero_client import _sqlite_uri
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ def profile_library() -> dict:
 
     # --- total items and year distribution: query SQLite directly so all items
     #     are counted, not just those that happen to have PDF attachments ---
-    conn = sqlite3.connect(str(zotero.db_path))
+    conn = sqlite3.connect(_sqlite_uri(zotero.db_path), uri=True)
     conn.row_factory = sqlite3.Row
     try:
         total_row = conn.execute("""
@@ -186,7 +187,7 @@ def profile_library() -> dict:
         total_items = total_row["cnt"] if total_row else 0
 
         year_rows = conn.execute("""
-            SELECT idv.value AS year, COUNT(*) AS cnt
+            SELECT CAST(substr(idv.value, 1, 4) AS TEXT) AS year, COUNT(*) AS cnt
             FROM items i
             JOIN itemTypes it ON i.itemTypeID = it.itemTypeID
             JOIN itemData id ON i.itemID = id.itemID
@@ -195,10 +196,11 @@ def profile_library() -> dict:
             WHERE i.libraryID = ?
               AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
               AND it.typeName NOT IN ('note', 'attachment')
-              AND f.fieldName = 'year'
-              AND idv.value != ''
-            GROUP BY idv.value
-            ORDER BY idv.value DESC
+              AND f.fieldName = 'date'
+              AND length(idv.value) >= 4
+              AND CAST(substr(idv.value, 1, 4) AS INTEGER) > 1000
+            GROUP BY year
+            ORDER BY year DESC
         """, (zotero.library_id,)).fetchall()
         year_distribution = {r["year"]: r["cnt"] for r in year_rows}
 
