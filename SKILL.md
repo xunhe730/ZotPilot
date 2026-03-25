@@ -167,35 +167,31 @@ If `item_key` missing from `save_from_url` result: use `advanced_search(title=re
 
 **Library profiling & ZOTPILOT.md** (first-time setup or refresh):
 Prerequisites: Library indexed (`index_library` run at least once)
-1. `profile_library()` → get library stats + existing_profile (existing ZOTPILOT.md contents if any)
-2. Show draft analysis to user: "这是我对你文献库的分析，你觉得准确吗？" — include year range, top topics/tags, coverage gaps
-3. User confirms or corrects the analysis
-4. Interview (one question at a time):
-   a. 你的学科领域是什么？
-   b. 你的身份？(PhD / Master / Researcher / Other)
-   c. 你主要的研究方向？(1-3个)
-   d. 你关注哪些交叉学科？
-5. Write `~/.config/zotpilot/ZOTPILOT.md` with the following structure:
 
-```markdown
-# ZotPilot User Profile
-generated: YYYY-MM-DD
+This is an **intelligent, adaptive workflow** — not a fixed questionnaire. The agent should bring genuine understanding of the library to the conversation, form hypotheses, and conduct a natural dialogue rather than mechanically asking preset questions.
 
-## Identity
-- Role: PhD
-- Discipline: Computer Science
-- Cross-disciplinary interests: Cognitive Science
+**Phase 1 — Deep library understanding (before talking to the user):**
+1. `profile_library()` → get metadata stats + existing_profile
+2. Use `search_topic()` across multiple angles to understand what the library actually contains: dominant research themes, methodology patterns, key application domains, temporal trends. Form your own interpretation of what this researcher works on and why.
+3. Notice anomalies: off-topic papers, gaps in coverage, unusual clusters — these become conversation material.
 
-## Research Focus
-- Primary: Multimodal LLMs, Vision-Language Models
-- Secondary: Efficient inference
+**Phase 2 — Dialogue (bring your understanding, not a form):**
+- Open by sharing your interpretation of the library, including specific observations: "从你的文献结构来看，你似乎在做X方向，重点在Y，Z这块覆盖较少——这个判断准确吗？"
+- Let the conversation flow naturally. Use what you know about the library to ask targeted follow-up questions rather than a fixed list. Examples of things worth exploring:
+  - What's the core problem they're trying to solve?
+  - Which papers/directions are most central to their current work?
+  - Are the anomalous/off-topic entries intentional or accidental?
+  - What's missing that they wish they had more of?
+- Minimum information needed for a useful profile: discipline, role, primary research focus, cross-disciplinary interests — but gather these through conversation, not a checklist.
 
-## Library Analysis
-- Total indexed: 312 papers
-- Year distribution: 70% 2021-2025, 20% 2016-2020, 10% pre-2016
-- Topic density: LLM (high), CV (medium), Bio (sparse)
-- Gaps: few survey papers, weak on pre-transformer foundations
-```
+**Phase 3 — Write `~/.config/zotpilot/ZOTPILOT.md`:**
+The profile should feel like a researcher summary written by someone who understands the work — not a filled-in template. Include:
+- Identity (role, discipline, cross-disciplinary interests)
+- Research focus (primary directions, specific problems being worked on)
+- Library character (what the collection reveals about their research style and stage)
+- Gaps and notes (coverage weaknesses, off-topic entries, what to watch for)
+
+The format is flexible — write what's useful, not what fits a schema.
 
 Trigger: when user says "分析我的文献库", "建立研究档案", "profile my library", or when ZOTPILOT.md does not exist and a research workflow is about to start.
 
