@@ -141,7 +141,15 @@ Display format (show to user before ingesting):
    "视觉语言对齐的代表工作，补充你库中 contrastive learning 的空白"
 ```
 
-Step 3 — Ingest (after user confirms list): route each paper by priority:
+Step 3 — Ingest (after user confirms list):
+
+**De-duplicate first.** Before routing any paper, check if it already exists in Zotero:
+- Use `advanced_search(conditions=[{field:"doi", op:"is", value:"..."}])` for DOI-based lookup
+- If already in library: skip ingest, inform user ("已在库中: Title"), proceed to Step 4 with the existing `item_key`
+- If not found: proceed with routing below
+- Batch check is fine — run all DOI lookups before starting any saves
+
+Route each **new** paper by priority:
 
 | Priority | Condition | Tool | Result |
 |----------|-----------|------|--------|
