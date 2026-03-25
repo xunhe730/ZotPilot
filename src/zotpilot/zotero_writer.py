@@ -114,6 +114,7 @@ class ZoteroWriter:
 
         # Build note template
         template = self._zot.item_template("note")
+        self._zot.url_params = None  # item_template may leave url_params dirty on cache hit
         template["parentItem"] = item_key
         template["note"] = html_content
         template["tags"] = [{"tag": t} for t in (tags or [])]
@@ -205,6 +206,7 @@ class ZoteroWriter:
             template = self._zot.item_template(metadata.item_type)
         except Exception:
             template = self._zot.item_template("journalArticle")
+        self._zot.url_params = None  # item_template may leave url_params dirty on cache hit
 
         template["title"] = metadata.title
         template["creators"] = metadata.authors or []
