@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from zotpilot import __version__
 from zotpilot.cli import (
     SkillDir,
     _detect_cli_installer,
@@ -195,7 +196,7 @@ class TestGetVersion:
         with patch("importlib.metadata.version", side_effect=Exception("not found")):
             version = _get_current_version()
         # Falls back to zotpilot.__version__
-        assert version == "0.4.0"
+        assert version == __version__
 
 
 # ---------------------------------------------------------------------------
