@@ -2,6 +2,32 @@
 
 本文件为 Claude Code 在此仓库中工作时提供指引。
 
+## 项目定位
+
+ZotPilot 是一个 **MCP server**，给本地 Zotero 文献库加上语义搜索、章节感知检索、引用图谱查询和 AI 辅助整理功能。同时附带 Agent Skill（`SKILL.md`），提供跨平台安装引导和工具使用决策树。
+
+**核心价值**：解决 Zotero 原生关键词搜索的局限——按语义搜论文、定位到具体章节、探索引用关系、批量整理标签集合，论文数据全程不离开用户电脑。
+
+**分发方式**：clone 仓库到 agent 的 skills 目录，`SKILL.md` 提供安装引导，`scripts/run.py` 负责自动安装 CLI（`pip`/`uv`）并注册 MCP 服务器。
+
+**支持平台**：macOS / Linux / Windows；Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf
+
+## 技术栈
+
+| 层次 | 技术 |
+|------|------|
+| MCP 框架 | FastMCP |
+| 向量数据库 | ChromaDB |
+| PDF 提取 | PyMuPDF（文本）+ Tesseract（OCR 兜底）+ Claude Haiku（可选视觉表格修复） |
+| 嵌入模型 | Gemini `gemini-embedding-001` / DashScope `text-embedding-v4` / Local `all-MiniLM-L6-v2` |
+| Zotero 读 | 本地 SQLite（`mode=ro&immutable=1`，只读，不影响 Zotero 客户端） |
+| Zotero 写 | pyzotero（官方 Web API v3） |
+| 引用图谱 | OpenAlex API（主）+ Semantic Scholar（辅，需 `S2_API_KEY`） |
+| 包管理 | uv |
+| 代码检查 | ruff + mypy |
+| 测试 | pytest（覆盖率阈值 29%） |
+| 运行时 | Python 3.10+ |
+
 ## 常用命令
 
 ```bash
@@ -28,6 +54,18 @@ uv run pytest -k test_name            # 单个测试
 uv run ruff check src tests
 uv run mypy src
 ```
+
+## 代码搜索
+
+**首选 `mgrep`**（语义搜索，比 grep/ripgrep 更精准）：
+
+```bash
+mgrep "heartbeat 断连原因"          # 自然语言语义搜索
+mgrep "writer.check_has_pdf"        # 精确符号搜索
+mgrep "translator fallback logic"   # 跨文件概念搜索
+```
+
+仅在 mgrep 不可用或需要精确正则时退回到 `Grep` 工具。
 
 ## 内部文档
 
