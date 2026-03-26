@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 def search_papers(
     query: Annotated[str, Field(description="Natural language search query")],
     top_k: Annotated[int, Field(description="Number of results", ge=1, le=50)] = 10,
-    context_chunks: Annotated[int, Field(description="Adjacent chunks to include for context", ge=0, le=3)] = 1,
+    context_chunks: Annotated[int, Field(description="Adjacent chunks to include for context", ge=0, le=3)] = 0,
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
@@ -47,6 +47,7 @@ def search_papers(
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
     required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,  # noqa: E501
+    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
     start = time.perf_counter()
@@ -106,7 +107,7 @@ def search_papers(
         top_results = _merge_results_by_chunk(all_results[0], all_results[1], min(top_k, 50))
 
     logger.debug(f"search_papers: {time.perf_counter() - start:.3f}s")
-    return [_result_to_dict(r) for r in top_results]
+    return [_result_to_dict(r, verbosity=verbosity) for r in top_results]
 
 
 @mcp.tool()
@@ -121,6 +122,7 @@ def search_topic(
     chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
 ) -> list[dict]:
     """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""  # noqa: E501
     start = time.perf_counter()
@@ -164,7 +166,7 @@ def search_topic(
         r = retriever.search(
             query=q,
             top_k=fetch_k,
-            context_window=1,
+            context_window=0,
             filters=_build_chromadb_filters(year_min, year_max, chunk_types)
         )
         r = _apply_text_filters(r, author, tag, collection)
@@ -210,28 +212,33 @@ def search_topic(
 
         paper_results.append({
             "doc_id": doc_id,
-            "item_key": doc_id,
             "doc_title": best_hit.doc_title,
-            "authors": best_hit.authors,
             "year": best_hit.year,
-            "citation_key": best_hit.citation_key,
-            "publication": best_hit.publication,
-            "journal_quartile": best_hit.journal_quartile,
-            # Raw similarity scores
-            "avg_score": round(sum(h.score for h in hits) / len(hits), 3),
-            "best_chunk_score": round(best_hit.score, 3),
-            # Composite scores
             "avg_composite_score": round(avg_composite, 3),
             "best_composite_score": round(best_composite, 3),
-            "best_passage_section": best_hit.section,
-            "best_passage_section_confidence": round(best_hit.section_confidence, 2),
             "num_relevant_chunks": len(hits),
             "best_passage": best_hit.text,
             "best_passage_page": best_hit.page_num,
-            "best_passage_context": best_hit.full_context(),
-            "tags": best_hit.tags,
-            "collections": best_hit.collections,
+            "best_passage_section": best_hit.section,
         })
+
+        if verbosity in {"standard", "full"}:
+            paper_results[-1].update({
+                "authors": best_hit.authors,
+                "citation_key": best_hit.citation_key,
+                "publication": best_hit.publication,
+                "journal_quartile": best_hit.journal_quartile,
+                # Raw similarity scores
+                "avg_score": round(sum(h.score for h in hits) / len(hits), 3),
+                "best_chunk_score": round(best_hit.score, 3),
+                "best_passage_section_confidence": round(best_hit.section_confidence, 2),
+            })
+
+        if verbosity == "full":
+            paper_results[-1].update({
+                "tags": best_hit.tags,
+                "collections": best_hit.collections,
+            })
 
     paper_results.sort(key=lambda p: p["avg_composite_score"], reverse=True)
     logger.debug(f"search_topic: {time.perf_counter() - start:.3f}s")
@@ -244,6 +251,7 @@ def search_boolean(
     operator: Annotated[str, Field(description="AND (all terms required) or OR (any term)")] = "AND",
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
 ) -> list[dict]:
     """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""  # noqa: E501
     zotero = _get_zotero()
@@ -272,14 +280,22 @@ def search_boolean(
             "item_key": item.item_key,
             "doc_id": item.item_key,
             "title": item.title,
-            "authors": item.authors,
             "year": item.year,
-            "publication": item.publication,
-            "citation_key": item.citation_key,
-            "tags": item.tags,
-            "collections": item.collections,
-            "doi": item.doi,
+            "authors": item.authors,
         })
+
+        if verbosity in {"standard", "full"}:
+            results[-1].update({
+                "citation_key": item.citation_key,
+                "publication": item.publication,
+                "doi": item.doi,
+            })
+
+        if verbosity == "full":
+            results[-1].update({
+                "tags": item.tags,
+                "collections": item.collections,
+            })
 
     # Sort by year descending
     results.sort(key=lambda x: x.get("year") or 0, reverse=True)
@@ -296,6 +312,7 @@ def search_tables(
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
 ) -> list[dict]:
     """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""  # noqa: E501
     start = time.perf_counter()
@@ -346,12 +363,9 @@ def search_tables(
         meta = original.metadata if original else {}
 
         output.append({
+            "doc_id": r.doc_id,
             "doc_title": r.doc_title,
-            "authors": r.authors,
             "year": r.year,
-            "citation_key": r.citation_key,
-            "publication": r.publication,
-            "journal_quartile": r.journal_quartile,
             "page": r.page_num,
             "table_index": meta.get("table_index", 0),
             "caption": meta.get("table_caption", ""),
@@ -360,8 +374,15 @@ def search_tables(
             "num_cols": meta.get("table_num_cols", 0),
             "relevance_score": round(r.score, 3),
             "composite_score": round(r.composite_score, 3) if r.composite_score is not None else None,
-            "doc_id": r.doc_id,
         })
+
+        if verbosity in {"standard", "full"}:
+            output[-1].update({
+                "authors": r.authors,
+                "citation_key": r.citation_key,
+                "publication": r.publication,
+                "journal_quartile": r.journal_quartile,
+            })
 
     logger.debug(f"search_tables: {time.perf_counter() - start:.3f}s")
     return output
@@ -376,6 +397,7 @@ def search_figures(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
 ) -> list[dict]:
     """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""  # noqa: E501
     start = time.perf_counter()
@@ -400,16 +422,20 @@ def search_figures(
         output.append({
             "doc_id": meta.get("doc_id", ""),
             "doc_title": meta.get("doc_title", ""),
-            "authors": meta.get("authors", ""),
             "year": meta.get("year"),
-            "citation_key": meta.get("citation_key", ""),
-            "publication": meta.get("publication", ""),
             "page_num": meta.get("page_num", 0),
             "figure_index": meta.get("figure_index", 0),
             "caption": meta.get("caption", ""),
             "image_path": meta.get("image_path", ""),
             "relevance_score": round(r.score, 3),
         })
+
+        if verbosity in {"standard", "full"}:
+            output[-1].update({
+                "authors": meta.get("authors", ""),
+                "citation_key": meta.get("citation_key", ""),
+                "publication": meta.get("publication", ""),
+            })
 
     logger.debug(f"search_figures: {time.perf_counter() - start:.3f}s")
     return output

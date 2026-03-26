@@ -68,8 +68,14 @@ class TestSearchPapers:
         output = search_papers(query="test query", top_k=5)
         assert len(output) == 1
         assert output[0]["doc_id"] == "DOC1"
-        assert output[0]["item_key"] == "DOC1"
         assert output[0]["passage"] == "some text"
+        assert "authors" not in output[0]
+        mock_singletons["retriever"].search.assert_called_once_with(
+            query="test query",
+            top_k=15,
+            context_window=0,
+            filters=None,
+        )
 
     def test_invalid_chunk_types_raises(self, mock_singletons):
         from zotpilot.tools.search import search_papers
@@ -93,7 +99,14 @@ class TestSearchTopic:
 
         output = search_topic(query="neural networks", num_papers=5)
         assert len(output) == 2
-        assert output[0]["item_key"] == output[0]["doc_id"]
+        assert "item_key" not in output[0]
+        assert "best_passage_context" not in output[0]
+        mock_singletons["retriever"].search.assert_called_once_with(
+            query="neural networks",
+            top_k=75,
+            context_window=0,
+            filters=None,
+        )
 
     def test_invalid_chunk_types_raises(self, mock_singletons):
         from zotpilot.tools.search import search_topic

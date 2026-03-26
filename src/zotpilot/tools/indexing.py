@@ -10,6 +10,31 @@ from ..state import ToolError, _get_config, _get_retriever, _get_store, _get_zot
 logger = logging.getLogger(__name__)
 
 
+def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
+    """Return unindexed Zotero papers and their total count."""
+    zotero = _get_zotero()
+    indexed_set = set(_get_store().get_indexed_doc_ids())
+    papers: list[dict] = []
+    total = 0
+
+    for item in zotero.get_all_items_with_pdfs():
+        if item.item_key in indexed_set:
+            continue
+        total += 1
+        if total <= offset:
+            continue
+        if limit is not None and len(papers) >= limit:
+            continue
+        papers.append({
+            "doc_id": item.item_key,
+            "title": item.title or "(no title)",
+            "year": item.year,
+            "authors": item.authors,
+        })
+
+    return papers, total
+
+
 @mcp.tool()
 def index_library(
     force_reindex: Annotated[bool, Field(description="Delete and rebuild index for matching items")] = False,
@@ -19,6 +44,7 @@ def index_library(
     no_vision: Annotated[bool, Field(description="Disable vision-based table extraction")] = False,
     batch_size: Annotated[int, Field(description="Items per batch (default 20). Set 0 for all at once. Call repeatedly until has_more=false. Vision extraction is auto-disabled in batch mode; use batch_size=0 for vision.")] = 20,  # noqa: E501
     max_pages: Annotated[int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")] = None,  # noqa: E501
+    include_summary: Annotated[bool, Field(description="Include extended indexing summary fields")] = False,
 ) -> dict:
     """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all."""  # noqa: E501
     from dataclasses import replace as dc_replace
@@ -67,21 +93,27 @@ def index_library(
             "quality_grade": r.quality_grade,
         })
 
-    return {
+    response = {
         "results": serialized_results,
         "indexed": result["indexed"],
         "failed": result["failed"],
         "empty": result["empty"],
         "skipped": result["skipped"],
         "already_indexed": result["already_indexed"],
-        "quality_distribution": result.get("quality_distribution"),
-        "extraction_stats": result.get("extraction_stats"),
-        "long_documents": result.get("long_documents", []),
-        "skipped_long": result.get("skipped_long", 0),
-        "total_to_index": result.get("total_to_index", 0),
         "has_more": result.get("has_more", False),
         "vision_enabled": config.vision_enabled,
     }
+
+    if include_summary:
+        response.update({
+            "quality_distribution": result.get("quality_distribution"),
+            "extraction_stats": result.get("extraction_stats"),
+            "long_documents": result.get("long_documents", []),
+            "skipped_long": result.get("skipped_long", 0),
+            "total_to_index": result.get("total_to_index", 0),
+        })
+
+    return response
 
 
 @mcp.tool()
@@ -128,19 +160,10 @@ def get_index_stats() -> dict:
         journal_counts[key] += 1
 
     # Check for unindexed papers: items in Zotero with PDFs but not in ChromaDB
-    unindexed_papers = []
+    sample_unindexed = []
+    unindexed_count = 0
     try:
-        zotero = _get_zotero()
-        all_items = zotero.get_all_items_with_pdfs()
-        indexed_set = set(doc_ids)
-        for item in all_items:
-            if item.item_key not in indexed_set:
-                unindexed_papers.append({
-                    "item_key": item.item_key,
-                    "title": item.title or "(no title)",
-                    "year": item.year,
-                    "authors": item.authors,
-                })
+        sample_unindexed, unindexed_count = _collect_unindexed_papers(limit=5, offset=0)
     except Exception as e:
         logger.warning(f"Could not check for unindexed papers: {e}")
 
@@ -151,14 +174,46 @@ def get_index_stats() -> dict:
         "section_coverage": dict(section_counts),
         "journal_coverage": dict(journal_counts),
         "chunk_types": dict(chunk_type_counts),
-        "unindexed_count": len(unindexed_papers),
-        "unindexed_papers": unindexed_papers,
+        "unindexed_count": unindexed_count,
+        "sample_unindexed": sample_unindexed,
     }
 
-    if unindexed_papers:
+    if unindexed_count:
+        sample_note = f" Showing {len(sample_unindexed)} sample(s)." if sample_unindexed else ""
         result["_notice"] = (
-            f"\u26a0\ufe0f {len(unindexed_papers)} paper(s) in Zotero are not yet indexed. "
-            "Call index_library() to update the RAG library."
+            f"\u26a0\ufe0f {unindexed_count} paper(s) in Zotero are not yet indexed."
+            f"{sample_note} Call index_library() to update the RAG library."
         )
 
     return result
+
+
+@mcp.tool()
+def get_unindexed_papers(
+    limit: Annotated[int, Field(description="Papers per page", ge=1, le=200)] = 50,
+    offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
+) -> dict:
+    """List unindexed Zotero papers with pagination."""
+    _config = _get_config()
+    if _config.embedding_provider == "none":
+        return {
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "papers": [],
+            "mode": "no-rag",
+        }
+
+    _get_retriever()
+
+    try:
+        papers, total = _collect_unindexed_papers(limit=limit, offset=offset)
+    except Exception as e:
+        raise ToolError(f"Could not collect unindexed papers: {e}")
+
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "papers": papers,
+    }

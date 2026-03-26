@@ -515,6 +515,9 @@ class TestIngestPapers:
         save_urls_mock.assert_called_once()
         assert result["ingested"] == 1
         assert result["preflight_report"]["all_clear"] is True
+        assert result["preflight_report"]["accessible_count"] == 1
+        assert result["preflight_report"]["skipped_count"] == 0
+        assert "accessible" not in result["preflight_report"]
 
     def test_preflight_blocked_returns_consistent_envelope(self):
         papers = [{"doi": "10.1038/blocked"}]
@@ -535,7 +538,38 @@ class TestIngestPapers:
         assert result["failed"] == 0
         assert result["results"] == []
         assert result["preflight_report"]["all_clear"] is False
+        assert result["preflight_report"]["accessible_count"] == 0
+        assert result["preflight_report"]["skipped_count"] == 0
         assert "preflight=False" in result["message"]
+
+    def test_preflight_verbose_includes_full_arrays(self):
+        papers = [{"doi": "10.1038/test"}]
+        preflight_report = {
+            "checked": 1,
+            "accessible": [{"url": "https://doi.org/10.1038/test", "title": "ok", "final_url": "https://doi.org/10.1038/test"}],
+            "blocked": [],
+            "skipped": [{"url": "https://doi.org/10.1038/other", "reason": "sampling"}],
+            "errors": [],
+            "all_clear": True,
+        }
+        with patch("zotpilot.tools.ingestion._preflight_urls", return_value=preflight_report), \
+             patch("zotpilot.tools.ingestion.save_urls", return_value={
+                 "total": 1,
+                 "succeeded": 1,
+                 "failed": 0,
+                 "results": [{
+                     "success": True,
+                     "item_key": "KEY1",
+                     "title": "Test Paper",
+                     "url": "https://doi.org/10.1038/test",
+                 }],
+             }):
+            result = ingest_papers(papers, verbose_preflight=True)
+
+        assert result["preflight_report"]["accessible_count"] == 1
+        assert result["preflight_report"]["skipped_count"] == 1
+        assert len(result["preflight_report"]["accessible"]) == 1
+        assert len(result["preflight_report"]["skipped"]) == 1
 
     def test_preflight_false_skips_preflight(self):
         papers = [{"doi": "10.1038/test"}]
@@ -574,6 +608,47 @@ class TestIngestPapers:
 
         assert success_result["ingested"] == 1
         assert blocked_result["ingested"] == 0
+
+    def test_preflight_report_is_summarized_by_default(self):
+        papers = [{"doi": "10.1038/test"}]
+        full_report = {
+            "checked": 2,
+            "accessible": [{"url": "https://doi.org/10.1038/test", "title": "ok", "final_url": "https://doi.org/10.1038/test"}],
+            "blocked": [],
+            "skipped": [{"url": "https://example.com/skip", "reason": "sampling"}],
+            "errors": [],
+            "all_clear": True,
+        }
+        with patch("zotpilot.tools.ingestion._preflight_urls", return_value=full_report), \
+             patch("zotpilot.tools.ingestion.save_urls", return_value=_make_save_urls_success()):
+            result = ingest_papers(papers)
+
+        preflight_report = result["preflight_report"]
+        assert preflight_report["checked"] == 2
+        assert preflight_report["accessible_count"] == 1
+        assert preflight_report["skipped_count"] == 1
+        assert "accessible" not in preflight_report
+        assert "skipped" not in preflight_report
+
+    def test_preflight_report_can_include_full_arrays(self):
+        papers = [{"doi": "10.1038/test"}]
+        full_report = {
+            "checked": 2,
+            "accessible": [{"url": "https://doi.org/10.1038/test", "title": "ok", "final_url": "https://doi.org/10.1038/test"}],
+            "blocked": [],
+            "skipped": [{"url": "https://example.com/skip", "reason": "sampling"}],
+            "errors": [],
+            "all_clear": True,
+        }
+        with patch("zotpilot.tools.ingestion._preflight_urls", return_value=full_report), \
+             patch("zotpilot.tools.ingestion.save_urls", return_value=_make_save_urls_success()):
+            result = ingest_papers(papers, verbose_preflight=True)
+
+        preflight_report = result["preflight_report"]
+        assert preflight_report["accessible_count"] == 1
+        assert preflight_report["skipped_count"] == 1
+        assert preflight_report["accessible"][0]["url"] == "https://doi.org/10.1038/test"
+        assert preflight_report["skipped"][0]["reason"] == "sampling"
 
 
 # ---------------------------------------------------------------------------

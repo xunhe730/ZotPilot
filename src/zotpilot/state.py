@@ -146,17 +146,24 @@ ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
 EXTERNAL databases (OpenAlex primary, Semantic Scholar supplement when S2_API_KEY is set) \
 and finds papers not yet in your library.
 
+**Default research flow:**
+1. `search_topic` to discover what is already in the local library
+2. Optionally `search_papers` for supporting passages
+3. Optionally `get_passage_context` for surrounding text
+
+All search tools default to `verbosity="minimal"`. Escalate to `standard` \
+or `full` only when needed. `search_papers` defaults to `context_chunks=0`; \
+set `context_chunks=1` only when adjacent context is useful. \
+`search_topic` no longer returns `best_passage_context` — use \
+`search_papers` or `get_passage_context` instead.
+
+`doc_id` is the canonical identifier across tools. In `search_boolean`, \
+`item_key` remains as a backward-compatible alias with the same value. \
+`get_library_overview` and `get_paper_details` return `doc_id` instead of `key`.
+
 **Typical literature collection workflow:**
 1. `search_academic_databases` → review candidates
 2. `ingest_papers` with selected papers → added to Zotero with metadata and OA PDF
-
-Start with get_index_stats to check readiness. If doc count is 0, \
-tell the user to run `zotpilot index` first.
-
-For thorough research, chain: search_topic → get_paper_details → \
-search_papers with section_weights. Use search_boolean for exact \
-terms (author names, acronyms). Use get_passage_context to expand \
-any result with surrounding text.
 
 advanced_search works without indexing — use for precise metadata \
 filters. get_notes/create_note for reading and writing notes.

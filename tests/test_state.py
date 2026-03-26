@@ -155,6 +155,60 @@ class TestResultToDict:
         assert d["doc_id"] == "DOC1"
         assert d["chunk_index"] == 1
         assert "full_context" in d
+        assert "item_key" not in d
+
+    def test_result_to_dict_minimal_omits_metadata_and_empty_context(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_chunk_0001",
+            text="Some passage text",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2021,
+            page_num=3,
+            chunk_index=1,
+            citation_key="smith2021",
+            publication="Nature",
+            section="results",
+            section_confidence=0.9,
+            journal_quartile="Q1",
+            composite_score=0.78,
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+        assert d["doc_id"] == "DOC1"
+        assert d["passage"] == "Some passage text"
+        assert "authors" not in d
+        assert "citation_key" not in d
+        assert "context_before" not in d
+        assert "full_context" not in d
+
+    def test_result_to_dict_minimal_hides_context_even_if_present(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_chunk_0001",
+            text="Some passage text",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2021,
+            page_num=3,
+            chunk_index=1,
+            citation_key="smith2021",
+            publication="Nature",
+            section="results",
+            section_confidence=0.9,
+            journal_quartile="Q1",
+            composite_score=0.78,
+            context_before=["Before text"],
+            context_after=["After text"],
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+        assert "context_before" not in d
+        assert "context_after" not in d
+        assert "full_context" not in d
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,68 @@ class TestListTags:
         mock_zotero.get_all_tags.assert_called_once()
 
 
+class TestNotesAndAnnotations:
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_notes_truncates_content_in_minimal_mode(self, mock_get_zotero):
+        from zotpilot.tools.library import get_notes
+
+        mock_zotero = MagicMock()
+        mock_zotero.get_notes.return_value = [
+            {"key": "N1", "content": "x" * 250, "title": "Note 1"},
+        ]
+        mock_get_zotero.return_value = mock_zotero
+
+        result = get_notes()
+        assert len(result) == 1
+        assert len(result[0]["content"]) <= 200
+        assert result[0]["content"].startswith("x" * 10)
+        assert result[0]["title"] == "Note 1"
+
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_notes_full_content_when_requested(self, mock_get_zotero):
+        from zotpilot.tools.library import get_notes
+
+        mock_zotero = MagicMock()
+        mock_zotero.get_notes.return_value = [
+            {"key": "N1", "content": "x" * 250},
+        ]
+        mock_get_zotero.return_value = mock_zotero
+
+        result = get_notes(verbosity="full")
+        assert result[0]["content"] == "x" * 250
+
+    @patch("zotpilot.tools.library._get_api_reader")
+    def test_get_annotations_truncates_text_and_comment_in_minimal_mode(self, mock_get_api_reader):
+        from zotpilot.tools.library import get_annotations
+
+        mock_reader = MagicMock()
+        mock_reader.get_annotations.return_value = [
+            {"key": "A1", "text": "t" * 240, "comment": "c" * 220, "page": 1},
+        ]
+        mock_get_api_reader.return_value = mock_reader
+
+        result = get_annotations()
+        assert len(result[0]["text"]) <= 200
+        assert len(result[0]["comment"]) <= 200
+        assert result[0]["text"].startswith("t" * 10)
+        assert result[0]["comment"].startswith("c" * 10)
+        assert result[0]["page"] == 1
+
+    @patch("zotpilot.tools.library._get_api_reader")
+    def test_get_annotations_full_content_when_requested(self, mock_get_api_reader):
+        from zotpilot.tools.library import get_annotations
+
+        mock_reader = MagicMock()
+        mock_reader.get_annotations.return_value = [
+            {"key": "A1", "text": "t" * 240, "comment": "c" * 220},
+        ]
+        mock_get_api_reader.return_value = mock_reader
+
+        result = get_annotations(verbosity="full")
+        assert result[0]["text"] == "t" * 240
+        assert result[0]["comment"] == "c" * 220
+
+
 class TestGetPaperDetails:
     @patch("zotpilot.tools.library._get_store_optional")
     @patch("zotpilot.tools.library._get_zotero")

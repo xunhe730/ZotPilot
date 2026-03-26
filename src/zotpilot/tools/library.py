@@ -1,7 +1,7 @@
 """Library browsing tools: collections, tags, paper details, overview."""
 import logging
 import sqlite3
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -9,6 +9,16 @@ from ..state import ToolError, _get_api_reader, _get_store_optional, _get_zotero
 from ..zotero_client import _sqlite_uri
 
 logger = logging.getLogger(__name__)
+
+
+def _truncate_text(value: str | None, limit: int = 200, add_ellipsis: bool = False) -> str:
+    if not value:
+        return ""
+    if len(value) <= limit:
+        return value
+    suffix = "..." if add_ellipsis else ""
+    trim_limit = max(limit - len(suffix), 0)
+    return f"{value[:trim_limit]}{suffix}"
 
 
 def _invalidate_collection_cache():
@@ -67,7 +77,6 @@ def get_paper_details(
         quality_grade = ""
 
     return {
-        "key": item.item_key,
         "doc_id": item.item_key,
         "title": item.title,
         "authors": item.authors,
@@ -88,6 +97,10 @@ def get_paper_details(
 def get_library_overview(
     limit: Annotated[int, Field(description="Papers per page", ge=1)] = 100,
     offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Metadata richness for library rows"),
+    ] = "minimal",
 ) -> dict:
     """Paginated overview of all papers in the library."""
     zotero = _get_zotero()
@@ -101,24 +114,29 @@ def get_library_overview(
         indexed_ids = set()
 
     page = all_items[offset:offset + limit]
-    return {
-        "total": len(all_items),
-        "offset": offset,
-        "limit": limit,
-        "papers": [
-            {
-                "key": item.item_key,
-                "title": item.title,
+
+    def _paper_row(item):
+        row = {
+            "doc_id": item.item_key,
+            "title": item.title,
+            "year": item.year,
+            "indexed": item.item_key in indexed_ids,
+        }
+        if verbosity in {"standard", "full"}:
+            row.update({
                 "authors": item.authors,
-                "year": item.year,
                 "publication": item.publication,
                 "tags": item.tags,
                 "collections": item.collections,
                 "citation_key": item.citation_key,
-                "indexed": item.item_key in indexed_ids,
-            }
-            for item in page
-        ],
+            })
+        return row
+
+    return {
+        "total": len(all_items),
+        "offset": offset,
+        "limit": limit,
+        "papers": [_paper_row(item) for item in page],
     }
 
 
@@ -127,15 +145,32 @@ def get_notes(
     item_key: Annotated[str | None, Field(description="Parent item key. None for all notes.")] = None,
     limit: Annotated[int, Field(description="Max notes to return", ge=1, le=200)] = 20,
     query: Annotated[str | None, Field(description="Search within note content (case-insensitive)")] = None,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Content richness for notes"),
+    ] = "minimal",
 ) -> list[dict]:
     """Get or search notes. Filter by parent item and/or content keyword."""
-    return _get_zotero().get_notes(item_key=item_key, query=query, limit=limit)
+    notes = _get_zotero().get_notes(item_key=item_key, query=query, limit=limit)
+    if verbosity == "minimal":
+        return [
+            {
+                **note,
+                "content": _truncate_text(note.get("content"), 200, add_ellipsis=True),
+            }
+            for note in notes
+        ]
+    return notes
 
 
 @mcp.tool()
 def get_feeds(
     library_id: Annotated[int | None, Field(description="Feed library ID for items. None to list all feeds.")] = None,
     limit: Annotated[int, Field(description="Max feed items", ge=1, le=100)] = 20,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Metadata richness for feed items"),
+    ] = "minimal",
 ) -> dict:
     """List RSS feeds or get items from a feed. Works without indexing."""
     zotero = _get_zotero()
@@ -144,6 +179,28 @@ def get_feeds(
         return {"feeds": feeds, "total": len(feeds)}
     else:
         items = zotero.get_feed_items(library_id, limit=limit)
+        if verbosity == "minimal":
+            items = [
+                {
+                    "key": item["key"],
+                    "title": item["title"],
+                    "date_added": item["date_added"],
+                    "read": item["read"],
+                }
+                for item in items
+            ]
+        elif verbosity == "standard":
+            items = [
+                {
+                    "key": item["key"],
+                    "title": item["title"],
+                    "authors": item["authors"],
+                    "url": item["url"],
+                    "date_added": item["date_added"],
+                    "read": item["read"],
+                }
+                for item in items
+            ]
         return {"library_id": library_id, "items": items, "total": len(items)}
 
 
@@ -151,19 +208,35 @@ def get_feeds(
 def get_annotations(
     item_key: Annotated[str | None, Field(description="Item key. None for all annotations.")] = None,
     limit: Annotated[int, Field(description="Max annotations", ge=1, le=200)] = 50,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Content richness for annotations"),
+    ] = "minimal",
 ) -> list[dict]:
     """Get highlights and comments. Requires ZOTERO_API_KEY."""
-    return _get_api_reader().get_annotations(item_key=item_key, limit=limit)
+    annotations = _get_api_reader().get_annotations(item_key=item_key, limit=limit)
+    if verbosity == "minimal":
+        return [
+            {
+                **annotation,
+                "text": _truncate_text(annotation.get("text"), 200, add_ellipsis=True),
+                "comment": _truncate_text(annotation.get("comment"), 200, add_ellipsis=True),
+            }
+            for annotation in annotations
+        ]
+    return annotations
 
 
 @mcp.tool()
-def profile_library() -> dict:
+def profile_library(
+    include_profile: Annotated[bool, Field(description="Include full existing profile text")] = False,
+) -> dict:
     """Analyze the Zotero library to generate a user profile for research context.
 
     Returns library statistics including year distribution, top tags, collections,
     and topic density from the vector index (if available).
 
-    Also returns the contents of ~/.config/zotpilot/ZOTPILOT.md if it exists,
+    Also returns a summary of ~/.config/zotpilot/ZOTPILOT.md if it exists,
     so agents can see the existing user profile without needing filesystem access.
 
     Pure read operation — no side effects."""
@@ -280,7 +353,7 @@ def profile_library() -> dict:
         except Exception:
             existing_profile = None
 
-    return {
+    result = {
         "total_items": total_items,
         "year_distribution": year_distribution,
         "top_tags": top_tags,
@@ -288,5 +361,12 @@ def profile_library() -> dict:
         "top_journals": top_journals,
         "topic_density": topic_density,
         "gaps": gaps,
-        "existing_profile": existing_profile,
+        "existing_profile_present": existing_profile is not None,
+        "existing_profile_length": len(existing_profile) if existing_profile else 0,
+        "existing_profile_snippet": _truncate_text(existing_profile, 200, add_ellipsis=True),
     }
+
+    if include_profile:
+        result["existing_profile"] = existing_profile
+
+    return result

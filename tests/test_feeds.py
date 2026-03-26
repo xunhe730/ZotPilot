@@ -162,4 +162,19 @@ class TestGetFeedsTool:
         result = get_feeds(library_id=1, limit=10)
         assert result["total"] == 1
         assert result["library_id"] == 1
+        assert set(result["items"][0]) == {"key", "title", "date_added", "read"}
         mock_client.get_feed_items.assert_called_once_with(1, limit=10)
+
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_feed_items_tool_full_preserves_legacy_fields(self, mock_zotero):
+        mock_client = MagicMock()
+        mock_client.get_feed_items.return_value = [
+            {"key": "F1", "title": "Paper", "authors": "Auth", "abstract": "Abstract", "url": "https://example.com", "date_added": "", "read": False},
+        ]
+        mock_zotero.return_value = mock_client
+
+        from zotpilot.tools.library import get_feeds
+        result = get_feeds(library_id=1, limit=10, verbosity="full")
+        assert result["items"][0]["authors"] == "Auth"
+        assert result["items"][0]["abstract"] == "Abstract"
+        assert result["items"][0]["url"] == "https://example.com"

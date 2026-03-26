@@ -156,6 +156,8 @@ class TestGetPaperDetailsNoRag:
 
         from zotpilot.tools.library import get_paper_details
         result = get_paper_details("KEY1")
+        assert result["doc_id"] == "KEY1"
+        assert "key" not in result
         assert result["indexed"] is False
 
 

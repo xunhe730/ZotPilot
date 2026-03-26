@@ -185,10 +185,39 @@ class TestProfileLibraryExistingProfile:
 
         mock_get_store_opt.return_value = None
 
-        profile_content = "# My Research Profile\n\nFocused on NLP and ML."
+        profile_content = "# My Research Profile\n\n" + ("Focused on NLP and ML. " * 20)
 
         with patch("pathlib.Path.exists", return_value=True), \
              patch("pathlib.Path.read_text", return_value=profile_content):
             result = profile_library()
+
+        assert result["existing_profile_present"] is True
+        assert result["existing_profile_length"] == len(profile_content)
+        assert result["existing_profile_snippet"].endswith("...")
+        assert len(result["existing_profile_snippet"]) == 200
+        assert "existing_profile" not in result
+
+    @patch("zotpilot.tools.library._get_store_optional")
+    @patch("zotpilot.tools.library._get_zotero")
+    @patch("zotpilot.tools.library.sqlite3")
+    def test_profile_library_include_profile(self, mock_sqlite3, mock_get_zotero, mock_get_store_opt):
+        from zotpilot.tools.library import profile_library
+
+        mock_zotero = MagicMock()
+        mock_zotero.db_path = Path("/fake/zotero.sqlite")
+        mock_zotero.library_id = 1
+        mock_zotero.get_all_tags.return_value = []
+        mock_get_zotero.return_value = mock_zotero
+
+        mock_conn = _make_mock_connection(total_items=0, year_rows=[], col_rows=[])
+        mock_sqlite3.connect.return_value = mock_conn
+        mock_sqlite3.Row = sqlite3.Row
+
+        mock_get_store_opt.return_value = None
+        profile_content = "# My Research Profile"
+
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=profile_content):
+            result = profile_library(include_profile=True)
 
         assert result["existing_profile"] == profile_content

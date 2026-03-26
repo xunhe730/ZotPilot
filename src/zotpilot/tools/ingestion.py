@@ -272,6 +272,22 @@ def _preflight_urls(urls: list[str], sample_size: int = 5) -> dict:
     return report
 
 
+def _summarize_preflight_report(report: dict, verbose_preflight: bool) -> dict:
+    """Return a compact preflight envelope unless full arrays are requested."""
+    summarized = {
+        "checked": report.get("checked", 0),
+        "all_clear": report.get("all_clear", False),
+        "blocked": report.get("blocked", []),
+        "errors": report.get("errors", []),
+        "accessible_count": len(report.get("accessible", [])),
+        "skipped_count": len(report.get("skipped", [])),
+    }
+    if verbose_preflight:
+        summarized["accessible"] = report.get("accessible", [])
+        summarized["skipped"] = report.get("skipped", [])
+    return summarized
+
+
 def _discover_saved_item_key(
     title: str,
     url: str,
@@ -662,6 +678,9 @@ def ingest_papers(
         "Run accessibility preflight before saving. When blocked URLs are found, "
         "return a preflight report instead of saving. Default: True."
     ))] = True,
+    verbose_preflight: Annotated[bool, Field(description=(
+        "Include full accessible/skipped arrays in the preflight report."
+    ))] = False,
     skip_duplicates: Annotated[bool, Field(description=(
         "Ignored when using Connector path — Zotero handles deduplication locally"
     ))] = True,
@@ -715,11 +734,12 @@ def ingest_papers(
 
     preflight_report = None
     if preflight and urls_to_save:
-        preflight_report = _preflight_urls(urls_to_save)
-        if not preflight_report["all_clear"]:
-            blocked = len(preflight_report["blocked"])
-            errors = len(preflight_report["errors"])
-            checked = preflight_report["checked"]
+        full_preflight_report = _preflight_urls(urls_to_save)
+        preflight_report = _summarize_preflight_report(full_preflight_report, verbose_preflight)
+        if not full_preflight_report["all_clear"]:
+            blocked = len(full_preflight_report["blocked"])
+            errors = len(full_preflight_report["errors"])
+            checked = full_preflight_report["checked"]
             issue_count = blocked + errors
             issue_label = "blocked by anti-bot/access restrictions" if blocked and not errors else "blocked or errored during preflight"
             return {

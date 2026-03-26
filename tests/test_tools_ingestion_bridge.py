@@ -802,6 +802,17 @@ class TestIngestPapersPdfVerification:
             "results": [{"success": True, "url": url, "item_key": item_key, "title": title}],
         }
 
+    def _preflight_all_clear(self, urls):
+        """Return a preflight report indicating all URLs are accessible."""
+        return {
+            "checked": len(urls),
+            "accessible": [{"url": u, "title": "", "final_url": u} for u in urls],
+            "blocked": [],
+            "skipped": [],
+            "errors": [],
+            "all_clear": True,
+        }
+
     def test_pdf_attached_reported_correctly(self):
         """When check_has_pdf returns True, pdf field is 'attached' with no warning."""
         writer = _make_writer()
@@ -811,6 +822,7 @@ class TestIngestPapersPdfVerification:
              patch("zotpilot.tools.ingestion.BridgeServer.auto_start"), \
              patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(api_key=None)), \
              patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._preflight_urls", side_effect=self._preflight_all_clear), \
              patch("zotpilot.tools.ingestion.save_urls",
                    return_value=self._fake_save_urls_result(url, "ITEM1")):
             result = ingest_papers([{"doi": "10.1016/S0000", "landing_page_url": url, "is_oa": False}])
@@ -829,6 +841,7 @@ class TestIngestPapersPdfVerification:
              patch("zotpilot.tools.ingestion.BridgeServer.auto_start"), \
              patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(api_key=None)), \
              patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._preflight_urls", side_effect=self._preflight_all_clear), \
              patch("zotpilot.tools.ingestion.save_urls",
                    return_value=self._fake_save_urls_result(url, "ITEM2")):
             result = ingest_papers([{"doi": "10.1016/S0001", "landing_page_url": url, "is_oa": False}])
@@ -846,6 +859,7 @@ class TestIngestPapersPdfVerification:
              patch("zotpilot.tools.ingestion.BridgeServer.auto_start"), \
              patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(api_key=None)), \
              patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._preflight_urls", side_effect=self._preflight_all_clear), \
              patch("zotpilot.tools.ingestion.save_urls",
                    return_value=self._fake_save_urls_result(url, None)):
             result = ingest_papers([{"doi": "10.1016/S0002", "landing_page_url": url, "is_oa": False}])

@@ -36,42 +36,6 @@ compatibility:
 
 ---
 
-## Step 1: Check readiness
-
-**Python command:** Use `python3` on Linux/macOS. On Windows, use `python`.
-
-Run: `python3 scripts/run.py status --json`  (Windows: `python scripts/run.py status --json`)
-
-Parse the JSON output and follow the FIRST matching branch:
-
-1. Command fails entirely → **Prerequisites** (see `references/setup-guide.md`)
-2. `config_exists` is false → **First-Time Setup** (see `references/setup-guide.md`)
-3. `errors` is non-empty → **First-Time Setup** (note: `warnings` like API key not in env are OK if key was passed to `register`)
-4. `index_ready` is false or `doc_count` is 0 → go to **Index** below
-5. All green → go to **Research**
-
-**Inline fallback** (if agent cannot access references/):
-```bash
-python3 scripts/run.py setup --non-interactive --provider gemini
-python3 scripts/run.py register
-# Restart your AI agent, then ask again.
-```
-
-If any errors: run `python3 scripts/run.py doctor` for diagnostics.
-
-## Index (if doc_count = 0)
-
-MCP tools are now available. Index the user's papers:
-
-```bash
-python3 scripts/run.py index
-```
-
-Indexing takes ~2-5 seconds per paper. Documents over 40 pages are skipped by default.
-After indexing, check for "Skipped N long documents" — offer to index them with `--max-pages 0`.
-
----
-
 ## MCP Tool Reference
 
 ### Search (read-only, no API key required)
@@ -130,14 +94,25 @@ After indexing, check for "Skipped N long documents" — offer to index them wit
 **Step 0 — Subscription check** (mandatory):
 Check whether user has a Zotero Web API key configured. Write ops (`save_from_url`, `save_urls`, tag/collection tools) require `ZOTERO_API_KEY`. If not set, warn before proceeding.
 
-**Step 1 — Discover:**
+**Default research flow:**
+1. `search_topic(X)` to discover what is already in the local library
+2. Optionally `search_papers(X)` when you need supporting passages
+3. Optionally `get_passage_context(doc_id, chunk_index)` when you need surrounding text
+
+All search tools default to `verbosity="minimal"`. Escalate to `standard` or `full` only when you need more metadata.
+`search_papers` defaults to `context_chunks=0`; set `context_chunks=1` only when surrounding chunks are needed.
+`search_topic` no longer returns `best_passage_context`. Use `search_papers` or `get_passage_context` for expanded text.
+`doc_id` is the canonical identifier across tools. In `search_boolean`, `item_key` remains as a backward-compatible alias with the same value.
+`get_library_overview` and `get_paper_details` now return `doc_id` instead of `key`.
+
+**External discovery** remains available when you need new papers:
 `search_academic_databases(X, limit=20)` (add PubMed MCP for biomedical topics)
 
-**Step 2 — Score candidates** per `references/scoring-guide.md`
+**Score candidates** per `references/scoring-guide.md`
 
 > **MUST STOP** — Show scored list to user and wait for explicit confirmation before any ingest. Do not proceed automatically.
 
-**Step 3 — Ingest** (after user confirms list):
+**Ingest** (after user confirms list):
 
 De-duplicate first: batch-check all candidate DOIs in one call:
 `advanced_search(conditions=[{field:"doi", op:"is", value:"doi1"}, ...], match:"any")`
