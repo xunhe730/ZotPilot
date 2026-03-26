@@ -1,10 +1,25 @@
 """Library write operations via Pyzotero Web API."""
+import json
 from typing import Annotated, Literal, TypedDict
 
 from pydantic import Field
 
 from ..state import ToolError, _get_writer, mcp
 from .library import _invalidate_collection_cache
+
+
+def _coerce_list(value) -> list:
+    """Coerce a value to list, parsing JSON string if needed (Claude Code MCP client quirk)."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            pass
+    return []
 
 
 class TagItem(TypedDict):
@@ -21,6 +36,7 @@ def set_item_tags(
     tags: Annotated[list[str], Field(description="New tag list (replaces all existing)")],
 ) -> dict:
     """Replace ALL tags on an item (destructive). Use add_item_tags to append safely."""
+    tags = _coerce_list(tags)
     _get_writer().set_item_tags(item_key, tags)
     return {"success": True, "item_key": item_key, "tags": tags}
 
@@ -31,6 +47,7 @@ def add_item_tags(
     tags: Annotated[list[str], Field(description="Tags to add")],
 ) -> dict:
     """Add tags to an item without removing existing ones."""
+    tags = _coerce_list(tags)
     _get_writer().add_item_tags(item_key, tags)
     return {"success": True, "item_key": item_key, "added": tags}
 
@@ -41,6 +58,7 @@ def remove_item_tags(
     tags: Annotated[list[str], Field(description="Tags to remove")],
 ) -> dict:
     """Remove specific tags from an item. Missing tags silently ignored."""
+    tags = _coerce_list(tags)
     _get_writer().remove_item_tags(item_key, tags)
     return {"success": True, "item_key": item_key, "removed": tags}
 
@@ -86,6 +104,8 @@ def create_note(
     tags: Annotated[list[str] | None, Field(description="Tags for the note")] = None,
 ) -> dict:
     """Create a child note on a Zotero item. Requires ZOTERO_API_KEY."""
+    if tags is not None:
+        tags = _coerce_list(tags) or None
     return _get_writer().create_note(item_key, content, title=title, tags=tags)
 
 
@@ -122,6 +142,7 @@ def batch_tags(
     items: Annotated[list[dict], Field(description="List of {item_key, tags} objects. Max 100.")],
 ) -> dict:
     """Batch tag operation on multiple items. Partial failures reported per-item."""
+    items = _coerce_list(items)
     ops = {
         "add": lambda w, k, t: w.add_item_tags(k, t),
         "set": lambda w, k, t: w.set_item_tags(k, t),
@@ -137,6 +158,7 @@ def batch_collections(
     collection_key: Annotated[str, Field(description="Target collection key")],
 ) -> dict:
     """Batch collection operation on multiple items. Partial failures reported per-item."""
+    item_keys = _coerce_list(item_keys)
     if len(item_keys) > _BATCH_MAX:
         raise ToolError(f"Batch size {len(item_keys)} exceeds limit of {_BATCH_MAX}")
     writer = _get_writer()

@@ -29,6 +29,11 @@ uv run ruff check src tests
 uv run mypy src
 ```
 
+## Internal Docs
+
+- `docs/architecture.md` — 系统架构、组件说明、已知局限
+- `docs/decisions.md` — 关键决策记录（按时间倒序）
+
 ## Architecture
 
 ZotPilot exposes a **FastMCP server** with 32 tools for semantic search over a local Zotero library. The architecture has four main layers:

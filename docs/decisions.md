@@ -4,6 +4,76 @@
 
 ---
 
+## 2026-03-26 | Connector 事件驱动握手 + 闭环 itemType 验证
+
+### 背景
+批量导入"流动减阻"18篇文章时发现大量论文被存为 `webpage` 而非 `journalArticle`，根因为 `_pollForTranslators` 超时硬编码（5s），AIP/Elsevier 等出版商页面 translator 注入超时后 Zotero 静默降级保存网页快照。同时发现即便 `progressWindow.done` 触发，Zotero SQLite 写入可能滞后，导致误报成功。
+
+### 决策 1：事件驱动 translator 就绪检测（`agentAPI.js`）
+- **问题**：`_pollForTranslators` 用固定 5s 轮询 `_tabInfo[tabId].translators`，超时后无论 translator 是否就绪都调用 `onReady()`，导致 `onZoteroButtonElementClick` 在 translator 缺失时触发 → Zotero 降级为 webpage 保存
+- **决策**：完全替换为事件驱动机制
+  - 新增模块级 `_translatorWaiters: Map<tabId, resolve>`
+  - 在 `init()` 中 monkey-patch `Zotero.Connector_Browser.onTranslators`：translators 到达时若对应 tabId 有 waiter，立即 resolve，无需轮询
+  - `_waitForReady` Phase 2 改为 `_waitForTranslatorEvent()`：先检查 fast path（translator 已在 `_tabInfo`），再注册 waiter，设 20s 超时 fallback
+  - redirect 时清除 waiter 并重置稳定性窗口
+- **弃用方案**：继续延长 `TRANSLATOR_WAIT_MS`——轮询在有些页面天然不可靠，事件是正确抽象
+- **状态**：✅ 完成
+
+### 决策 2：第二握手——保存完成后本地 API 轮询确认（`agentAPI.js`）
+- **问题**：`progressWindow.done` 触发时 Zotero UI 显示完成，但 SQLite 写入可能滞后，Python 侧 item_key 发现失败或结果不稳定；`success="unconfirmed"`（60s 超时）场景下无法区分保存成功但慢、还是真正失败
+- **决策**：新增 `_waitForItemInZotero(entry, tabTitle, beforeItems)`
+  - 首次立即尝试（zero-wait），后续 1s 间隔，最多 15 次
+  - 通过与 `beforeItems`（save 前快照）做 diff 检测新条目
+  - `success=true` 和 `success="unconfirmed"` 都触发；`unconfirmed` 发现条目后升级为 `success`
+- **状态**：✅ 完成
+
+### 决策 3：闭环 itemType 验证——webhook 保存后查 Zotero 删除垃圾条目（`ingestion.py` + `zotero_writer.py`）
+- **问题**：即使前两层防御（事件驱动 + title 检测）漏过，Connector 仍可能把 webpage 存入 Zotero 库，后续 index/tag 流程使用了错误的条目
+- **决策**：在 `_apply_bridge_result_routing` 中，拿到 `item_key` 后调用 `writer.get_item_type(item_key)`，若 itemType 不在 `_ACADEMIC_ITEM_TYPES` 集合中，调用 `writer.delete_item(item_key)` 删除，返回 `success: False, translator_fallback_detected: True`
+- **`_ACADEMIC_ITEM_TYPES`**：`journalArticle`, `conferencePaper`, `preprint`, `thesis`, `book`, `bookSection`, `report`, `magazineArticle`, `newspaperArticle`
+- **同步新增**（`zotero_writer.py`）：`get_item_type(item_key) → str | None` 和 `delete_item(item_key) → bool` 两个方法
+- **状态**：✅ 完成
+
+### 决策 4：明确拒绝 API 元数据 fallback 路径
+- **背景**：早期实现在 translator 失败时自动 fallback 到 `add_paper_by_identifier(doi)` 获取元数据（无 PDF）
+- **决策**：完全移除此 fallback。理由：有订阅 + 通过 robot 验证的情况下，Connector 一定能抓到完整元数据和 PDF；fallback 往往拿不到想要的数据，反而掩盖根本问题。正确策略是修复 Connector 可靠性，而非绕过失败
+- **变更**：`_apply_bridge_result_routing` 的 `translator_fallback_detected`/`no_translator` 分支改为直接报告失败，移除 `url_to_paper` dict 和 `add_paper_by_identifier` 调用
+- **状态**：✅ 完成
+
+**测试**：88 个 ingestion bridge 测试全部通过。
+
+---
+
+## 2026-03-26 | ingest_papers 批量并发 + 反爬三层修复
+
+### 背景
+实际调研中发现 `ingest_papers` 批量入库时大量文献失败，根因为三个独立问题，逐层修复。
+
+### Bug 1：`ingest_papers` 串行调用导致心跳超时（`ingestion.py`）
+- **问题**：`ingest_papers` 在 for 循环中串行调用单URL版 `save_urls`，每次阻塞最多 90s。Chrome extension 在处理保存任务时无法发送心跳，bridge 在 30s 后判定 extension 断连，后续 `/enqueue` 返回 503，最终表现为通用 `"connector save failed"` 错误（`error_code`/`error_message` 字段被 `sub.get("error")` 的 fallback 掩盖）
+- **决策**：`ingest_papers` 改为一次性构建 URL 列表，批量调用 `save_urls`（已有并发轮询实现）；`else` 分支透传 `error_code` 和 `error_message`
+- **状态**：✅ 完成
+
+### Bug 2：反爬页面在保存后才检测，产生垃圾条目（`agentAPI.js` + `ingestion.py`）
+- **问题**：`_apply_bridge_result_routing` 在拿到 `success=True` 结果后检测 title 是否为"请稍候…"，此时 Zotero 已将反爬页面存入库，产生大量无效条目
+- **决策**：将检测移至 `agentAPI.js` 的 `_handleSave` 中，在调用 `onZoteroButtonElementClick` 之前检查 tab title。检测到反爬直接返回 `{success: false, error_code: "anti_bot_detected"}`，不执行保存
+- **Python 侧联动**：`_poll_one` 改为检查 `error_code == "anti_bot_detected"`，触发 `cancel_event` 立即停止其他并发线程，未处理 URL 标记为 `pending`；`_apply_bridge_result_routing` 移除冗余的 title 检测（修复遗留的 `title` 变量未定义 bug）
+- **状态**：✅ 完成
+
+### Bug 3：多跳跳转页面过早触发保存（`agentAPI.js`）
+- **问题**：AIP 等出版商首次访问时经历"验证页 → 文章页"两跳。`STABILITY_WINDOW_REDIRECT_MS = 2000ms` 不足以等待文章页稳定及 translator 注入，导致在验证页或跳转中间态触发保存，存为 snapshot 而非论文条目
+- **决策**：`STABILITY_WINDOW_REDIRECT_MS` 从 2000ms 提升至 4000ms。`scheduleResolve` 在每次 URL 变化时都会重置计时，所以多跳场景下会在最后一次跳转后再等 4s，确保文章页完全加载
+- **状态**：✅ 完成
+
+### Bug 4：PDF 下载失败时等待 60s 超时（`agentAPI.js` + `ingestion.py`）
+- **问题**：Elsevier 等出版商在 Zotero translator 下载 PDF 时弹出机器人验证，导致附件下载失败，但 extension 不感知，仍等待 60s 超时
+- **决策**：在 `sendMessage` patch 中监听 `progressWindow.itemProgress` 事件，当 `payload.iconSrc` 包含 `cross.png`（Zotero 的失败图标）时立即 resolve，返回 `{success: true, pdf_failed: true, error_code: "pdf_download_failed"}`；Python 侧 `ingest_papers` 将此类结果标记为 `ingested`（元数据成功）但 `pdf: "none"`，并附 `warning` 提示用户手动下载 PDF
+- **状态**：✅ 完成
+
+**测试**：477 个测试全部通过。
+
+---
+
 ## 2026-03-26 | item_key 发现链三项修复
 
 ### 背景
