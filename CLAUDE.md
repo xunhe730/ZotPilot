@@ -12,6 +12,8 @@ ZotPilot 是一个 **MCP server**，给本地 Zotero 文献库加上语义搜索
 
 **支持平台**：macOS / Linux / Windows；Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf
 
+> **维护规则**：每次新增、修改或退休 MCP 工具时，必须同步更新 `SKILL.md` 的 MCP Tool Reference 表格——这是 skill 用户的唯一工具索引。
+
 ## 技术栈
 
 | 层次 | 技术 |
