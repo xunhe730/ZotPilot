@@ -101,7 +101,7 @@ ZotPilot 是一个 **FastMCP 服务器**，提供 32 个工具用于对本地 Zo
 | `citations.py` | `find_references`、`find_citing_papers`、`get_citation_count` |
 | `write_ops.py` | `create_note`、`add_item_tags`、`set_item_tags`、`create_collection`、`add_to_collection` 等 |
 | `admin.py` | `switch_library`、`get_reranking_config`、`get_vision_costs` |
-| `ingestion.py` | `search_academic_databases`、`add_paper_by_identifier`、`ingest_papers` |
+| `ingestion.py` | `search_academic_databases`、`ingest_papers`、`save_urls`、`save_from_url` |
 
 写操作（`write_ops.py`）需要 `ZOTERO_API_KEY` + `ZOTERO_USER_ID` 环境变量，使用 `ZoteroWriter`（pyzotero Web API）。只读工具使用 `ZoteroClient`（本地 SQLite）。
 

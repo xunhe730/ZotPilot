@@ -57,6 +57,7 @@ compatibility:
 | `get_notes` | Read notes attached to a paper |
 | `list_tags` | All tags in library |
 | `list_collections` | All collections |
+| `get_collection_papers` | All papers in a specific collection |
 
 ### External discovery
 
@@ -64,6 +65,14 @@ compatibility:
 |------|----------|
 | `search_academic_databases` | Search OpenAlex + Semantic Scholar (papers NOT yet in library) |
 | `profile_library` | Analyze library themes, gaps, top venues |
+| `get_feeds` | List RSS feeds or get items from a specific feed (no index required) |
+| `get_unindexed_papers` | List papers not yet indexed, with pagination |
+
+### Annotations (requires `ZOTERO_API_KEY`)
+
+| Tool | Use when |
+|------|----------|
+| `get_annotations` | Read highlights and comments from papers |
 
 ### Ingest (requires Chrome + ZotPilot Connector for non-OA papers)
 
@@ -84,6 +93,8 @@ compatibility:
 | `add_to_collection` | Move paper into a collection |
 | `batch_tags` | Tag multiple papers at once |
 | `batch_collections` | Batch collection assignment |
+| `remove_item_tags` | Remove specific tags from a paper (missing tags silently ignored) |
+| `remove_from_collection` | Remove a paper from a collection (stays in library) |
 
 ---
 
