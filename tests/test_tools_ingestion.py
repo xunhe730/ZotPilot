@@ -812,6 +812,162 @@ class TestSearchAcademicDatabasesV2:
         _, kwargs = mock_get.call_args
         assert kwargs.get("params", {}).get("mailto") == "myemail@institution.edu"
 
+    def test_doi_query_exact_match(self):
+        config = _make_config_v2(s2_key="KEY")
+        mock_resp = _make_oa_http_response(OA_PAPER)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp) as mock_get:
+            results = search_academic_databases("10.1234/abc")
+
+        assert len(results) == 1
+        assert results[0]["doi"] == "10.1234/abc"
+        assert mock_get.call_args.args[0] == "https://api.openalex.org/works/doi:10.1234/abc"
+
+    @pytest.mark.parametrize("query", [
+        "doi:10.1234/abc",
+        "https://doi.org/10.1234/abc",
+    ])
+    def test_doi_query_with_prefix(self, query):
+        config = _make_config_v2(s2_key="KEY")
+        mock_resp = _make_oa_http_response(OA_PAPER)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp) as mock_get:
+            results = search_academic_databases(query)
+
+        assert len(results) == 1
+        assert mock_get.call_args.args[0] == "https://api.openalex.org/works/doi:10.1234/abc"
+
+    def test_doi_query_404_returns_empty(self):
+        config = _make_config_v2(s2_key="KEY")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp):
+            results = search_academic_databases("10.1234/missing")
+
+        assert results == []
+
+    def test_non_doi_query_uses_search(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("transformer scaling")
+
+        assert mock_get.call_args.args[0] == "https://api.openalex.org/works"
+
+    def test_doi_query_strips_whitespace(self):
+        config = _make_config_v2(s2_key=None)
+        mock_resp = _make_oa_http_response(OA_PAPER)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get", return_value=mock_resp) as mock_get:
+            search_academic_databases("  10.1234/abc  ")
+
+        assert mock_get.call_args.args[0] == "https://api.openalex.org/works/doi:10.1234/abc"
+
+    def test_citation_sort_uses_relevance_then_client_sort(self):
+        config = _make_config_v2(s2_key=None)
+        papers = [
+            {
+                **OA_PAPER,
+                "doi": "https://doi.org/10.1234/low",
+                "ids": {"doi": "https://doi.org/10.1234/low"},
+                "cited_by_count": 5,
+                "display_name": "Low",
+            },
+            {
+                **OA_PAPER,
+                "doi": "https://doi.org/10.1234/high",
+                "ids": {"doi": "https://doi.org/10.1234/high"},
+                "cited_by_count": 100,
+                "display_name": "High",
+            },
+        ]
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": papers})
+            results = search_academic_databases("test", sort_by="citationCount")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert params["sort"] == "relevance_score:desc"
+        assert [r["title"] for r in results] == ["High", "Low"]
+
+    def test_relevance_sort_unchanged(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("test", sort_by="relevance")
+
+        assert mock_get.call_args.kwargs["params"]["sort"] == "relevance_score:desc"
+
+    def test_publication_date_sort_unchanged(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("test", sort_by="publicationDate")
+
+        assert mock_get.call_args.kwargs["params"]["sort"] == "publication_date:desc"
+
+    def test_author_prefix_uses_filter(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("author:Bengio")
+
+        assert "raw_author_name.search:Bengio" in mock_get.call_args.kwargs["params"]["filter"]
+
+    def test_author_prefix_omits_search_param(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("author:Name")
+
+        assert "search" not in mock_get.call_args.kwargs["params"]
+
+    def test_normal_query_no_author_filter(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("attention mechanism")
+
+        assert "filter" not in mock_get.call_args.kwargs["params"]
+
+    def test_author_prefix_full_name(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("author:Yoshua Bengio")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert "raw_author_name.search:Yoshua Bengio" in params["filter"]
+        assert "search" not in params
+
+    def test_author_prefix_with_trailing_query(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            mock_get.return_value = _make_oa_http_response({"results": []})
+            search_academic_databases("author:Bengio | attention mechanism")
+
+        params = mock_get.call_args.kwargs["params"]
+        assert "raw_author_name.search:Bengio" in params["filter"]
+        assert params["search"] == "attention mechanism"
+
+    def test_author_prefix_empty_name(self):
+        config = _make_config_v2(s2_key=None)
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion.httpx.get") as mock_get:
+            result = search_academic_databases("author:")
+
+        assert result == []
+        mock_get.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _enrich_oa_url
@@ -897,7 +1053,10 @@ class TestBridgeResultDetection:
         result = self._route({
             "success": False,
             "error_code": "anti_bot_detected",
-            "error_message": "Anti-bot page detected (title: '请稍候…'). Please complete the verification in Chrome, then retry.",
+            "error_message": (
+                "Anti-bot page detected (title: '请稍候…'). "
+                "Please complete the verification in Chrome, then retry."
+            ),
             "title": "请稍候…",
             "url": "https://x.com",
         })

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from typing import Annotated, Literal
@@ -263,7 +264,14 @@ def _preflight_urls(urls: list[str], sample_size: int = 5) -> dict:
                 "final_url": result.get("final_url", url),
             })
         else:
-            error_entry = {"url": url, "error": result.get("error") or result.get("error_message") or "unknown preflight error"}
+            error_entry = {
+                "url": url,
+                "error": (
+                    result.get("error")
+                    or result.get("error_message")
+                    or "unknown preflight error"
+                ),
+            }
             if result.get("title"):
                 error_entry["title"] = result["title"]
             report["errors"].append(error_entry)
@@ -424,6 +432,84 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
     return " ".join(words[i] for i in sorted(words))
 
 
+def _is_doi_query(query: str) -> str | None:
+    """Return cleaned DOI for DOI-like queries, else None."""
+    cleaned = query.strip()
+    lowered = cleaned.lower()
+    if lowered.startswith("doi:"):
+        cleaned = cleaned[4:].strip()
+    elif lowered.startswith("https://doi.org/"):
+        cleaned = cleaned[len("https://doi.org/"):].strip()
+    elif lowered.startswith("http://doi.org/"):
+        cleaned = cleaned[len("http://doi.org/"):].strip()
+
+    return cleaned if re.match(r"^10\.\d{4,}/\S+$", cleaned) else None
+
+
+_OA_ARXIV_PREFIX = "https://doi.org/10.48550/arxiv."
+
+
+def _format_openalex_paper(p: dict) -> dict:
+    """Format a single OpenAlex work dict into ZotPilot's result format."""
+    doi_raw = p.get("doi") or ""
+    formatted_doi = doi_raw.replace("https://doi.org/", "").replace("http://doi.org/", "") or None
+    oa_id = p.get("id", "").replace("https://openalex.org/", "")
+    authors = [
+        a.get("author", {}).get("display_name")
+        for a in (p.get("authorships") or [])[:5]
+        if a.get("author", {}).get("display_name")
+    ]
+    abstract = _reconstruct_abstract(p.get("abstract_inverted_index"))
+
+    ids = p.get("ids") or {}
+    ids_doi = ids.get("doi") or ""
+    arxiv_id = (
+        ids_doi.lower()[len(_OA_ARXIV_PREFIX):]
+        if ids_doi.lower().startswith(_OA_ARXIV_PREFIX.lower())
+        else None
+    )
+
+    oa = p.get("open_access") or {}
+    primary = p.get("primary_location") or {}
+    source = primary.get("source") or {}
+
+    return {
+        "title": p.get("display_name"),
+        "authors": authors,
+        "year": p.get("publication_year"),
+        "doi": formatted_doi,
+        "arxiv_id": arxiv_id,
+        "openalex_id": oa_id,
+        "cited_by_count": p.get("cited_by_count"),
+        "abstract_snippet": abstract[:300],
+        "is_oa": oa.get("is_oa", False),
+        "oa_url": oa.get("oa_url"),
+        "landing_page_url": primary.get("landing_page_url"),
+        "journal": source.get("display_name"),
+        "publisher": source.get("host_organization_name"),
+        "_source": "openalex",
+    }
+
+
+def _fetch_openalex_by_doi(doi: str, mailto: str) -> list[dict]:
+    """Fetch a single OpenAlex work by DOI and format like search results."""
+    resp = httpx.get(
+        f"https://api.openalex.org/works/doi:{doi}",
+        params={
+            "select": (
+                "id,doi,display_name,authorships,publication_year,"
+                "cited_by_count,open_access,abstract_inverted_index,ids,primary_location"
+            ),
+            "mailto": mailto,
+        },
+        timeout=15.0,
+    )
+    if resp.status_code == 404:
+        return []
+    resp.raise_for_status()
+    return [_format_openalex_paper(resp.json())]
+
+
 def _search_openalex(
     query: str,
     limit: int,
@@ -435,11 +521,23 @@ def _search_openalex(
     """Search OpenAlex API. Returns papers in the same format as S2 results."""
     sort_map = {
         "relevance": "relevance_score:desc",
-        "citationCount": "cited_by_count:desc",
         "publicationDate": "publication_date:desc",
     }
+    author_filter: str | None = None
+    search_query = query
+    if query.lower().startswith("author:"):
+        remainder = query[len("author:"):].strip()
+        if not remainder:
+            return []
+        elif "|" in remainder:
+            parts = remainder.split("|", 1)
+            author_filter = parts[0].strip()
+            search_query = parts[1].strip()
+        else:
+            author_filter = remainder
+            search_query = ""
+
     params: dict = {
-        "search": query,
         "per-page": min(limit, 200),
         "sort": sort_map.get(sort_by, "relevance_score:desc"),
         "select": (
@@ -448,7 +546,11 @@ def _search_openalex(
         ),
         "mailto": mailto,
     }
+    if search_query:
+        params["search"] = search_query
     filters: list[str] = []
+    if author_filter is not None:
+        filters.append(f"raw_author_name.search:{author_filter}")
     if year_min:
         filters.append(f"publication_year:>{year_min - 1}")
     if year_max:
@@ -463,50 +565,14 @@ def _search_openalex(
     )
     resp.raise_for_status()
 
-    arxiv_prefix = "https://doi.org/10.48550/arxiv."
-    results = []
-    for p in resp.json().get("results", []):
-        doi_raw = p.get("doi") or ""
-        doi = doi_raw.replace("https://doi.org/", "").replace("http://doi.org/", "") or None
-        oa_id = p.get("id", "").replace("https://openalex.org/", "")
-        authors = [
-            a.get("author", {}).get("display_name")
-            for a in (p.get("authorships") or [])[:5]
-            if a.get("author", {}).get("display_name")
-        ]
-        abstract = _reconstruct_abstract(p.get("abstract_inverted_index"))
-
-        # Extract arxiv_id from ids.doi when it's an arXiv DOI
-        ids = p.get("ids") or {}
-        ids_doi = ids.get("doi") or ""
-        arxiv_id = ids_doi.lower()[len(arxiv_prefix):] if ids_doi.lower().startswith(arxiv_prefix.lower()) else None
-
-        # OA fields
-        oa = p.get("open_access") or {}
-        is_oa = oa.get("is_oa", False)
-        oa_url = oa.get("oa_url")
-
-        # Landing page
-        primary = p.get("primary_location") or {}
-        landing_page_url = primary.get("landing_page_url")
-        source = primary.get("source") or {}
-
-        results.append({
-            "title": p.get("display_name"),
-            "authors": authors,
-            "year": p.get("publication_year"),
-            "doi": doi,
-            "arxiv_id": arxiv_id,
-            "openalex_id": oa_id,
-            "cited_by_count": p.get("cited_by_count"),
-            "abstract_snippet": abstract[:300],
-            "is_oa": is_oa,
-            "oa_url": oa_url,
-            "landing_page_url": landing_page_url,
-            "journal": source.get("display_name"),
-            "publisher": source.get("host_organization_name"),
-            "_source": "openalex",
-        })
+    results = [_format_openalex_paper(p) for p in resp.json().get("results", [])]
+    if sort_by == "citationCount":
+        # Approximation: re-sorts most-cited within the relevance-ranked pool,
+        # not globally most-cited. Over-fetching (e.g., 3x per_page) was not chosen
+        # because it adds ~3x API cost for marginal gain; the pool is already
+        # relevance-filtered by OpenAlex, so top-cited within this set is a
+        # reasonable proxy.
+        results.sort(key=lambda r: r.get("cited_by_count") or 0, reverse=True)
     return results
 
 
@@ -596,9 +662,15 @@ def search_academic_databases(
     """Search academic databases for papers. Does NOT add to Zotero.
     Use ingest_papers to add selected results to your library.
 
-    Uses OpenAlex as primary source; Semantic Scholar as supplement when S2_API_KEY is set."""
+    Uses OpenAlex as primary source; Semantic Scholar as supplement when S2_API_KEY is set.
+    Supports "author:Name" prefix for author-scoped search (use "author:Name | topic"
+    for combined queries) and DOI strings for exact lookup."""
     config = _get_config()
     mailto = config.openalex_email or "zotpilot@example.com"
+
+    detected_doi = _is_doi_query(query)
+    if detected_doi:
+        return _fetch_openalex_by_doi(detected_doi, mailto=mailto)
 
     # --- OpenAlex (primary) ---
     oa_error: str | None = None
@@ -741,7 +813,11 @@ def ingest_papers(
             errors = len(full_preflight_report["errors"])
             checked = full_preflight_report["checked"]
             issue_count = blocked + errors
-            issue_label = "blocked by anti-bot/access restrictions" if blocked and not errors else "blocked or errored during preflight"
+            issue_label = (
+                "blocked by anti-bot/access restrictions"
+                if blocked and not errors
+                else "blocked or errored during preflight"
+            )
             return {
                 "total": len(papers),
                 "ingested": 0,
@@ -826,7 +902,12 @@ def ingest_papers(
                     "identifier": identifier,
                     "status": "failed",
                     "translator_fallback_detected": True,
-                    "error": sub.get("error") or sub.get("error_message") or "No Zotero translator found. Retry after the page fully loads, or open manually in Chrome.",
+                    "error": (
+                        sub.get("error")
+                        or sub.get("error_message")
+                        or "No Zotero translator found. Retry after the page fully loads, "
+                        "or open manually in Chrome."
+                    ),
                     "url": url,
                 })
             else:
@@ -1040,7 +1121,10 @@ def save_urls(
                         "url": url,
                         "success": False,
                         "status": "pending",
-                        "error": "Skipped — another URL triggered anti-bot verification. Retry after completing the Chrome verification.",
+                        "error": (
+                            "Skipped — another URL triggered anti-bot verification. "
+                            "Retry after completing the Chrome verification."
+                        ),
                     }
                 return
             time.sleep(2)
