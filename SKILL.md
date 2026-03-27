@@ -140,6 +140,12 @@ Anti-bot / translator recovery:
 
 **Step 4 — Post-ingest:** for each `item_key`, follow `references/post-ingest-guide.md`
 
+Post-ingest includes mandatory note generation for every ingested paper:
+- **Workflow A (brief, automatic):** runs for every paper — see `references/note-analysis-prompt.md`
+- **Workflow B (full, on demand):** user says "帮我深读 X" / "详细分析这篇" — see `references/note-analysis-prompt.md`
+
+Note templates: `references/note-template-brief.md` (Workflow A) · `references/note-template-full.md` (Workflow B)
+
 **Library profiling:**
 Trigger: user says "分析我的文献库", "profile my library", or ZOTPILOT.md missing before research starts → follow `references/profiling-guide.md`
 
