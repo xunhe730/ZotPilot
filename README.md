@@ -401,9 +401,22 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 ├── references/                     # 参考文档
 │   ├── tool-guide.md               # 工具参数详解
 │   ├── troubleshooting.md          # 常见问题
-│   └── setup-guide.md            # 安装配置指南
-└── src/zotpilot/                   # MCP 服务器源码
+│   └── setup-guide.md             # 安装配置指南
+├── src/zotpilot/                   # MCP 服务器源码
+└── connector/                      # 浏览器扩展（Chrome MV3）
+    ├── src/browserExt/             # 扩展核心代码
+    └── build.sh                    # 构建脚本
 ```
+
+### Connector（浏览器扩展）
+
+`connector/` 是 ZotPilot 的浏览器侧组件，基于官方 Zotero Connector fork，加了 AI agent 调用路径。
+
+```text
+Agent → ZotPilot MCP tool → 本地 bridge (127.0.0.1:2619) → Chrome 扩展 → Zotero Desktop
+```
+
+使用 `save_from_url` / `save_urls` 工具时需要安装此扩展。安装方式见 [connector/README_zh-CN.md](connector/README_zh-CN.md)。
 
 ### 数据存储
 
@@ -531,9 +544,16 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 ```bash
 git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
+
+# MCP server（Python）
 uv sync --extra dev
-uv run pytest              # 177 个测试
+uv run pytest
 uv run ruff check src/
+
+# Connector（浏览器扩展）
+cd connector
+npm install
+./build.sh -d              # 开发构建
 ```
 
 欢迎贡献，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。

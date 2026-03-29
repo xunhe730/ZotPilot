@@ -31,6 +31,36 @@ git pull
 
 ---
 
+## [0.4.1] - 2026-03-29
+
+### 架构 / Architecture
+- **Monorepo 合并**：将 `zotpilot-connector`（浏览器扩展）并入主仓库 `connector/` 目录，两个组件共用统一版本号
+  **Monorepo merge**: Browser extension (`zotpilot-connector`) moved into `connector/` subdirectory; both components now share a unified version number
+
+### Connector 修复 / Connector Fixes
+- **心跳断连（长时间保存时）**：改为独立 `setInterval(10000)` 驱动心跳，与 poll 循环完全解耦
+  **Heartbeat disconnect on long saves**: Switched to independent `setInterval(10000)` for heartbeat, fully decoupled from poll loop
+- **translator 就绪检测从轮询改为事件驱动**：monkey-patch `Zotero.Connector_Browser.onTranslators`，translator 到达时立即触发，20s 超时兜底
+  **Translator readiness: polling → event-driven**: Monkey-patches `onTranslators`, fires immediately on arrival with 20s timeout fallback
+- **反爬页面不再产生垃圾条目**：检测移至 `_handleSave` 前置，匹配到反爬模式直接返回 `anti_bot_detected`，不执行保存
+  **Anti-bot pages no longer create junk items**: Detection moved before `_handleSave`, returns `anti_bot_detected` without saving
+- **多跳跳转过早触发**：`STABILITY_WINDOW_REDIRECT_MS` 从 2000ms 提升至 4000ms，确保文章页稳定后再触发
+  **Multi-hop redirect fires too early**: `STABILITY_WINDOW_REDIRECT_MS` raised 2000ms→4000ms
+
+### Connector 新增 / Connector Added
+- **第二握手**：`_waitForItemInZotero()` 在 `progressWindow.done` 后轮询本地 API 确认条目写入 SQLite
+  **Second handshake**: `_waitForItemInZotero()` polls local API after `progressWindow.done` to confirm SQLite write
+- **PDF 下载失败快速退出**：检测 `cross.png` 图标立即 resolve，不等待 60s 超时
+  **PDF failure fast-exit**: Detects `cross.png` icon and resolves immediately without waiting 60s timeout
+
+### Server 修复 / Server Fixes
+- **动态 poll 超时**：按批次大小缩放保存轮询超时（45s/URL），避免大批次超时
+  **Dynamic poll timeout**: Scales save poll timeout by batch size (45s/URL budget)
+- **错误页检测**：将 arXiv/bioRxiv 等泛站点 title 识别为错误页（无 item_key 时）
+  **Error page detection**: Identifies generic site-only titles (arXiv/bioRxiv) as error pages when no item_key
+- **routing 重试**：collection/tag 路由加退避重试，平滑 SQLite 可见性延迟
+  **Routing retry**: Collection/tag routing retries with backoff to smooth SQLite visibility lag
+
 ## [0.4.0] - 2026-03-24
 
 ### 新功能 / New Features
