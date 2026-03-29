@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <defs>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Transparent background (toolbar context) -->
+
+  <!-- Z letterform in #10B981 green -->
+  <!-- Z top bar -->
+  <rect x="10" y="10" width="28" height="5" rx="1.5" fill="#10B981"/>
+  <!-- Z diagonal -->
+  <polygon points="34,15 38,15 14,33 10,33" fill="#10B981"/>
+  <!-- Z bottom bar -->
+  <rect x="10" y="33" width="28" height="5" rx="1.5" fill="#10B981"/>
+
+  <!-- Save indicator: small downward arrow below Z -->
+  <path d="M24 40 L20 36 L22 36 L22 32 L26 32 L26 36 L28 36 Z"
+        fill="#10B981" opacity="0.75" filter="url(#glow)"/>
+
+  <!-- Micro circuit node top-right -->
+  <circle cx="37" cy="13" r="1.5" fill="#10B981" opacity="0.5"/>
+</svg>

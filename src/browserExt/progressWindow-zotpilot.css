@@ -1,0 +1,16 @@
+/* ZotPilot brand theme -- v0.0.3 */
+
+.ProgressWindow-box {
+  border-color: #1a2744 #0f1a38 #1a2744;
+  background-color: #f0f4ff;
+  box-shadow: rgba(16, 185, 129, 0.15) 0px 5px 20px -2px;
+}
+
+.ProgressWindow-headline {
+  color: #162060;
+}
+
+/* Success state accent */
+.ProgressWindow-itemText.success {
+  color: #10B981;
+}

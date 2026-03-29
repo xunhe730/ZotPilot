@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="bg-grad" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#2a3f7e"/>
+      <stop offset="100%" stop-color="#162060"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="4" y="4" width="120" height="120" rx="22" ry="22" fill="url(#bg-grad)"/>
+
+  <!-- Glow ring: crisp, no blur -->
+  <circle cx="64" cy="64" r="36" fill="none" stroke="#10B981" stroke-width="2.5" opacity="0.65"/>
+  <circle cx="64" cy="64" r="44" fill="none" stroke="#10B981" stroke-width="1" opacity="0.25"/>
+
+  <!-- Z: same path and centering, no filters -->
+  <g transform="translate(44.13, 44.1) scale(2.484)">
+    <polygon
+      points="10.8,1.467 -2.267,1.467 -2.267,-6 18.267,-6 18.267,3.333 7.066,14.533 18.267,14.533 18.267,22 -2.267,22 -2.267,14.533"
+      fill="#FFFFFF"
+      stroke="none"
+    />
+  </g>
+
+  <!-- AI dot -->
+  <circle cx="91" cy="91" r="3.5" fill="#10B981" opacity="0.8"/>
+</svg>

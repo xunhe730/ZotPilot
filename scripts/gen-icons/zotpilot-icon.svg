@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <radialGradient id="bg-grad" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#2a3f7e"/>
+      <stop offset="100%" stop-color="#162060"/>
+    </radialGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="node-glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background: lighter navy rounded square -->
+  <rect x="4" y="4" width="120" height="120" rx="22" ry="22" fill="url(#bg-grad)"/>
+
+  <!-- AI glow rings — prominent -->
+  <circle cx="64" cy="64" r="34" fill="none"
+          stroke="#10B981" stroke-width="2.5" opacity="0.55"
+          filter="url(#glow)"/>
+  <circle cx="64" cy="64" r="42" fill="none"
+          stroke="#10B981" stroke-width="1.2" opacity="0.28"
+          filter="url(#glow)"/>
+  <circle cx="64" cy="64" r="50" fill="none"
+          stroke="#10B981" stroke-width="0.6" opacity="0.12"/>
+
+  <!--
+    Z at 40% canvas width = 51px
+    polygon X: -2.267→18.267 (w=20.534), Y: -6→22 (h=28)
+    scale = 51/20.534 = 2.484
+    rendered size: 51 × 69.6px
+    center X: (128-51)/2 - (-2.267*2.484) = 38.5 + 5.63 = 44.13
+    center Y: (128-69.6)/2 - (-6*2.484) = 29.2 + 14.9 = 44.1
+  -->
+  <g transform="translate(44.13, 44.1) scale(2.484)">
+    <polygon
+      points="10.8,1.467 -2.267,1.467 -2.267,-6 18.267,-6 18.267,3.333 7.066,14.533 18.267,14.533 18.267,22 -2.267,22 -2.267,14.533"
+      fill="#FFFFFF"
+      stroke="none"
+    />
+  </g>
+
+  <!-- AI circuit node: bottom-right -->
+  <circle cx="91" cy="91" r="4" fill="#10B981" filter="url(#node-glow)"/>
+  <line x1="91" y1="87" x2="91" y2="79" stroke="#10B981" stroke-width="1.2" opacity="0.7"/>
+  <line x1="87" y1="91" x2="79" y2="91" stroke="#10B981" stroke-width="1.2" opacity="0.7"/>
+  <line x1="94" y1="94" x2="100" y2="100" stroke="#10B981" stroke-width="1" opacity="0.5"/>
+  <circle cx="91" cy="77" r="2" fill="#10B981" opacity="0.6"/>
+  <circle cx="77" cy="91" r="2" fill="#10B981" opacity="0.6"/>
+
+  <!-- Top-left micro node -->
+  <circle cx="20" cy="20" r="2.5" fill="#10B981" opacity="0.4"/>
+  <line x1="22.5" y1="20" x2="29" y2="20" stroke="#10B981" stroke-width="0.8" opacity="0.3"/>
+</svg>
