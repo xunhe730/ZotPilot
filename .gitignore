@@ -23,7 +23,10 @@ data/
 
 # Plans and ops records (local only)
 .omc/
-docs/
+docs/*
+!docs/e2e-scenarios/
+!docs/e2e-scenarios/**
+docs/test-runs/
 
 # IDE
 .idea/

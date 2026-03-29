@@ -27,6 +27,11 @@ _ITEM_DISCOVERY_WINDOW_S = 60
 # Save polling windows: connector save + bridge-side item discovery can exceed 90s.
 _SAVE_RESULT_POLL_TIMEOUT_S = 150.0
 _SAVE_RESULT_POLL_OVERALL_TIMEOUT_S = 300.0
+_SAVE_RESULT_POLL_PER_URL_BUDGET_S = 45.0
+_SAVE_RESULT_POLL_OVERALL_GRACE_S = 120.0
+
+# Routing retries smooth over local-SQLite vs Web API visibility lag after connector saves.
+_ROUTING_RETRY_DELAYS_S = [0.0, 1.0, 2.0]
 
 # Post-save PDF verification: Zotero may attach PDFs asynchronously after item creation.
 # Delays are computed dynamically based on batch size — see _finalize_pdf_status.
@@ -74,6 +79,7 @@ _ANTI_BOT_TITLE_PATTERNS = [
 _ERROR_PAGE_TITLE_PATTERNS = [
     "page not found",
     "404 -",
+    "404 ",
     "access denied",
     "subscription required",
     "unavailable -",
@@ -99,6 +105,36 @@ _TRANSLATOR_FALLBACK_SUFFIXES = [
     " | annual reviews",
 ]
 
+_GENERIC_SITE_ONLY_TITLE_PATTERNS = [
+    "| arxiv",
+    "| arxiv.org",
+    "| biorxiv",
+    "| medrxiv",
+]
+
+
+def _compute_save_result_poll_timeout_s(batch_size: int) -> float:
+    """Scale poll timeout with batch size to cover connector's sequential saves."""
+    if batch_size <= 0:
+        return _SAVE_RESULT_POLL_TIMEOUT_S
+    return max(_SAVE_RESULT_POLL_TIMEOUT_S, batch_size * _SAVE_RESULT_POLL_PER_URL_BUDGET_S)
+
+
+def _compute_save_result_poll_overall_timeout_s(batch_size: int) -> float:
+    per_url_timeout = _compute_save_result_poll_timeout_s(batch_size)
+    return max(_SAVE_RESULT_POLL_OVERALL_TIMEOUT_S, per_url_timeout + _SAVE_RESULT_POLL_OVERALL_GRACE_S)
+
+
+def _looks_like_error_page_title(raw_title: str, item_key: str | None) -> bool:
+    title = raw_title.strip().lower()
+    if not title:
+        return False
+    if any(title.startswith(pattern) for pattern in _ERROR_PAGE_TITLE_PATTERNS):
+        return True
+    if item_key:
+        return False
+    return any(title.startswith(pattern) for pattern in _GENERIC_SITE_ONLY_TITLE_PATTERNS)
+
 
 def _apply_collection_tag_routing(
     item_key: str,
@@ -115,17 +151,29 @@ def _apply_collection_tag_routing(
     if needs_api_key and not config.zotero_api_key:
         return "collection_key and tags ignored — ZOTERO_API_KEY not configured"
 
-    try:
-        if collection_key:
-            writer.add_to_collection(item_key, collection_key)
-        if tags:
-            writer.add_item_tags(item_key, tags)
-        return None
-    except Exception as e:
-        logger.warning(f"Collection/tag routing failed for {item_key}: {e}")
-        # Bridge-side routing is best-effort; the save itself succeeded.
-        # Return a warning rather than failing the whole operation.
-        return f"collection_key/tags partially applied — {e}"
+    last_error: Exception | None = None
+    for attempt, delay in enumerate(_ROUTING_RETRY_DELAYS_S, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            if collection_key:
+                writer.add_to_collection(item_key, collection_key)
+            if tags:
+                writer.add_item_tags(item_key, tags)
+            return None
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "Collection/tag routing failed for %s on attempt %s/%s: %s",
+                item_key,
+                attempt,
+                len(_ROUTING_RETRY_DELAYS_S),
+                e,
+            )
+
+    # Bridge-side routing is best-effort; the save itself succeeded.
+    # Return a warning rather than failing the whole operation.
+    return f"collection_key/tags partially applied — {last_error}"
 
 
 def _extract_publisher_domain(url: str) -> str:
@@ -1153,13 +1201,14 @@ def ingest_papers(
                 failed += 1
                 item_key = sub.get("item_key")
                 if not item_key and dedup_writer is not None:
+                    discovery_window_s = int(sub.get("poll_timeout_s") or _SAVE_RESULT_POLL_TIMEOUT_S) + 60
                     with _writer_lock:
                         item_key = _discover_saved_item_key(
                             title=sub.get("title", ""),
                             url=url,
                             known_key=None,
                             writer=dedup_writer,
-                            window_s=int(_SAVE_RESULT_POLL_TIMEOUT_S) + 60,
+                            window_s=discovery_window_s,
                         )
                 entry = {
                     "identifier": identifier,
@@ -1432,18 +1481,21 @@ def save_urls(
             enqueue_errors.append({"url": url, "success": False, "error": str(e)})
 
     # Poll all request_ids concurrently using threads.
-    # Per-URL: 150s timeout. Overall hard cap: 300s.
+    # Per-URL timeout scales with batch size because the connector processes
+    # queued saves sequentially, while Python polls them concurrently.
     # Anti-bot short-circuit: the moment any URL hits an anti-bot page, a
     # cancel_event is set so all other threads stop immediately. The caller
     # receives successes so far + the blocking URL flagged as anti_bot_detected,
     # and remaining URLs as "pending" — ready for retry once the user clears the
     # verification in Chrome.
+    per_url_timeout_s = _compute_save_result_poll_timeout_s(len(id_to_url))
+    overall_timeout_s = _compute_save_result_poll_overall_timeout_s(len(id_to_url))
     polled: dict[str, dict] = {}
     polled_lock = threading.Lock()
     cancel_event = threading.Event()
 
     def _poll_one(request_id: str, url: str) -> None:
-        deadline = time.monotonic() + _SAVE_RESULT_POLL_TIMEOUT_S
+        deadline = time.monotonic() + per_url_timeout_s
         while time.monotonic() < deadline:
             if cancel_event.is_set():
                 # Another URL hit anti-bot; mark this one as pending for retry.
@@ -1497,8 +1549,9 @@ def save_urls(
                 "url": url,
                 "success": False,
                 "status": "timeout_likely_saved",
+                "poll_timeout_s": int(per_url_timeout_s),
                 "error": (
-                    f"Timeout ({int(_SAVE_RESULT_POLL_TIMEOUT_S)}s) — the paper was likely saved but "
+                    f"Timeout ({int(per_url_timeout_s)}s) — the paper was likely saved but "
                     "confirmation was not received in time. Check Zotero before retrying."
                 ),
             }
@@ -1510,7 +1563,7 @@ def save_urls(
     for t in threads:
         t.start()
 
-    overall_deadline = time.monotonic() + _SAVE_RESULT_POLL_OVERALL_TIMEOUT_S
+    overall_deadline = time.monotonic() + overall_timeout_s
     for t in threads:
         remaining = overall_deadline - time.monotonic()
         if remaining > 0:
@@ -1554,10 +1607,10 @@ def _apply_bridge_result_routing(
         return result
 
     # Error-page detection: title starts with known error-page prefix → save was useless.
-    title = (result.get("title") or "").lower()
-    if any(title.startswith(pattern) for pattern in _ERROR_PAGE_TITLE_PATTERNS):
-        raw_title = result.get("title", "")
-        item_key = result.get("item_key")
+    raw_title = result.get("title", "")
+    title = raw_title.lower()
+    item_key = result.get("item_key")
+    if _looks_like_error_page_title(raw_title, item_key):
         try:
             writer = _get_writer()
         except Exception:

@@ -310,6 +310,39 @@ class TestApplyBridgeResultRouting:
         writer.delete_item.assert_not_called()
         writer.add_to_collection.assert_called_once_with("GOOD1", "COL1")
 
+    def test_generic_site_only_title_without_item_key_is_error_page(self):
+        result = {
+            "success": True,
+            "url": "https://www.biorxiv.org/content/10.1101/missing",
+            "title": "| bioRxiv",
+        }
+        writer = _make_writer()
+        writer.find_items_by_url_and_title.return_value = []
+        config = _make_config(api_key="KEY")
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            out = _apply_bridge_result_routing(result, None, None)
+        assert out["success"] is False
+        assert out["error_code"] == "error_page_detected"
+
+    def test_collection_tag_routing_retries_before_warning(self):
+        result = {
+            "success": True,
+            "url": "https://example.com/paper",
+            "title": "My Paper",
+        }
+        writer = _make_writer()
+        writer.find_items_by_url_and_title.return_value = ["ITEM1"]
+        writer.add_to_collection.side_effect = [Exception("404 Item does not exist"), None]
+        config = _make_config(api_key="KEY")
+        with patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion.time.sleep"):
+            out = _apply_bridge_result_routing(result, "COL1", ["tag1"])
+        assert "warning" not in out
+        assert writer.add_to_collection.call_count == 2
+        writer.add_item_tags.assert_called_once_with("ITEM1", ["tag1"])
+
 
 # ---------------------------------------------------------------------------
 # TestSaveFromUrl
@@ -646,6 +679,32 @@ class TestSaveUrls:
         assert result["failed"] == 1
         assert result["results"][0]["url"] == "https://example.com/only"
         assert result["results"][0]["error_code"] == "extension_not_connected"
+
+    def test_timeout_uses_dynamic_batch_budget(self):
+        urls = [f"https://example.com/{i}" for i in range(5)]
+        config = _make_config(api_key=None)
+        enqueue_counter = [0]
+
+        def fake_urlopen(req_or_url, timeout=None):
+            url_str = req_or_url.full_url if hasattr(req_or_url, "full_url") else str(req_or_url)
+            if "/enqueue" in url_str:
+                enqueue_counter[0] += 1
+                return _make_urlopen_response({"request_id": f"req-{enqueue_counter[0]}"})
+            raise urllib.error.URLError("connection refused")
+
+        mono_values = [0.0] * 20 + [200.0] * 200 + [1000.0] * 500
+
+        with patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True), \
+             patch("zotpilot.tools.ingestion.BridgeServer.auto_start"), \
+             patch("zotpilot.tools.ingestion.time.sleep"), \
+             patch("zotpilot.tools.ingestion.time.monotonic", side_effect=lambda: mono_values.pop(0) if mono_values else 1000.0), \
+             patch("zotpilot.tools.ingestion._get_config", return_value=config), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            result = save_urls(urls)
+
+        assert result["failed"] == 5
+        assert all(entry["status"] == "timeout_likely_saved" for entry in result["results"])
+        assert all(entry["poll_timeout_s"] == 225 for entry in result["results"])
 
 
 class TestPreflightUrls:
@@ -1049,3 +1108,35 @@ class TestIngestPapersPdfVerification:
         assert out["success"] is False
         assert out["error_code"] == "error_page_detected"
         writer.delete_item.assert_called_once_with("BAD1")
+
+    def test_timeout_likely_saved_uses_reported_poll_timeout_for_discovery_window(self):
+        writer = _make_writer()
+        writer.check_has_pdf.return_value = False
+        url = "https://publisher.example.com/slower"
+        with patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True), \
+             patch("zotpilot.tools.ingestion.BridgeServer.auto_start"), \
+             patch("zotpilot.tools.ingestion.time.sleep"), \
+             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(api_key=None)), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion._preflight_urls", side_effect=self._preflight_all_clear), \
+             patch("zotpilot.tools.ingestion._discover_saved_item_key", return_value="SLOW2") as discover_mock, \
+             patch("zotpilot.tools.ingestion.save_urls", return_value={
+                 "total": 1,
+                 "succeeded": 0,
+                 "failed": 1,
+                 "results": [{
+                     "success": False,
+                     "status": "timeout_likely_saved",
+                     "poll_timeout_s": 225,
+                     "title": "Slow Paper",
+                     "url": url,
+                     "error": "save confirmation timed out",
+                 }],
+             }):
+            ingest_papers([{
+                "doi": "10.1000/slower",
+                "landing_page_url": url,
+                "title": "Slow Paper",
+            }])
+
+        assert discover_mock.call_args.kwargs["window_s"] == 285
