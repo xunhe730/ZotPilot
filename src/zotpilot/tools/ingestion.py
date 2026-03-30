@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
 
 import httpx
@@ -14,6 +15,7 @@ from pydantic import Field
 from ..bridge import DEFAULT_PORT, BridgeServer
 from ..state import _get_config, _get_writer, _get_zotero, mcp, register_reset_callback
 from . import ingestion_bridge, ingestion_search
+from .ingest_state import BatchState, BatchStore, IngestItemState
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,16 @@ def _clear_inbox_cache() -> None:
 
 
 register_reset_callback(_clear_inbox_cache)
+
+_batch_store = BatchStore(max_batches=50, completed_ttl_s=1800.0)
+_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
+
+
+def _clear_batch_store() -> None:
+    _batch_store.clear()
+
+
+register_reset_callback(_clear_batch_store)
 
 
 def _ensure_inbox_collection() -> str | None:
@@ -139,6 +151,68 @@ def search_academic_databases(
     )
 
 
+def _run_save_worker(
+    batch: BatchState,
+    save_candidates: list[dict],
+    resolved_collection_key: str | None,
+    tags: list[str] | None,
+) -> None:
+    """Background worker: runs save_urls chunks and updates batch state.
+
+    This function calls save_urls exactly as the old synchronous code did —
+    the only difference is it runs in a background thread and writes results
+    into BatchState instead of returning them directly.
+    """
+    try:
+        batch.state = "running"
+        urls_to_save = [c["url"] for c in save_candidates]
+        candidate_by_url = {c["url"]: c for c in save_candidates}
+
+        for start in range(0, len(urls_to_save), 10):
+            chunk = urls_to_save[start:start + 10]
+            batch_result = save_urls(chunk, collection_key=resolved_collection_key, tags=tags)
+            batch_results = list(batch_result.get("results") or [])
+            returned_urls = {r.get("url") for r in batch_results if r.get("url")}
+
+            top_level_failed = batch_result.get("success") is False
+            for result in batch_results:
+                url = result.get("url")
+                candidate = candidate_by_url.get(url)
+                if candidate is None:
+                    continue
+                idx = candidate["_index"]
+                if result.get("success") is True:
+                    batch.update_item(
+                        idx, status="saved",
+                        item_key=result.get("item_key"),
+                        title=result.get("title") or candidate.get("paper", {}).get("title"),
+                    )
+                else:
+                    batch.update_item(
+                        idx, status="failed",
+                        error=result.get("error") or result.get("error_message") or "bridge save failed",
+                    )
+
+            for url in chunk:
+                candidate = candidate_by_url.get(url)
+                if candidate is None:
+                    continue
+                idx = candidate["_index"]
+                # Mark failed if top-level failure or URL missing from results,
+                # but only if the item is still pending (not already updated above).
+                if top_level_failed or url not in returned_urls:
+                    for item in batch.pending_items:
+                        if item.index == idx and item.status == "pending":
+                            batch.update_item(idx, status="failed", error="bridge save failed")
+    except Exception as exc:
+        logger.error("Ingest worker failed: %s", exc, exc_info=True)
+        for item in batch.pending_items:
+            if item.status == "pending":
+                batch.update_item(item.index, status="failed", error=f"worker error: {exc}")
+    finally:
+        batch.finalize()
+
+
 @mcp.tool()
 def ingest_papers(
     papers: Annotated[list[dict] | str, Field(description=(
@@ -154,7 +228,11 @@ def ingest_papers(
         Field(description='JSON array of tags to apply to all ingested papers, e.g. ["tag1","tag2"]'),
     ] = None,
 ) -> dict:
-    """Batch add papers to Zotero via ZotPilot Connector."""
+    """Start async batch ingestion of papers to Zotero via ZotPilot Connector.
+
+    Returns immediately after validation and duplicate checking. Papers that need
+    saving are processed in the background. Use get_ingest_status(batch_id) to
+    track progress. When is_final is true, all papers have been processed."""
     papers = _coerce_json_list(papers, "papers")
     if not isinstance(papers, list):
         raise ToolError("papers must be a JSON array of paper dicts")
@@ -173,7 +251,7 @@ def ingest_papers(
     duplicates = 0
     failed = 0
 
-    for paper in papers:
+    for idx, paper in enumerate(papers):
         arxiv_id = paper.get("arxiv_id")
         landing_page_url = paper.get("landing_page_url")
         doi = paper.get("doi")
@@ -224,8 +302,10 @@ def ingest_papers(
         save_candidates.append({
             "paper": paper,
             "url": url,
+            "_index": idx,
         })
 
+    # --- Preflight (still synchronous — fast enough) ---
     urls_to_save = [candidate["url"] for candidate in save_candidates]
     if urls_to_save and _get_config().preflight_enabled:
         preflight_report = ingestion_bridge.preflight_urls(
@@ -252,59 +332,68 @@ def ingest_papers(
                     "status": "failed",
                     "error": error.get("error") or "preflight failed",
                 })
-            return {
-                "total": len(papers),
-                "saved": saved,
-                "duplicates": duplicates,
-                "failed": failed,
-                "collection_used": resolved_collection_key,
-                "results": results,
-            }
+            # All candidates blocked — clear so no background work
+            save_candidates = []
 
-    candidate_by_url = {candidate["url"]: candidate["paper"] for candidate in save_candidates}
-    for start in range(0, len(urls_to_save), 10):
-        chunk = urls_to_save[start:start + 10]
-        batch_result = save_urls(chunk, collection_key=resolved_collection_key, tags=tags)
-        batch_results = list(batch_result.get("results") or [])
-        returned_urls = {result.get("url") for result in batch_results if result.get("url")}
+    # --- Build batch state ---
+    pending_items = [
+        IngestItemState(index=c["_index"], url=c["url"], title=c["paper"].get("title"))
+        for c in save_candidates
+    ]
+    batch = BatchState(
+        total=len(papers),
+        collection_used=resolved_collection_key,
+        tags=tags,
+        pending_items=pending_items,
+    )
 
-        top_level_failed = batch_result.get("success") is False
-        for result in batch_results:
-            url = result.get("url")
-            paper = candidate_by_url.get(url, {})
-            if result.get("success") is True:
-                saved += 1
-                results.append({
-                    "url": url,
-                    "status": "saved",
-                    "item_key": result.get("item_key"),
-                    "title": result.get("title") or paper.get("title"),
-                })
-            else:
-                failed += 1
-                results.append({
-                    "url": url,
-                    "status": "failed",
-                    "error": result.get("error") or result.get("error_message") or "bridge save failed",
-                })
-
-        for url in chunk:
-            if top_level_failed or url not in returned_urls:
-                failed += 1
-                results.append({
-                    "url": url,
-                    "status": "failed",
-                    "error": "bridge save failed",
-                })
+    if not save_candidates:
+        # Everything resolved synchronously — mark final immediately
+        batch.state = "completed" if failed == 0 else "completed_with_errors"
+        batch.is_final = True
+        batch.finalized_at = time.monotonic()
+    else:
+        # Submit background work
+        _batch_store.put(batch)
+        _executor.submit(_run_save_worker, batch, save_candidates, resolved_collection_key, tags)
 
     return {
+        "batch_id": batch.batch_id,
+        "is_final": batch.is_final,
         "total": len(papers),
         "saved": saved,
         "duplicates": duplicates,
         "failed": failed,
+        "pending_count": len(save_candidates),
         "collection_used": resolved_collection_key,
         "results": results,
+        "pending_items": [it.to_dict() for it in pending_items],
+        "_instruction": f"Use get_ingest_status(batch_id='{batch.batch_id}') to track progress"
+        if not batch.is_final else None,
     }
+
+
+@mcp.tool()
+def get_ingest_status(
+    batch_id: Annotated[str, Field(description="Batch ID returned by ingest_papers")],
+) -> dict:
+    """Check progress of an async paper ingestion batch.
+
+    Returns current status of all papers in the batch. When state is 'completed'
+    or 'completed_with_errors', is_final will be true and results contain the
+    final item_keys for further operations (tagging, indexing)."""
+    batch = _batch_store.get(batch_id)
+    if batch is None:
+        return {
+            "batch_id": batch_id,
+            "state": "not_found",
+            "is_final": True,
+            "error": (
+                "Batch not found. It may have expired (TTL 30min after completion) "
+                "or the server was restarted. Check Zotero directly."
+            ),
+        }
+    return batch.full_status()
 
 
 @mcp.tool()
