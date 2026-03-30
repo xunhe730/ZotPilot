@@ -448,9 +448,15 @@ def save_urls(
     if not ext_status.get("extension_connected"):
         last_seen = ext_status.get("extension_last_seen_s")
         if last_seen is not None:
-            detail = f"ZotPilot Connector last seen {last_seen:.0f}s ago. Ensure Chrome is open and the extension is enabled."
+            detail = (
+                f"ZotPilot Connector last seen {last_seen:.0f}s ago. "
+                "Ensure Chrome is open and the extension is enabled."
+            )
         else:
-            detail = "ZotPilot Connector has not connected. Ensure Chrome is open and the extension is installed and enabled."
+            detail = (
+                "ZotPilot Connector has not connected. "
+                "Ensure Chrome is open and the extension is installed and enabled."
+            )
         return {
             "success": False,
             "error": detail,

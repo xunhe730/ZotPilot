@@ -310,6 +310,7 @@ class TestMCPInstructions:
             "get_unindexed_papers",
             "get_vision_costs",
             "index_library",
+            "get_ingest_status",
             "ingest_papers",
             "list_collections",
             "list_tags",

@@ -9,11 +9,11 @@ from fastmcp.exceptions import ToolError
 
 from zotpilot.tools.ingestion import (
     _batch_store,
+    get_ingest_status,
     ingest_papers,
     save_from_url,
     search_academic_databases,
 )
-from zotpilot.tools.ingestion import get_ingest_status  # noqa: F401 – tested directly
 
 
 def _make_config(*, preflight_enabled=False, openalex_email=None, zotero_api_key=None):
