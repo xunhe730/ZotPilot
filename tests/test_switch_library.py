@@ -219,10 +219,8 @@ class TestResetSingletons:
         import zotpilot.state as state
         import zotpilot.tools.ingestion as ingestion
 
-        ingestion._recently_saved_dois["10.1000/test"] = 123.0
         ingestion._inbox_collection_key = "INBOX123"
 
         state._reset_singletons()
 
-        assert ingestion._recently_saved_dois == {}
         assert ingestion._inbox_collection_key is None

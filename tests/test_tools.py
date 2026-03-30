@@ -1,9 +1,9 @@
 """Tests for MCP tool functions (mock dependencies)."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from zotpilot.state import ToolError
-
 
 # ---------------------------------------------------------------------------
 # library.py tools
@@ -53,15 +53,17 @@ class TestNotesAndAnnotations:
 
         mock_zotero = MagicMock()
         mock_zotero.get_notes.return_value = [
-            {"key": "N1", "content": "x" * 250, "title": "Note 1"},
+            {"key": "N1", "content": "x" * 250, "title": "Note 1", "tags": ["t1"], "date_added": "today"},
         ]
         mock_get_zotero.return_value = mock_zotero
 
-        result = get_notes()
+        with patch("zotpilot.tools.library._get_writer", side_effect=ToolError("no api")):
+            result = get_notes()
         assert len(result) == 1
         assert len(result[0]["content"]) <= 200
         assert result[0]["content"].startswith("x" * 10)
         assert result[0]["title"] == "Note 1"
+        assert set(result[0]) == {"key", "parent_key", "parent_title", "title", "content"}
 
     @patch("zotpilot.tools.library._get_zotero")
     def test_get_notes_full_content_when_requested(self, mock_get_zotero):
@@ -73,8 +75,30 @@ class TestNotesAndAnnotations:
         ]
         mock_get_zotero.return_value = mock_zotero
 
-        result = get_notes(verbosity="full")
+        with patch("zotpilot.tools.library._get_writer", side_effect=ToolError("no api")):
+            result = get_notes(verbosity="full")
         assert result[0]["content"] == "x" * 250
+
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_notes_merges_sqlite_and_web_api_results(self, mock_get_zotero):
+        from zotpilot.tools.library import get_notes
+
+        mock_zotero = MagicMock()
+        mock_zotero.get_notes.return_value = [
+            {"key": "N1", "title": "SQLite note", "content": "local"},
+        ]
+        mock_writer = MagicMock()
+        mock_writer.get_notes.return_value = [
+            {"key": "N2", "title": "API note", "content": "remote"},
+            {"key": "N1", "title": "API wins", "content": "newer"},
+        ]
+        mock_get_zotero.return_value = mock_zotero
+
+        with patch("zotpilot.tools.library._get_writer", return_value=mock_writer):
+            result = get_notes(verbosity="full")
+
+        assert [note["key"] for note in result] == ["N1", "N2"]
+        assert result[0]["title"] == "API wins"
 
     @patch("zotpilot.tools.library._get_api_reader")
     def test_get_annotations_truncates_text_and_comment_in_minimal_mode(self, mock_get_api_reader):
@@ -119,7 +143,7 @@ class TestGetPaperDetails:
         mock_get_zotero.return_value = mock_zotero
 
         with pytest.raises(ToolError, match="Item not found"):
-            get_paper_details("NONEXISTENT")
+            get_paper_details(doc_id="NONEXISTENT")
 
 
 # ---------------------------------------------------------------------------

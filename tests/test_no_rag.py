@@ -1,7 +1,8 @@
 """Tests for No-RAG mode (embedding_provider='none')."""
-import pytest
-from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from zotpilot.config import Config
 
@@ -50,7 +51,10 @@ class TestConfigValidation:
             vision_enabled=False,
             vision_model="",
             anthropic_api_key=None,
+            vision_max_tables_per_run=None,
+            vision_max_cost_usd=None,
             max_pages=40,
+            preflight_enabled=True,
             zotero_api_key=None,
             zotero_user_id=None,
             zotero_library_type="user",
@@ -88,7 +92,10 @@ class TestConfigValidation:
             vision_enabled=False,
             vision_model="",
             anthropic_api_key=None,
+            vision_max_tables_per_run=None,
+            vision_max_cost_usd=None,
             max_pages=40,
+            preflight_enabled=True,
             zotero_api_key=None,
             zotero_user_id=None,
             zotero_library_type="user",
@@ -155,7 +162,7 @@ class TestGetPaperDetailsNoRag:
         mock_zotero.return_value = mock_client
 
         from zotpilot.tools.library import get_paper_details
-        result = get_paper_details("KEY1")
+        result = get_paper_details(doc_id="KEY1")
         assert result["doc_id"] == "KEY1"
         assert "key" not in result
         assert result["indexed"] is False
@@ -186,8 +193,9 @@ class TestCitationsNoRag:
         mock_client.get_item.return_value = mock_item
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.citations import _get_doi
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.citations import _get_doi
         with pytest.raises(ToolError, match="no DOI"):
             _get_doi("DOC1")
 
@@ -199,8 +207,9 @@ class TestCitationsNoRag:
         mock_client.get_item.return_value = None
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.citations import _get_doi
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.citations import _get_doi
         with pytest.raises(ToolError, match="Document not found"):
             _get_doi("MISSING")
 
@@ -209,8 +218,9 @@ class TestPassageContextNoRag:
     @patch("zotpilot.tools.context._get_config")
     def test_raises_tool_error(self, mock_config):
         mock_config.return_value = _MockConfig()
-        from zotpilot.tools.context import get_passage_context
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.context import get_passage_context
         with pytest.raises(ToolError, match="requires indexing"):
             get_passage_context("DOC1", 0)
 
@@ -239,11 +249,15 @@ class TestBasicToolsWorkInNoRag:
         result = advanced_search([{"field": "year", "op": "gt", "value": "2020"}])
         assert len(result) == 1
 
+    @patch("zotpilot.tools.library._get_writer")
     @patch("zotpilot.tools.library._get_zotero")
-    def test_get_notes_works(self, mock_zotero):
+    def test_get_notes_works(self, mock_zotero, mock_get_writer):
+        from fastmcp.exceptions import ToolError
+
         mock_client = MagicMock()
         mock_client.get_notes.return_value = [{"key": "N1", "content": "note text"}]
         mock_zotero.return_value = mock_client
+        mock_get_writer.side_effect = ToolError("No API key")
 
         from zotpilot.tools.library import get_notes
         result = get_notes()

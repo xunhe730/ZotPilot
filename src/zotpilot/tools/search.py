@@ -48,7 +48,10 @@ def search_papers(
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
     required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,  # noqa: E501
-    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
     start = time.perf_counter()
@@ -123,7 +126,10 @@ def search_topic(
     chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
-    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""  # noqa: E501
     start = time.perf_counter()
@@ -155,12 +161,16 @@ def search_topic(
 
     queries = [query]
 
-    # Fetch more chunks than papers requested; double if text filters active
+    # Topic discovery needs multiple chunks per paper, but not full passage-search fanout.
+    # Use a lower ceiling than passage search and only modestly expand for text filters.
     base_fetch = min(
-        num_papers * _config.oversample_topic_factor * _config.oversample_multiplier,
-        600
+        num_papers * _config.oversample_topic_factor * max(_config.oversample_multiplier - 1, 1),
+        400,
     )
-    fetch_k = base_fetch * 2 if _has_text_filters(author, tag, collection) else base_fetch
+    if _has_text_filters(author, tag, collection):
+        fetch_k = min(base_fetch + (num_papers * _config.oversample_topic_factor), 500)
+    else:
+        fetch_k = base_fetch
 
     all_chunks: list = []
     for q in queries:
@@ -218,13 +228,14 @@ def search_topic(
             "avg_composite_score": round(avg_composite, 3),
             "best_composite_score": round(best_composite, 3),
             "num_relevant_chunks": len(hits),
-            "best_passage": best_hit.text,
             "best_passage_page": best_hit.page_num,
+            "best_passage_chunk_index": best_hit.chunk_index,
             "best_passage_section": best_hit.section,
         })
 
         if verbosity in {"standard", "full"}:
             paper_results[-1].update({
+                "best_passage": best_hit.text,
                 "authors": best_hit.authors,
                 "citation_key": best_hit.citation_key,
                 "publication": best_hit.publication,
@@ -252,7 +263,10 @@ def search_boolean(
     operator: Annotated[str, Field(description="AND (all terms required) or OR (any term)")] = "AND",
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
-    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""  # noqa: E501
     zotero = _get_zotero()
@@ -278,7 +292,6 @@ def search_boolean(
             continue
 
         results.append({
-            "item_key": item.item_key,
             "doc_id": item.item_key,
             "title": item.title,
             "year": item.year,
@@ -313,7 +326,10 @@ def search_tables(
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
-    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""  # noqa: E501
     start = time.perf_counter()
@@ -398,7 +414,10 @@ def search_figures(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    verbosity: Annotated[Literal["minimal", "standard", "full"], Field(description="Response detail level")] = "minimal",
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""  # noqa: E501
     start = time.perf_counter()

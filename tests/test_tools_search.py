@@ -1,8 +1,7 @@
 """Tests for search tool functions."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
-from dataclasses import replace
 
 from zotpilot.models import RetrievalResult, ZoteroItem
 
@@ -100,10 +99,12 @@ class TestSearchTopic:
         output = search_topic(query="neural networks", num_papers=5)
         assert len(output) == 2
         assert "item_key" not in output[0]
+        assert "best_passage" not in output[0]
+        assert "best_passage_chunk_index" in output[0]
         assert "best_passage_context" not in output[0]
         mock_singletons["retriever"].search.assert_called_once_with(
             query="neural networks",
-            top_k=75,
+            top_k=50,
             context_window=0,
             filters=None,
         )
@@ -129,8 +130,8 @@ class TestSearchBoolean:
 
         output = search_boolean(query="test words")
         assert len(output) == 1
-        assert output[0]["item_key"] == "KEY1"
         assert output[0]["doc_id"] == "KEY1"
+        assert "item_key" not in output[0]
 
     def test_empty_query(self, mock_singletons):
         from zotpilot.tools.search import search_boolean

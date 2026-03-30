@@ -178,3 +178,20 @@ class TestGetFeedsTool:
         assert result["items"][0]["authors"] == "Auth"
         assert result["items"][0]["abstract"] == "Abstract"
         assert result["items"][0]["url"] == "https://example.com"
+
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_feed_items_minimal_tolerates_missing_optional_fields(self, mock_zotero):
+        mock_client = MagicMock()
+        mock_client.get_feed_items.return_value = [
+            {"key": "F1", "title": "Paper"},
+        ]
+        mock_zotero.return_value = mock_client
+
+        from zotpilot.tools.library import get_feeds
+        result = get_feeds(library_id=1, limit=10)
+        assert result["items"][0] == {
+            "key": "F1",
+            "title": "Paper",
+            "date_added": None,
+            "read": None,
+        }

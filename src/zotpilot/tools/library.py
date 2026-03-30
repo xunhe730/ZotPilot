@@ -52,21 +52,21 @@ def list_tags(
 
 @mcp.tool()
 def get_paper_details(
-    item_key: Annotated[str, Field(description="Zotero item key")],
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
 ) -> dict:
     """Get complete metadata for a paper including abstract, tags, and index status."""
     zotero = _get_zotero()
-    item = zotero.get_item(item_key)
+    item = zotero.get_item(doc_id)
     if item is None:
-        raise ToolError(f"Item not found: {item_key}")
+        raise ToolError(f"Item not found: {doc_id}")
 
-    abstract = zotero.get_item_abstract(item_key)
+    abstract = zotero.get_item_abstract(doc_id)
 
     # Check if indexed in vector store
     try:
         store = _get_store_optional()
         if store is not None:
-            meta = store.get_document_meta(item_key)
+            meta = store.get_document_meta(doc_id)
             indexed = meta is not None
             quality_grade = meta.get("quality_grade", "") if meta else ""
         else:
@@ -153,22 +153,24 @@ def get_notes(
 ) -> list[dict]:
     """Get or search notes. Filter by parent item and/or content keyword."""
     notes = _get_zotero().get_notes(item_key=item_key, query=query, limit=limit)
-    if not notes:
-        try:
-            writer = _get_writer()
-            api_notes = writer.get_notes(item_key=item_key, query=query, limit=limit)
-            if api_notes:
-                # Merge: Web API wins on key conflict
-                merged: dict[str, dict] = {n["key"]: n for n in notes}
-                for n in api_notes:
-                    merged[n["key"]] = n
-                notes = list(merged.values())
-        except ToolError:
-            pass  # No API key — accept SQLite empty result
+    try:
+        writer = _get_writer()
+        api_notes = writer.get_notes(item_key=item_key, query=query, limit=limit)
+        if api_notes:
+            # Merge SQLite and Web API views; Web API wins on key conflict.
+            merged: dict[str, dict] = {n["key"]: n for n in notes}
+            for n in api_notes:
+                merged[n["key"]] = n
+            notes = list(merged.values())[:limit]
+    except ToolError:
+        pass  # No API key — accept SQLite-only result
     if verbosity == "minimal":
         return [
             {
-                **note,
+                "key": note.get("key"),
+                "parent_key": note.get("parent_key"),
+                "parent_title": note.get("parent_title"),
+                "title": note.get("title"),
                 "content": _truncate_text(note.get("content"), 200, add_ellipsis=True),
             }
             for note in notes
@@ -195,22 +197,22 @@ def get_feeds(
         if verbosity == "minimal":
             items = [
                 {
-                    "key": item["key"],
-                    "title": item["title"],
-                    "date_added": item["date_added"],
-                    "read": item["read"],
+                    "key": item.get("key"),
+                    "title": item.get("title"),
+                    "date_added": item.get("date_added"),
+                    "read": item.get("read"),
                 }
                 for item in items
             ]
         elif verbosity == "standard":
             items = [
                 {
-                    "key": item["key"],
-                    "title": item["title"],
-                    "authors": item["authors"],
-                    "url": item["url"],
-                    "date_added": item["date_added"],
-                    "read": item["read"],
+                    "key": item.get("key"),
+                    "title": item.get("title"),
+                    "authors": item.get("authors"),
+                    "url": item.get("url"),
+                    "date_added": item.get("date_added"),
+                    "read": item.get("read"),
                 }
                 for item in items
             ]

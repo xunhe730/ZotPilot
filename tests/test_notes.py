@@ -275,13 +275,16 @@ class TestCreateNoteTool:
 class TestGetNotesTool:
     def test_get_notes_tool_delegates_to_client(self, tmp_path):
         """get_notes MCP tool returns results from the ZoteroClient."""
+        from fastmcp.exceptions import ToolError
+
         from zotpilot.tools.library import get_notes
 
         db_path = _create_notes_db(tmp_path)
         _insert_note(db_path, 10, "NOTE01", 1, "ITEM01", "Paper One", "Tool layer note")
 
         mock_client = ZoteroClient(tmp_path)
-        with patch("zotpilot.tools.library._get_zotero", return_value=mock_client):
+        with patch("zotpilot.tools.library._get_zotero", return_value=mock_client), \
+             patch("zotpilot.tools.library._get_writer", side_effect=ToolError("no api key")):
             results = get_notes(item_key=None, limit=20, query=None)
 
         assert len(results) == 1
@@ -289,6 +292,8 @@ class TestGetNotesTool:
 
     def test_get_notes_tool_filter_by_parent(self, tmp_path):
         """get_notes MCP tool passes item_key filter through to client."""
+        from fastmcp.exceptions import ToolError
+
         from zotpilot.tools.library import get_notes
 
         db_path = _create_notes_db(tmp_path)
@@ -296,7 +301,8 @@ class TestGetNotesTool:
         _insert_note(db_path, 11, "NOTE02", 2, "ITEM02", "Paper Two", "Note B")
 
         mock_client = ZoteroClient(tmp_path)
-        with patch("zotpilot.tools.library._get_zotero", return_value=mock_client):
+        with patch("zotpilot.tools.library._get_zotero", return_value=mock_client), \
+             patch("zotpilot.tools.library._get_writer", side_effect=ToolError("no api key")):
             results = get_notes(item_key="ITEM02", limit=20, query=None)
 
         assert len(results) == 1
