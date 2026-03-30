@@ -4,7 +4,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-32_Tools-00B265?style=flat-square" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-Tool%20Suite-00B265?style=flat-square" alt="MCP">
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
   </p>
   <p>
@@ -29,7 +29,7 @@
 
 ZotPilot is an MCP server that adds semantic search, citation graph queries, and AI-assisted organization to your Zotero library. It ships with an Agent Skill for guided setup and usage.
 
-It builds a local vector index over your Zotero data, then exposes 32 tools to AI agents via MCP protocol. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, help you tag and sort your collection, and read/write notes and annotations. Your papers stay on your machine. No-RAG mode available — metadata search, notes, tags, and collections work without an embedding API key.
+It builds a local vector index over your Zotero data, then exposes a suite of search, citation, organization, ingestion, and browser-save tools to AI agents via MCP. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, help you tag and sort your collection, and read/write notes and annotations. Your papers stay on your machine. No-RAG mode available — metadata search, notes, tags, and collections work without an embedding API key.
 
 ---
 
@@ -234,7 +234,7 @@ git pull
 
 ---
 
-## 32 MCP tools
+## Main MCP tools
 
 <details>
 <summary>Search (7)</summary>
@@ -295,33 +295,40 @@ git pull
 </details>
 
 <details>
-<summary>Admin (5)</summary>
+<summary>Admin and ingestion</summary>
 
 | Tool | What it does |
 |------|-------------|
 | `index_library` | Index new papers (incremental, supports batching: `batch_size=20`, loop until `has_more=false`) |
 | `get_index_stats` | Check index status (doc count, chunk count) |
-| `switch_library` | List/switch libraries (supports group libraries) |
 | `get_reranking_config` | View ranking weights |
 | `get_vision_costs` | Check vision API usage |
+| `get_unindexed_papers` | List unindexed papers with pagination |
+| `search_academic_databases` | Search external academic databases without adding papers |
+| `ingest_papers` | Batch-ingest selected papers into Zotero |
+| `save_from_url` / `save_urls` | Save papers from real browser pages through the Connector |
+| `profile_library` | Generate a high-level library profile |
 
 </details>
+
+Use [docs/tools-reference.md](docs/tools-reference.md) as the canonical reference for the current tool surface and parameters.
 
 ---
 
 ## How it works
 
-ZotPilot's core is an MCP server. [SKILL.md](SKILL.md) provides setup and usage guidance, and [scripts/run.py](scripts/run.py) handles auto-installation and cross-platform registration. Your AI agent loads the skill and launches the MCP server with 32 tools.
+ZotPilot's core is an MCP server. [SKILL.md](SKILL.md) provides setup and usage guidance, and [scripts/run.py](scripts/run.py) handles auto-installation and cross-platform registration. Your AI agent loads the skill and launches the MCP server with search, citation, organization, ingestion, and Connector-backed save tools.
 
 ```
 Indexing (run once)
 Zotero SQLite ──→ PDF extraction ──→ Chunking + sections ──→ Embeddings ──→ ChromaDB
 
 Usage (every query)
-AI Agent ──→ 32 MCP tools ──┬── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results
-                             ├── Citation graph  ──→ OpenAlex
-                             ├── Library browse  ──→ Zotero SQLite
-                             └── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero
+AI Agent ──→ MCP tools ───────┬── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results
+                              ├── Citation graph  ──→ OpenAlex
+                              ├── Library browse  ──→ Zotero SQLite
+                              ├── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero
+                              └── Browser save    ──→ Bridge + Connector ──→ Zotero Desktop
 ```
 
 **Indexing:** reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract / Methods / Results / …), generates embeddings, stores in ChromaDB.
@@ -360,8 +367,8 @@ Design choices:
 ~/.local/share/zotpilot/chroma/
 
 # macOS
-~/Library/Application Support/zotpilot/config.json
-~/Library/Application Support/zotpilot/chroma/
+~/.config/zotpilot/config.json
+~/.local/share/zotpilot/chroma/
 
 # Windows
 %APPDATA%\zotpilot\config.json

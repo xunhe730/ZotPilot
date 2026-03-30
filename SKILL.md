@@ -78,7 +78,7 @@ compatibility:
 
 | Tool | Use when |
 |------|----------|
-| `search_academic_databases` | Search OpenAlex + Semantic Scholar (papers NOT yet in library) |
+| `search_academic_databases` | Search OpenAlex (papers NOT yet in library) |
 | `profile_library` | Analyze library themes, gaps, top venues |
 | `get_feeds` | List RSS feeds or get items from a specific feed (no index required) |
 | `get_unindexed_papers` | List papers not yet indexed, with pagination |
@@ -93,9 +93,9 @@ compatibility:
 
 | Tool | Use when |
 |------|----------|
-| `ingest_papers` | Batch add papers by DOI / arXiv ID / OA URL (defaults to INBOX). Returns `ingest_complete` for post-ingest gating |
-| `save_urls` | Save non-OA papers via browser connector |
-| `save_from_url` | Save a single URL via browser connector (defaults to INBOX) |
+| `ingest_papers` | Batch add papers by arXiv ID / landing page URL (defaults to INBOX). Returns `saved`/`duplicates`/`failed` counts |
+| `save_urls` | Save 1-10 URLs via browser connector (defaults to INBOX) |
+| `save_from_url` | Alias for `save_urls([url])` — backward compat |
 
 ### Write (requires `ZOTERO_API_KEY` + `ZOTERO_USER_ID`)
 
@@ -144,8 +144,8 @@ If the intent is ambiguous, **ask the user** before proceeding:
 All search tools default to `verbosity="minimal"`. Escalate to `standard` or `full` only when you need more metadata.
 `search_papers` defaults to `context_chunks=0`; set `context_chunks=1` only when surrounding chunks are needed.
 `search_topic` no longer returns `best_passage_context`. Use `search_papers` or `get_passage_context` for expanded text.
-`doc_id` is the canonical identifier across tools. In `search_boolean`, `item_key` remains as a backward-compatible alias with the same value.
-`get_library_overview` and `get_paper_details` now return `doc_id` instead of `key`.
+`doc_id` is the canonical identifier across search results. Use the returned `doc_id` value consistently in follow-up read/search flows.
+`get_library_overview` returns `doc_id` for each paper row, and `get_paper_details(doc_id=...)` accepts the same identifier.
 
 ---
 
@@ -180,10 +180,7 @@ The user may leave their computer after issuing a research command — a silent 
 
 Preflight works by sending `{"action": "preflight", "url": ...}` through the ZotPilot Connector, which probes each URL **inside the already-logged-in Chrome browser** — institutional session cookies are active, so the result reflects actual access conditions.
 
-`ingest_papers` runs preflight automatically (default `preflight=True`) for all URLs it handles (Priority 1 & 2). Always read `preflight_report` on every `ingest_papers` response:
-- `all_clear=true` → proceed to save
-- `all_clear=false` → **stop immediately**, show blocked/error URLs to user, wait for resolution before retrying
-- Use `preflight=False` only when user explicitly bypasses after resolving the issue
+`ingest_papers` runs preflight automatically (controlled by `preflight_enabled` in config, default `true`). When preflight detects blocked or errored URLs, the tool returns early with `blocked`/`errors` arrays — **stop immediately**, show them to the user, and wait for resolution before retrying.
 
 For Priority 3 (`save_urls`): call `save_urls([landing_page_url, ...])` directly — `save_urls` itself handles browser-based saving. Do NOT use `ingest_papers` as a preflight-only probe for Priority 3 URLs, because `ingest_papers` will proceed to save when preflight succeeds, causing duplicate saves. Preflight is only relevant for Priority 1 & 2 (where `ingest_papers` is the actual save tool).
 
@@ -196,20 +193,18 @@ For Priority 3 (`save_urls`): call `save_urls([landing_page_url, ...])` directly
 | 1 | `arxiv_id` present | `ingest_papers([{arxiv_id:...}])` |
 | 2 | `doi` + `is_oa=True` + `oa_url` present | `ingest_papers([{doi:..., landing_page_url: <oa_url>}])` — pass `oa_url` value as `landing_page_url` (i.e., `landing_page_url` = the `oa_url` value from the search result) |
 | 3 | `doi` + `is_oa=False` + `landing_page_url` + user has subscription | `save_urls([landing_page_url])` — use `landing_page_url` from the search result as-is. Do not construct the URL from DOI alone. Requires Chrome+Connector. |
-| 4 | `doi` only (no subscription or OA) | `ingest_papers([{doi:...}])` — metadata only, no PDF |
-| 5 | No `doi` | Skip, inform user |
+| 4 | `doi` only (no `arxiv_id` or `landing_page_url`) | Skip — doi.org redirects produce unpredictable publisher formats that cause Zotero translators to save incorrect entries |
+| 5 | No identifier | Skip, inform user |
 
-> **ScienceDirect / Elsevier note:** `doi.org` redirects to ScienceDirect frequently trigger anti-bot. Always use the `landing_page_url` from OpenAlex when available. If only DOI is available, `save_urls([f"https://www.sciencedirect.com/science/article/doi/{doi}"])` is more reliable than `doi.org`.
+> **Tags at ingest are discouraged.** Prefer tagging after indexing and note generation: call `list_tags` first, pick from existing vocabulary only, and ask the user before adding any new tag.
 
-> **Tags at ingest are discouraged.** The tool emits a `tags_advisory` warning when tags are passed. Prefer tagging after indexing and note generation: call `list_tags` first, pick from existing vocabulary only, and ask the user before adding any new tag.
-
-> **Initial ingest defaults to INBOX.** No need to pass `collection_key` for `ingest_papers` or `save_from_url` unless you explicitly want another collection.
+> **Initial ingest defaults to INBOX.** No need to pass `collection_key` for `ingest_papers` or `save_urls` unless you explicitly want another collection.
 
 **Step 7 — Post-ingest:**
 
-1. Read `ingest_complete` from tool output:
-   - `true` → present the ingest result table to the user, then ask once whether to run post-ingest workflow
-   - `false` → resolve `ingest_blockers` first, then re-evaluate the gate
+1. Read the result: check `saved`, `duplicates`, `failed` counts
+   - `saved > 0` → present the ingest result table to the user, then ask once whether to run post-ingest workflow
+   - `failed > 0` → show failed items and errors to the user, let them decide whether to retry or proceed with successful items
 2. After the user confirms, execute `references/post-ingest-guide.md` Phase 2 automatically
 3. Do not ask for confirmation at each sub-step (index, notes, classify, tag). The Phase 1 confirmation covers all of them.
 4. Exception: if auto-classification or tag selection is uncertain, batch unresolved cases and ask once at the end
@@ -236,4 +231,5 @@ Trigger: user says "分析我的文献库", "profile my library", or ZOTPILOT.md
 | `error_code: "anti_bot_detected"` | Cloudflare / publisher blocked the save before it happened | Retry with `doi.org/{doi}`, or ask user to manually open page in Chrome first |
 | `translator_fallback_detected` | No Zotero translator matched the page | Saved as web snapshot — user should verify/replace in Zotero |
 | `pdf: "none"` + `warning` in result | PDF not attached — robot check blocked download or PDF unavailable | Metadata saved OK; user downloads PDF manually and attaches in Zotero |
+| `pdf: "pending"` + `warning` in result | Metadata save finished, but Zotero may still be downloading the PDF | Wait 1-2 minutes, then use `get_paper_details(doc_id=...)` to verify |
 | `status: "pending"` in batch result | Anti-bot triggered mid-batch; remaining URLs were short-circuited | Re-run ingest for the pending items after user resolves the blocked page |

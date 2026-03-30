@@ -270,6 +270,14 @@ bridge 在 `http://127.0.0.1:2619` 上暴露一组很小的 HTTP API。
 
 ## 开发
 
+### 开发安装（Chrome）
+
+1. `npm install`
+2. `./build.sh -d`　　# 开发模式构建
+3. Chrome → 扩展程序 → 加载已解压的扩展程序 → 选择 `build/manifestv3/` 目录
+   ⚠️ 注意：必须加载 `build/` 目录，不能直接加载 `src/`
+4. 若遇到 `extension_not_connected`，先确认加载的是 `build/manifestv3/` 而非 `src/`
+
 ### 构建命令
 
 ```bash

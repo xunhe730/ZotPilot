@@ -1,9 +1,6 @@
 """Tests for configuration loading, saving, migration, and validation."""
 import json
-import os
 import stat
-
-import pytest
 from pathlib import Path
 
 from zotpilot.config import Config
@@ -46,6 +43,9 @@ class TestConfigLoadDefaults:
         assert cfg.vision_enabled is True
         assert cfg.vision_model == "claude-haiku-4-5-20251001"
         assert cfg.anthropic_api_key is None
+        assert cfg.vision_max_tables_per_run is None
+        assert cfg.vision_max_cost_usd is None
+        assert cfg.preflight_enabled is True
         assert cfg.zotero_api_key is None
         assert cfg.zotero_user_id is None
         assert cfg.zotero_library_type == "user"
@@ -139,9 +139,6 @@ class TestConfigMigration:
             "chunk_size": 512,
         }))
 
-        new_dir = tmp_path / ".config" / "zotpilot"
-        # New dir does NOT exist
-
         # Patch expanduser to use tmp_path as home
         original_expanduser = Path.expanduser
 
@@ -189,7 +186,10 @@ class TestConfigValidation:
             vision_enabled=cfg.vision_enabled,
             vision_model=cfg.vision_model,
             anthropic_api_key=cfg.anthropic_api_key,
+            vision_max_tables_per_run=cfg.vision_max_tables_per_run,
+            vision_max_cost_usd=cfg.vision_max_cost_usd,
             max_pages=cfg.max_pages,
+            preflight_enabled=cfg.preflight_enabled,
             zotero_api_key=cfg.zotero_api_key,
             zotero_user_id=cfg.zotero_user_id,
             zotero_library_type=cfg.zotero_library_type,

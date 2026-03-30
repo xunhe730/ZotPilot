@@ -156,8 +156,8 @@ If you get "Document has no DOI", the paper's DOI field is empty in Zotero. Tell
 ### Research → Ingest → Organize
 1. `search_academic_databases(query, limit=20)` — find candidate papers outside the library
 2. Show candidates to the user and confirm which ones to ingest
-3. `ingest_papers(papers)` — defaults to INBOX and returns `ingest_complete`
-4. Read `preflight_report`, `pdf_summary`, `collection_used`, and `ingest_complete`
+3. `ingest_papers(papers)` — defaults to INBOX, returns `saved`/`duplicates`/`failed` counts
+4. Read `saved`, `failed`, `collection_used` and the `results` array
 5. Present the ingest table to the user and ask once whether to continue with indexing, notes, classification, and tags
 6. If confirmed, follow [references/post-ingest-guide.md](/Users/zxd/ZotPilot/references/post-ingest-guide.md)
 

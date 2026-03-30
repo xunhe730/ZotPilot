@@ -107,7 +107,7 @@ class TestSearchContracts:
         assert len(json.dumps(minimal, ensure_ascii=False)) < 5000
         assert len(json.dumps(minimal, ensure_ascii=False)) < len(json.dumps(full, ensure_ascii=False)) * 0.40
 
-    def test_search_topic_minimal_removes_best_passage_context(self):
+    def test_search_topic_minimal_returns_pointers_not_passage_text(self):
         from zotpilot.tools.search import search_topic
 
         retriever = MagicMock()
@@ -129,15 +129,18 @@ class TestSearchContracts:
         assert "doc_id" in minimal[0]
         assert "doc_title" in minimal[0]
         assert "year" in minimal[0]
-        assert "best_passage" in minimal[0]
+        assert "best_passage" not in minimal[0]
+        assert "best_passage_chunk_index" in minimal[0]
         assert "best_passage_context" not in minimal[0]
         assert "authors" not in minimal[0]
+        assert "best_passage" in full[0]
         assert "authors" in full[0]
         assert "tags" in full[0]
         assert retriever.search.call_args.kwargs["context_window"] == 0
+        assert retriever.search.call_args.kwargs["top_k"] == 100
         assert len(json.dumps(minimal, ensure_ascii=False)) < 4000
 
-    def test_search_boolean_alias_and_metadata_gating(self):
+    def test_search_boolean_doc_id_and_metadata_gating(self):
         from zotpilot.tools.search import search_boolean
 
         zotero = MagicMock()
@@ -149,8 +152,8 @@ class TestSearchContracts:
             full = search_boolean("exact terms", verbosity="full")
 
         assert minimal[0]["doc_id"] == "KEY1"
-        assert minimal[0]["item_key"] == "KEY1"
         assert minimal[0]["authors"] == "Auth"
+        assert "item_key" not in minimal[0]
         assert "citation_key" not in minimal[0]
         assert full[0]["authors"] == "Auth"
         assert "doi" in full[0]
@@ -355,6 +358,47 @@ class TestContextAndIndexingContracts:
         assert "quality_distribution" not in compact
         assert "quality_distribution" in full
 
+    def test_index_library_exposes_vision_budget_summary_when_requested(self):
+        from zotpilot.tools.indexing import index_library
+
+        index_result = {
+            "results": [],
+            "indexed": 0,
+            "failed": 0,
+            "empty": 0,
+            "skipped": 0,
+            "already_indexed": 0,
+            "quality_distribution": {},
+            "extraction_stats": {},
+            "long_documents": [],
+            "skipped_long": 0,
+            "total_to_index": 3,
+            "has_more": False,
+            "vision_pending_tables": 12,
+            "vision_estimated_cost_usd": 0.12,
+            "vision_budget_skipped": True,
+            "vision_skip_reason": "table cap 5",
+        }
+        config = MagicMock()
+        config.validate.return_value = []
+        config.max_pages = 40
+        config.vision_enabled = True
+
+        with (
+            patch("zotpilot.tools.indexing._get_config", return_value=config),
+            patch("zotpilot.tools.indexing._get_store") as mock_store,
+            patch("zotpilot.indexer.Indexer") as mock_indexer_cls,
+            patch("dataclasses.replace", side_effect=lambda obj, **kwargs: obj),
+        ):
+            mock_store.return_value.clear_query_cache = MagicMock()
+            mock_indexer_cls.return_value.index_all.return_value = index_result
+            result = index_library(batch_size=0, include_summary=True)
+
+        assert result["vision_pending_tables"] == 12
+        assert result["vision_estimated_cost_usd"] == 0.12
+        assert result["vision_budget_skipped"] is True
+        assert result["vision_skip_reason"] == "table cap 5"
+
     def test_get_unindexed_papers_paginates(self):
         from zotpilot.tools.indexing import get_unindexed_papers
 
@@ -404,26 +448,30 @@ class TestLibraryIdentifierContracts:
         assert "citation_key" in full["papers"][0]
 
 class TestIngestionPreflightContracts:
-    def test_preflight_report_is_summarized_by_default(self):
+    def test_preflight_blocked_returns_failed_results(self):
+        """Preflight blocked URLs appear as failed in simplified result format."""
         from zotpilot.tools.ingestion import ingest_papers
 
         report = {
             "checked": 2,
-            "accessible": [{"url": "https://doi.org/10.1"}],
-            "blocked": [{"url": "https://doi.org/10.2"}],
-            "skipped": [{"url": "https://doi.org/10.3"}],
+            "accessible": [{"url": "https://arxiv.org/abs/2401.0001"}],
+            "blocked": [{"url": "https://arxiv.org/abs/2401.0002", "error": "anti-bot"}],
+            "skipped": [],
             "errors": [],
             "all_clear": False,
         }
 
+        mock_config = type("C", (), {"preflight_enabled": True, "zotero_api_key": None})()
         with (
-            patch("zotpilot.tools.ingestion._preflight_urls", return_value=report),
-            patch("zotpilot.tools.ingestion.save_urls"),
+            patch("zotpilot.tools.ingestion._get_config", return_value=mock_config),
+            patch("zotpilot.tools.ingestion.ingestion_bridge.preflight_urls", return_value=report),
+            patch("zotpilot.tools.ingestion._lookup_local_item_key_by_doi", return_value=None),
         ):
-            result = ingest_papers([{"doi": "10.1"}, {"doi": "10.2"}])
+            result = ingest_papers([
+                {"arxiv_id": "2401.0001"},
+                {"arxiv_id": "2401.0002"},
+            ])
 
-        summary = result["preflight_report"]
-        assert summary["accessible_count"] == 1
-        assert summary["skipped_count"] == 1
-        assert "accessible" not in summary
-        assert "skipped" not in summary
+        assert result["failed"] >= 1
+        failed_results = [r for r in result["results"] if r["status"] == "failed"]
+        assert any("anti-bot" in r.get("error", "") for r in failed_results)

@@ -4,7 +4,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-32_Tools-00B265?style=flat-square" alt="MCP">
+    <img src="https://img.shields.io/badge/MCP-Tool%20Suite-00B265?style=flat-square" alt="MCP">
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
   </p>
   <p>
@@ -29,7 +29,7 @@
 
 ZotPilot 是一个 MCP server，给你的 Zotero 文献库加上语义搜索、引用图谱查询和 AI 辅助整理功能。附带 Agent Skill 提供安装引导和使用指南。
 
-具体来说，它在你本地的 Zotero 数据上建了一套向量索引，然后通过 MCP 协议暴露 32 个工具给 AI agent。AI 可以按意思搜论文（不是关键词匹配）、定位到具体章节段落、查谁引了谁、帮你打标签分类、读写笔记和批注。论文数据不离开你的电脑。支持 No-RAG 模式——不配置 embedding 也能使用元数据搜索、笔记、标签等基础功能。
+具体来说，它在你本地的 Zotero 数据上建了一套向量索引，然后通过 MCP 协议暴露一组搜索、引用、整理、摄取和浏览器保存工具给 AI agent。AI 可以按意思搜论文（不是关键词匹配）、定位到具体章节段落、查谁引了谁、帮你打标签分类、读写笔记和批注。论文数据不离开你的电脑。支持 No-RAG 模式——不配置 embedding 也能使用元数据搜索、笔记、标签等基础功能。
 
 ---
 
@@ -287,7 +287,7 @@ git pull
 
 ---
 
-## 32 个 MCP 工具
+## 主要 MCP 工具
 
 <details>
 <summary>搜索（7 个）</summary>
@@ -348,33 +348,40 @@ git pull
 </details>
 
 <details>
-<summary>管理（5 个）</summary>
+<summary>管理与摄取</summary>
 
 | 工具 | 说明 |
 |------|------|
 | `index_library` | 索引新论文（增量，支持分批：`batch_size=20`，循环调用直到 `has_more=false`） |
 | `get_index_stats` | 查看索引状态（文档数、分块数） |
-| `switch_library` | 列出/切换文献库（支持群组库） |
 | `get_reranking_config` | 看排序权重 |
 | `get_vision_costs` | 看视觉 API 用量 |
+| `get_unindexed_papers` | 分页列出未索引论文 |
+| `search_academic_databases` | 搜外部学术数据库，不直接入库 |
+| `ingest_papers` | 将候选论文批量加入 Zotero |
+| `save_from_url` / `save_urls` | 通过 Connector 从真实浏览器页面保存论文 |
+| `profile_library` | 对当前文献库做概览分析 |
 
 </details>
+
+完整工具面和参数说明以 [docs/tools-reference.md](docs/tools-reference.md) 为准。
 
 ---
 
 ## 工作原理
 
-ZotPilot 的核心是一个 MCP server，通过 [SKILL.md](SKILL.md) 提供安装和使用指导，[scripts/run.py](scripts/run.py) 负责自动安装和跨平台注册。AI agent 加载后会启动 MCP server，暴露 32 个工具。
+ZotPilot 的核心是一个 MCP server，通过 [SKILL.md](SKILL.md) 提供安装和使用指导，[scripts/run.py](scripts/run.py) 负责自动安装和跨平台注册。AI agent 加载后会启动 MCP server，并按 MCP 暴露搜索、引用、整理、摄取和 Connector 保存能力。
 
 ```
 索引（跑一次）
 Zotero SQLite ──→ PDF 提取 ──→ 分块 + 章节分类 ──→ 向量嵌入 ──→ ChromaDB
 
 使用（每次查询）
-AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ ChromaDB ──→ 重排序 ──→ 结果
+AI Agent ──→ MCP 工具 ──────────┬── 语义搜索 ──→ ChromaDB ──→ 重排序 ──→ 结果
                                ├── 引用图谱 ──→ OpenAlex
                                ├── 文献浏览 ──→ Zotero SQLite
-                               └── 写操作   ──→ Zotero Web API ──→ 同步回 Zotero
+                               ├── 写操作   ──→ Zotero Web API ──→ 同步回 Zotero
+                               └── 浏览器保存 ──→ Bridge + Connector ──→ Zotero Desktop
 ```
 
 **索引阶段：** 从 Zotero SQLite（只读）读元数据，用 PyMuPDF 提取 PDF 全文、表格和图表，按学术章节（Abstract / Methods / Results / …）分块，生成向量嵌入存入 ChromaDB。
@@ -426,8 +433,8 @@ Agent → ZotPilot MCP tool → 本地 bridge (127.0.0.1:2619) → Chrome 扩展
 ~/.local/share/zotpilot/chroma/
 
 # macOS
-~/Library/Application Support/zotpilot/config.json
-~/Library/Application Support/zotpilot/chroma/
+~/.config/zotpilot/config.json
+~/.local/share/zotpilot/chroma/
 
 # Windows
 %APPDATA%\zotpilot\config.json

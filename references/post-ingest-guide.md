@@ -2,16 +2,15 @@
 
 ## Phase 1: 入库完成确认 (Gate)
 
-After every `ingest_papers` or `save_from_url` call:
+After every `ingest_papers` or `save_urls` call:
 
-### 1.1 Check `ingest_complete`
+### 1.1 Check result
 
-- `ingest_complete: true` → proceed to Phase 2
-- `ingest_complete: false` → read `ingest_blockers` and resolve:
+- `saved > 0` → proceed to Phase 2
+- `failed > 0` → show failed items and errors to the user:
   - Missing `item_key`: call `advanced_search(conditions=[{"field": "title", "op": "contains", "value": "..."}])`
-  - Unknown PDF status: call `get_paper_details(item_key)` to verify
   - Preflight blocked: show blocked URLs to user and wait for their decision
-  - After resolving blockers, re-evaluate the gate manually
+  - Let the user decide whether to retry failed items or proceed with successful ones
 
 ### 1.2 Present ingest result to user (mandatory)
 
@@ -77,10 +76,10 @@ For every paper selected for note generation, follow `references/note-analysis-p
 
 If quality checks fail, report a summary to the user instead of asking step-by-step questions.
 
-## Single-paper flow (`save_from_url`)
+## Single-paper flow (`save_urls`)
 
-1. `save_from_url(url)` → check response has `item_key` and `collection_used`
+1. `save_urls([url])` → check response has `item_key` and `collection_used`
 2. If no `item_key` → use `advanced_search` to locate the item
-3. Present the result: title, PDF status, collection
+3. Present the result: title, collection
 4. Ask once whether to execute post-ingest processing
 5. If the user confirms, run Steps A-E for that paper

@@ -68,8 +68,11 @@ class Config:
     vision_enabled: bool
     vision_model: str
     anthropic_api_key: str | None
+    vision_max_tables_per_run: int | None
+    vision_max_cost_usd: float | None
     # Long document filtering
     max_pages: int  # Maximum PDF pages to index (0 = no limit)
+    preflight_enabled: bool
     # Zotero Web API (for write operations)
     zotero_api_key: str | None
     zotero_user_id: str | None
@@ -136,7 +139,10 @@ class Config:
             vision_enabled=data.get("vision_enabled", True),
             vision_model=data.get("vision_model", "claude-haiku-4-5-20251001"),
             anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or data.get("anthropic_api_key"),
+            vision_max_tables_per_run=data.get("vision_max_tables_per_run"),
+            vision_max_cost_usd=data.get("vision_max_cost_usd"),
             max_pages=data.get("max_pages", 40),
+            preflight_enabled=data.get("preflight_enabled", True),
             zotero_api_key=os.environ.get("ZOTERO_API_KEY") or data.get("zotero_api_key"),
             zotero_user_id=os.environ.get("ZOTERO_USER_ID") or data.get("zotero_user_id"),
             zotero_library_type=data.get("zotero_library_type", "user"),
@@ -174,7 +180,10 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
+            "vision_max_tables_per_run": self.vision_max_tables_per_run,
+            "vision_max_cost_usd": self.vision_max_cost_usd,
             "max_pages": self.max_pages,
+            "preflight_enabled": self.preflight_enabled,
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
         }

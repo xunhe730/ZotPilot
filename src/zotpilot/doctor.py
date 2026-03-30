@@ -195,15 +195,6 @@ def run_checks(config_path: str | None = None, full: bool = False) -> list[Check
     # 6. Zotero Web API credentials
     results.append(_check_zotero_web_api(config))
 
-    # 7b. Semantic Scholar API key (warn if missing — rate-limited without key)
-    if not config.semantic_scholar_api_key:
-        results.append(CheckResult(
-            "semantic_scholar_key",
-            "warn",
-            "S2_API_KEY not set. Academic search rate-limited to 1 req/sec. "
-            "Set: zotpilot config set semantic_scholar_api_key <key>",
-        ))
-
     # 7. Write connectivity (only with --full)
     if full:
         results.append(_check_write_connectivity(config))

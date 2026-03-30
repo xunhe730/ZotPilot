@@ -1,19 +1,20 @@
 """Tests for shared state helpers in zotpilot.state."""
+import re
 import threading
-import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from zotpilot.models import RetrievalResult
 from zotpilot.state import (
-    _build_chromadb_filters,
-    _apply_text_filters,
-    _has_text_filters,
+    _MCP_INSTRUCTIONS,
     _apply_required_terms,
-    _result_to_dict,
+    _apply_text_filters,
+    _build_chromadb_filters,
+    _has_text_filters,
     _merge_results_by_chunk,
+    _result_to_dict,
 )
-
 
 # ---------------------------------------------------------------------------
 # _build_chromadb_filters
@@ -256,7 +257,6 @@ class TestThreadSafety:
 
         mock_config = MagicMock()
         original_config = state_mod._config
-        original_lock = state_mod._init_lock
 
         try:
             # Reset to force initialization
@@ -277,3 +277,72 @@ class TestThreadSafety:
                 assert all(r is results[0] for r in results)
         finally:
             state_mod._config = original_config
+
+
+class TestMCPInstructions:
+    def test_registered_tool_surface_matches_expected_set(self):
+        tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
+        registered = set()
+        pattern = re.compile(r"@mcp\.tool\(\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(")
+        for path in tools_dir.glob("*.py"):
+            registered.update(pattern.findall(path.read_text()))
+
+        expected = {
+            "add_item_tags",
+            "add_to_collection",
+            "advanced_search",
+            "batch_collections",
+            "batch_tags",
+            "create_collection",
+            "create_note",
+            "find_citing_papers",
+            "find_references",
+            "get_annotations",
+            "get_citation_count",
+            "get_collection_papers",
+            "get_feeds",
+            "get_index_stats",
+            "get_library_overview",
+            "get_notes",
+            "get_paper_details",
+            "get_passage_context",
+            "get_reranking_config",
+            "get_unindexed_papers",
+            "get_vision_costs",
+            "index_library",
+            "ingest_papers",
+            "list_collections",
+            "list_tags",
+            "profile_library",
+            "remove_from_collection",
+            "remove_item_tags",
+            "save_from_url",
+            "save_urls",
+            "search_academic_databases",
+            "search_boolean",
+            "search_figures",
+            "search_papers",
+            "search_tables",
+            "search_topic",
+            "set_item_tags",
+            "switch_library",
+        }
+
+        assert registered == expected
+
+    def test_instructions_reference_only_registered_tools(self):
+        tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
+        registered = set()
+        pattern = re.compile(r"@mcp\.tool\(\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(")
+        for path in tools_dir.glob("*.py"):
+            registered.update(pattern.findall(path.read_text()))
+
+        referenced = {
+            name
+            for name in re.findall(r"`([a-z_][a-z0-9_]*)`", _MCP_INSTRUCTIONS)
+            if "_" in name
+        }
+        non_tool_tokens = {"best_passage_context", "doc_id"}
+
+        assert "add_paper_by_identifier" not in referenced
+        assert (referenced - non_tool_tokens) <= registered

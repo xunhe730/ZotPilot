@@ -44,7 +44,7 @@ The bridge exposes HTTP endpoints on `http://127.0.0.1:2619`. Any HTTP-capable c
 |-----------|----------|------|
 | `bridge.py` | Python | HTTP server, command queue, result storage, heartbeat tracking |
 | `agentAPI.js` | JavaScript | Extension-side poller, save orchestration, completion detection |
-| MCP tool `save_from_url` | Python | Client-facing API (via ZotPilot MCP server) |
+| MCP tool `save_urls` | Python | Client-facing API (via ZotPilot MCP server) |
 
 ---
 

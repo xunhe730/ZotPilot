@@ -139,14 +139,14 @@ ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
 | Filter by year/author/tag/etc.                          | advanced_search             |
 | Find data tables                                        | search_tables               |
 | Find figures or diagrams                                | search_figures              |
-| Add a specific paper by DOI/arXiv/URL                   | add_paper_by_identifier     |
-| Search external academic databases (OpenAlex/S2)        | search_academic_databases   |
+| Search external academic databases (OpenAlex)            | search_academic_databases   |
 | Batch add papers from search results to Zotero          | ingest_papers               |
+| Save browser pages into Zotero via Connector            | save_urls                   |
+| Save a single URL (alias for save_urls)                 | save_from_url               |
 
 **Note**: `search_topic` searches your LOCAL indexed Zotero library \
 (requires prior `index_library`). `search_academic_databases` queries \
-EXTERNAL databases (OpenAlex primary, Semantic Scholar supplement when S2_API_KEY is set) \
-and finds papers not yet in your library.
+EXTERNAL databases (OpenAlex) and finds papers not yet in your library.
 
 **Default research flow:**
 1. `search_topic` to discover what is already in the local library
@@ -159,8 +159,7 @@ set `context_chunks=1` only when adjacent context is useful. \
 `search_topic` no longer returns `best_passage_context` — use \
 `search_papers` or `get_passage_context` instead.
 
-`doc_id` is the canonical identifier across tools. In `search_boolean`, \
-`item_key` remains as a backward-compatible alias with the same value. \
+`doc_id` is the canonical identifier in search and library results. \
 `get_library_overview` and `get_paper_details` return `doc_id` instead of `key`.
 
 **Typical literature collection workflow:**

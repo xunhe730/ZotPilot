@@ -36,7 +36,7 @@ uv run mypy src
 
 ## Architecture
 
-ZotPilot exposes a **FastMCP server** with 32 tools for semantic search over a local Zotero library. The architecture has four main layers:
+ZotPilot exposes a **FastMCP server** for semantic search, citation lookup, ingestion, and library operations over a local Zotero library. The architecture has four main layers:
 
 ### 1. Entry points
 - `cli.py` — argparse CLI with subcommands: `setup`, `index`, `status`, `doctor`, `config`, `register`. With no subcommand, runs the MCP server.
@@ -51,13 +51,15 @@ Eight modules, each imported by `tools/__init__.py` to trigger `@mcp.tool` decor
 | Module | Responsibility |
 |--------|----------------|
 | `search.py` | `search_papers`, `search_topic`, `search_boolean`, `search_tables`, `search_figures` |
-| `context.py` | `get_passage_context`, `get_paper_details` |
-| `library.py` | `get_library_overview`, `advanced_search`, `get_notes`, `list_tags`, `list_collections`, etc. |
+| `context.py` | `get_passage_context` |
+| `library.py` | `get_paper_details`, `get_library_overview`, `get_notes`, `list_tags`, `list_collections`, etc. |
 | `indexing.py` | `index_library`, `get_index_stats` |
 | `citations.py` | `find_references`, `find_citing_papers`, `get_citation_count` |
 | `write_ops.py` | `create_note`, `add_item_tags`, `set_item_tags`, `create_collection`, `add_to_collection`, etc. |
 | `admin.py` | `switch_library`, `get_reranking_config`, `get_vision_costs` |
-| `ingestion.py` | `search_academic_databases`, `add_paper_by_identifier`, `ingest_papers` |
+| `ingestion.py` | `search_academic_databases`, `ingest_papers`, `save_from_url`, `save_urls` |
+
+`ingestion.py` now acts as the MCP-facing orchestration shell. Internal helper modules under `tools/` split ingestion responsibilities: `ingestion_search.py` handles OpenAlex search adapters and result formatting, while `ingestion_bridge.py` handles connector preflight, bridge polling, item discovery, and routing helpers.
 
 Write operations (`write_ops.py`) require `ZOTERO_API_KEY` + `ZOTERO_USER_ID` env vars; they use `ZoteroWriter` (pyzotero Web API). Read-only tools use `ZoteroClient` (local SQLite).
 
@@ -92,7 +94,6 @@ API keys are always read from environment first, then config file. `Config.save(
 | `ANTHROPIC_API_KEY` | Vision extraction (figures/tables) |
 | `ZOTERO_API_KEY` | Write operations |
 | `ZOTERO_USER_ID` | Numeric Zotero user ID |
-| `S2_API_KEY` | Semantic Scholar (optional, higher rate limit) |
 
 ## Git Workflow
 
