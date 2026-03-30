@@ -32,11 +32,12 @@ def is_doi_query(query: str) -> str | None:
 
 
 def normalize_doi(doi: str | None) -> str | None:
-    """Return a normalized DOI without scheme/prefix, or None if invalid."""
+    """Return a normalized lowercase DOI without scheme/prefix, or None if invalid."""
     if not doi:
         return None
     prefixed = doi if doi.lower().startswith(("doi:", "http://", "https://")) else f"doi:{doi}"
-    return is_doi_query(prefixed)
+    result = is_doi_query(prefixed)
+    return result.lower() if result else None
 
 
 def format_openalex_paper(paper: dict) -> dict:

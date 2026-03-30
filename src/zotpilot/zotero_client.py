@@ -1083,13 +1083,13 @@ class ZoteroClient:
         col = col_map[field]
 
         if op == "contains":
-            return f"{col} LIKE ?", [f"%{value}%"]
+            return f"LOWER({col}) LIKE LOWER(?)", [f"%{value}%"]
         elif op == "is":
-            return f"{col} = ?", [value]
+            return f"LOWER({col}) = LOWER(?)", [value]
         elif op == "isNot":
-            return f"({col} IS NULL OR {col} != ?)", [value]
+            return f"({col} IS NULL OR LOWER({col}) != LOWER(?))", [value]
         elif op == "beginsWith":
-            return f"{col} LIKE ?", [f"{value}%"]
+            return f"LOWER({col}) LIKE LOWER(?)", [f"{value}%"]
         elif op == "gt":
             return f"{col} > ?", [value]
         elif op == "lt":

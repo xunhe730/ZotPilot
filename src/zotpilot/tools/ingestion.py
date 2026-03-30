@@ -88,13 +88,13 @@ def _lookup_local_item_key_by_doi(normalized_doi: str | None) -> str | None:
     except Exception:
         return None
 
-    unique_keys = {
-        hit.get("item_key")
+    unique_keys = [
+        hit["item_key"]
         for hit in hits
         if isinstance(hit, dict) and hit.get("item_key")
-    }
-    if len(unique_keys) == 1:
-        return next(iter(unique_keys))
+    ]
+    if unique_keys:
+        return unique_keys[0]
     return None
 
 
@@ -177,10 +177,13 @@ def ingest_papers(
         doi = paper.get("doi")
 
         normalized_doi = ingestion_search.normalize_doi(doi)
-        if not normalized_doi and arxiv_id:
-            normalized_doi = ingestion_search.normalize_doi(f"10.48550/arxiv.{arxiv_id}")
+        arxiv_doi = ingestion_search.normalize_doi(f"10.48550/arxiv.{arxiv_id}") if arxiv_id else None
+        if not normalized_doi:
+            normalized_doi = arxiv_doi
 
-        existing_item_key = _lookup_local_item_key_by_doi(normalized_doi)
+        existing_item_key = _lookup_local_item_key_by_doi(normalized_doi) or (
+            _lookup_local_item_key_by_doi(arxiv_doi) if arxiv_doi and arxiv_doi != normalized_doi else None
+        )
         if existing_item_key:
             duplicates += 1
             results.append({
@@ -348,6 +351,24 @@ def save_urls(
                 "results": [],
                 "collection_used": resolved_collection_key,
             }
+
+    # Fast-fail if extension is not connected (Chrome closed or extension disabled).
+    ext_status = ingestion_bridge.get_extension_status(bridge_url)
+    if not ext_status.get("extension_connected"):
+        last_seen = ext_status.get("extension_last_seen_s")
+        if last_seen is not None:
+            detail = f"ZotPilot Connector last seen {last_seen:.0f}s ago. Ensure Chrome is open and the extension is enabled."
+        else:
+            detail = "ZotPilot Connector has not connected. Ensure Chrome is open and the extension is installed and enabled."
+        return {
+            "success": False,
+            "error": detail,
+            "total": len(urls),
+            "succeeded": 0,
+            "failed": len(urls),
+            "results": [{"url": u, "success": False, "error": detail} for u in urls],
+            "collection_used": resolved_collection_key,
+        }
 
     id_to_url: dict[str, str] = {}
     enqueue_errors: list[dict] = []

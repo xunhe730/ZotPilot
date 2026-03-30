@@ -301,6 +301,50 @@ Zotero.AgentAPI = new function() {
 		return null;
 	}
 
+	async function _applyLocalRouting(itemKey, collectionKey, tags) {
+		const base = "http://127.0.0.1:23119/api/users/0/items/" + itemKey;
+		try {
+			let resp = await fetch(base, {
+				method: "GET",
+				headers: { "Accept": "application/json", "Zotero-Allowed-Request": "1" },
+				signal: AbortSignal.timeout(5000),
+			});
+			if (!resp.ok) {
+				Zotero.debug("[ZotPilot] local routing GET failed: " + resp.status);
+				return;
+			}
+			let item = await resp.json();
+			let data = item.data || item;
+			if (collectionKey) {
+				let existing = new Set(data.collections || []);
+				existing.add(collectionKey);
+				data.collections = Array.from(existing);
+			}
+			if (tags && tags.length) {
+				let existing = new Set((data.tags || []).map(t => t.tag));
+				for (let t of tags) existing.add(t);
+				data.tags = Array.from(existing).map(t => ({ tag: t }));
+			}
+			let patch = await fetch(base, {
+				method: "PATCH",
+				headers: {
+					"Content-Type": "application/json",
+					"Zotero-Allowed-Request": "1",
+					"If-Unmodified-Since-Version": String(item.version || 0),
+				},
+				body: JSON.stringify({ collections: data.collections, tags: data.tags }),
+				signal: AbortSignal.timeout(5000),
+			});
+			if (patch.ok) {
+				Zotero.debug("[ZotPilot] local routing applied for " + itemKey);
+			} else {
+				Zotero.debug("[ZotPilot] local routing PATCH failed: " + patch.status);
+			}
+		} catch (e) {
+			Zotero.debug("[ZotPilot] local routing error: " + e.message);
+		}
+	}
+
 	async function _fetchRecentTopLevelItems() {
 		let url = ZOTERO_LOCAL_API_URL
 			+ "?format=json"
@@ -511,6 +555,12 @@ Zotero.AgentAPI = new function() {
 					result = { ...result, success: true };
 					Zotero.debug("[ZotPilot] unconfirmed upgraded to success — item found in Zotero");
 				}
+			}
+
+			// 7a. Apply collection/tag routing via Zotero local API while item is guaranteed
+			//     to exist in the local database — avoids cloud-sync race condition in bridge.
+			if (entry.item_key && (command.collection_key || (command.tags && command.tags.length))) {
+				await _applyLocalRouting(entry.item_key, command.collection_key, command.tags);
 			}
 
 			// 7. Post result — Task 1.3: include item_key and title for bridge-side routing

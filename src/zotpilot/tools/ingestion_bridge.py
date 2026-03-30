@@ -152,6 +152,15 @@ def wait_for_extension(
     return False
 
 
+def get_extension_status(bridge_url: str) -> dict:
+    """Query /status and return the parsed JSON, or an error dict."""
+    try:
+        response = urllib.request.urlopen(f"{bridge_url}/status", timeout=3)
+        return json.loads(response.read())
+    except Exception as exc:
+        return {"extension_connected": False, "error": str(exc)}
+
+
 def sample_preflight_urls(urls: list[str], sample_size: int) -> tuple[list[str], list[str]]:
     """Pick up to sample_size URLs, favoring publisher diversity first."""
     if len(urls) <= sample_size:

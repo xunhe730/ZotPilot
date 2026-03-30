@@ -419,7 +419,7 @@ _SCALAR_TYPES = {
     "embedding_max_retries": int, "rerank_alpha": float, "rerank_enabled": bool,
     "oversample_multiplier": int, "oversample_topic_factor": int,
     "stats_sample_limit": int, "max_pages": int, "vision_enabled": bool,
-    "embedding_dimensions": int,
+    "embedding_dimensions": int, "preflight_enabled": bool,
 }
 
 
