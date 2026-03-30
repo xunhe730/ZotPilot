@@ -28,6 +28,9 @@ docs/*
 !docs/e2e-scenarios/**
 docs/test-runs/
 
+# Playwright MCP logs
+.playwright-mcp/
+
 # IDE
 .idea/
 .vscode/
