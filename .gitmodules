@@ -1,0 +1,25 @@
+[submodule "connector/src/zotero"]
+	path = connector/src/zotero
+	url = https://github.com/zotero/zotero.git
+	branch = master
+
+[submodule "connector/src/zotero-google-docs-integration"]
+	path = connector/src/zotero-google-docs-integration
+	url = https://github.com/zotero/zotero-google-docs-integration.git
+	branch = master
+
+[submodule "connector/src/translate"]
+	path = connector/src/translate
+	url = https://github.com/zotero/translate.git
+
+[submodule "connector/src/utilities"]
+	path = connector/src/utilities
+	url = https://github.com/zotero/utilities.git
+
+[submodule "connector/lib/SingleFile-Lite"]
+	path = connector/lib/SingleFile-Lite
+	url = https://github.com/gildas-lormeau/SingleFile-Lite.git
+
+[submodule "connector/src/zotero-schema"]
+	path = connector/src/zotero-schema
+	url = https://github.com/zotero/zotero-schema
