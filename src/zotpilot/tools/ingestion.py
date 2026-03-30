@@ -118,8 +118,10 @@ def search_academic_databases(
         Field(description="Sort order: relevance (default), citationCount, or publicationDate")
     ] = "relevance",
 ) -> list[dict]:
-    """Search academic databases for papers. Does NOT add to Zotero.
-    Use ingest_papers to add selected results to your library.
+    """Search external academic databases for papers on a topic. Use this as the first step
+    for any literature survey, research discovery, or "帮我调研 X" request — it finds papers
+    NOT yet in the local library. Does NOT add to Zotero automatically; call ingest_papers
+    with selected results to add them.
 
     Uses OpenAlex only.
     Supports "author:Name" prefix for author-scoped search (use "author:Name | topic"

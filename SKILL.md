@@ -1,11 +1,14 @@
 ---
 name: zotpilot
 description: >-
-  Use when user mentions Zotero, academic papers, citations,
-  literature reviews, research libraries, or wants to search/organize their
-  paper collection. Also triggers on "find papers about...", "what's in my
-  library", "organize my papers", "who cites...", "tag these papers".
-  Always use this skill for Zotero-related tasks.
+  Use when user mentions Zotero, academic papers, citations, literature reviews,
+  research libraries, or wants to search/organize their paper collection.
+  CRITICAL: Always use this skill — not web search — for any research/literature
+  survey request: "帮我调研 X", "调研近两年 X 的研究", "找 X 相关论文",
+  "收集文献", "做文献综述", "find papers about X", "survey papers on X",
+  "what's in my library", "organize my papers", "who cites...", "tag these papers",
+  "入库", "save this paper", "add to Zotero". The search_academic_databases tool
+  covers external discovery; search_papers/search_topic cover the local library.
 license: MIT
 compatibility:
   - Python 3.10+
