@@ -36,11 +36,13 @@ class TestIngestItemState:
             title="A Great Paper",
             status="saved",
             item_key="ABC123",
+            routing_status="routed_by_connector",
         )
         d = item.to_dict()
         assert d["title"] == "A Great Paper"
         assert d["item_key"] == "ABC123"
         assert d["status"] == "saved"
+        assert d["routing_status"] == "routed_by_connector"
         assert "error" not in d
 
     def test_to_dict_includes_error_when_set(self):
@@ -97,16 +99,24 @@ class TestBatchState:
 
     def test_update_item_mark_saved(self):
         batch = self._make_batch(n=3)
-        batch.update_item(0, status="saved", item_key="KEY1", title="Paper One")
+        batch.update_item(0, status="saved", item_key="KEY1", title="Paper One", routing_status="routed_by_backend")
         assert batch.pending_items[0].status == "saved"
         assert batch.pending_items[0].item_key == "KEY1"
         assert batch.pending_items[0].title == "Paper One"
+        assert batch.pending_items[0].routing_status == "routed_by_backend"
 
     def test_update_item_mark_failed(self):
         batch = self._make_batch(n=2)
         batch.update_item(1, status="failed", error="403 Forbidden")
         assert batch.pending_items[1].status == "failed"
         assert batch.pending_items[1].error == "403 Forbidden"
+
+    def test_update_item_can_clear_warning(self):
+        batch = self._make_batch(n=1)
+        batch.update_item(0, status="saved", warning="needs reconciliation")
+        batch.update_item(0, status="saved", warning=None, routing_status="routed_by_reconciliation_local")
+        assert batch.pending_items[0].warning is None
+        assert batch.pending_items[0].routing_status == "routed_by_reconciliation_local"
 
     def test_summary_counts_after_updates(self):
         batch = self._make_batch(n=4)

@@ -12,6 +12,13 @@ from typing import Literal
 logger = logging.getLogger(__name__)
 
 
+class _UnsetType:
+    """Sentinel type for distinguishing 'not provided' from None."""
+
+
+_UNSET = _UnsetType()
+
+
 @dataclass
 class IngestItemState:
     index: int
@@ -20,12 +27,14 @@ class IngestItemState:
     status: Literal["pending", "saved", "duplicate", "failed"] = "pending"
     item_key: str | None = None
     error: str | None = None
+    warning: str | None = None
+    routing_status: str | None = None
 
     def to_dict(self) -> dict:
         """Return dict representation, omitting None-valued optional fields.
 
         Always includes: index, url, status.
-        Omits if None: title, item_key, error.
+        Omits if None: title, item_key, error, warning.
         """
         d: dict = {
             "index": self.index,
@@ -38,6 +47,10 @@ class IngestItemState:
             d["item_key"] = self.item_key
         if self.error is not None:
             d["error"] = self.error
+        if self.warning is not None:
+            d["warning"] = self.warning
+        if self.routing_status is not None:
+            d["routing_status"] = self.routing_status
         return d
 
 
@@ -69,9 +82,11 @@ class BatchState:
         index: int,
         *,
         status: Literal["pending", "saved", "duplicate", "failed"],
-        item_key: str | None = None,
-        title: str | None = None,
-        error: str | None = None,
+        item_key: str | None | _UnsetType = _UNSET,
+        title: str | None | _UnsetType = _UNSET,
+        error: str | None | _UnsetType = _UNSET,
+        warning: str | None | _UnsetType = _UNSET,
+        routing_status: str | None | _UnsetType = _UNSET,
     ) -> None:
         """Thread-safe update of an item by index.
 
@@ -84,12 +99,16 @@ class BatchState:
                 logger.warning("update_item: no item with index=%d", index)
                 return
             item.status = status
-            if item_key is not None:
+            if item_key is not _UNSET:
                 item.item_key = item_key
-            if title is not None:
+            if title is not _UNSET:
                 item.title = title
-            if error is not None:
+            if error is not _UNSET:
                 item.error = error
+            if warning is not _UNSET:
+                item.warning = warning
+            if routing_status is not _UNSET:
+                item.routing_status = routing_status
 
     def finalize(self) -> None:
         """Set is_final=True, determine state, set finalized_at."""

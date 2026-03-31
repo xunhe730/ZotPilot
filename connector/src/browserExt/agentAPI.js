@@ -32,7 +32,7 @@ Zotero.AgentAPI = new function() {
 	const POLL_INTERVAL = 2000;
 	const SAVE_TIMEOUT_MS = 60000; // Task 1.2: 60s; reports "unconfirmed" not false success
 	const HEARTBEAT_INTERVAL_MS = 10000; // Independent heartbeat every 10s — not tied to poll loop
-	const RECENT_ITEMS_LIMIT = 10;
+	const RECENT_ITEMS_LIMIT = 50;
 	const LOCAL_API_TIMEOUT_MS = 5000;
 	const ANTI_BOT_PATTERNS = [
 		"just a moment",
@@ -392,7 +392,7 @@ Zotero.AgentAPI = new function() {
 		if (entry.item_key) return entry.item_key;
 
 		const POLL_INTERVAL_MS = 1000;
-		const MAX_ATTEMPTS = 15;
+		const MAX_ATTEMPTS = 45;
 		const beforeKeys = new Set((beforeItems || []).map((item) => item.key).filter(Boolean));
 
 		for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -580,6 +580,7 @@ Zotero.AgentAPI = new function() {
 				...(result.error_code ? { error_code: result.error_code } : {}),
 				...(result.error ? { error_message: result.error } : {}),
 				...(routingWarning ? { routing_warning: routingWarning } : {}),
+				routing_applied: !!(entry.item_key && !routingWarning && (command.collection_key || (command.tags && command.tags.length))),
 				url,
 				title: entry.item_title || tab.title || "",
 				item_key: entry.item_key || null,

@@ -222,7 +222,8 @@ If `is_final` was already true in the `ingest_papers` response (all duplicates/f
    - `failed > 0` → show failed items and errors to the user, let them decide whether to retry or proceed with successful items
 2. After the user confirms, execute `references/post-ingest-guide.md` Phase 2 automatically
 3. Do not ask for confirmation at each sub-step (index, notes, classify, tag). The Phase 1 confirmation covers all of them.
-4. Exception: if auto-classification or tag selection is uncertain, batch unresolved cases and ask once at the end
+4. **INBOX cleanup (mandatory):** after classifying a paper into a target collection via `add_to_collection`, immediately call `remove_from_collection(item_key, inbox_key)` to remove it from INBOX. Only remove when the paper is confirmed in at least one non-INBOX collection. Get `inbox_key` from the `collection_used` field in the ingest result, or call `list_collections` to find the INBOX collection key.
+5. Exception: if auto-classification or tag selection is uncertain, batch unresolved cases and ask once at the end
 
 Post-ingest note generation options:
 - **Workflow A (brief, default post-ingest path):** runs when user confirms post-ingest workflow — see `references/note-analysis-prompt.md`

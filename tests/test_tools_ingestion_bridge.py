@@ -24,6 +24,7 @@ def _make_writer():
     writer.find_items_by_url_and_title.return_value = []
     writer.add_to_collection.return_value = None
     writer.add_item_tags.return_value = None
+    writer.set_item_tags.return_value = None
     writer.get_item_type.return_value = "journalArticle"
     writer.delete_item.return_value = True
     return writer
@@ -142,6 +143,79 @@ class TestApplyBridgeResultRouting:
         assert result["item_key"] == "ITEM1"
         writer.add_to_collection.assert_called_once_with("ITEM1", "COL1")
         writer.add_item_tags.assert_called_once_with("ITEM1", ["tag1"])
+        assert result["routing_status"] == "routed_by_backend"
+
+    def test_routing_applied_true_skips_backend_routing(self):
+        writer = _make_writer()
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            result = _apply_bridge_result_routing(
+                {
+                    "success": True,
+                    "url": "https://example.com",
+                    "title": "Paper",
+                    "item_key": "ITEM1",
+                    "routing_applied": True,
+                },
+                "COL1",
+                ["tag1"],
+            )
+
+        assert result["routing_status"] == "routed_by_connector"
+        writer.add_to_collection.assert_not_called()
+        writer.add_item_tags.assert_not_called()
+
+    def test_routing_applied_false_falls_back_to_backend(self):
+        writer = _make_writer()
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion.time.sleep"):
+            result = _apply_bridge_result_routing(
+                {
+                    "success": True,
+                    "url": "https://example.com",
+                    "title": "Paper",
+                    "item_key": "ITEM1",
+                    "routing_applied": False,
+                },
+                "COL1",
+                ["tag1"],
+            )
+
+        assert result["routing_status"] == "routed_by_backend"
+        writer.add_to_collection.assert_called_once_with("ITEM1", "COL1")
+        writer.add_item_tags.assert_called_once_with("ITEM1", ["tag1"])
+
+    def test_routing_applied_false_without_item_key_is_deferred(self):
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")):
+            result = _apply_bridge_result_routing(
+                {
+                    "success": True,
+                    "url": "https://example.com",
+                    "title": "Paper",
+                    "item_key": None,
+                    "routing_applied": False,
+                },
+                "COL1",
+                None,
+            )
+
+        assert result["routing_status"] == "routing_deferred"
+        assert "post-batch reconciliation" in result["warning"]
+
+    def test_missing_routing_applied_uses_legacy_backend_path(self):
+        writer = _make_writer()
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer), \
+             patch("zotpilot.tools.ingestion.time.sleep"):
+            result = _apply_bridge_result_routing(
+                {"success": True, "url": "https://example.com", "title": "Paper", "item_key": "ITEM1"},
+                "COL1",
+                None,
+            )
+
+        assert result["routing_status"] == "routed_by_backend"
+        writer.add_to_collection.assert_called_once_with("ITEM1", "COL1")
 
     def test_missing_api_key_returns_warning(self):
         with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(None)):
@@ -169,10 +243,47 @@ class TestApplyBridgeResultRouting:
         assert result["error_code"] == "error_page_detected"
         writer.delete_item.assert_called_once_with("BAD1")
 
+    def test_arxiv_urls_clear_publisher_tags(self):
+        writer = _make_writer()
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            result = _apply_bridge_result_routing(
+                {
+                    "success": True,
+                    "url": "https://arxiv.org/abs/2401.00001",
+                    "title": "Paper",
+                    "item_key": "ITEM1",
+                    "routing_applied": True,
+                },
+                "COL1",
+                None,
+            )
+
+        assert result["routing_status"] == "routed_by_connector"
+        writer.set_item_tags.assert_called_once_with("ITEM1", [])
+
+    def test_non_publisher_urls_do_not_clear_tags(self):
+        writer = _make_writer()
+        with patch("zotpilot.tools.ingestion._get_config", return_value=_make_config("KEY")), \
+             patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            _apply_bridge_result_routing(
+                {
+                    "success": True,
+                    "url": "https://example.com/paper",
+                    "title": "Paper",
+                    "item_key": "ITEM1",
+                    "routing_applied": True,
+                },
+                "COL1",
+                None,
+            )
+
+        writer.set_item_tags.assert_not_called()
+
 
 class TestBridgeHelpers:
     def test_discovery_backoff_is_shortened(self):
-        assert ingestion_bridge.DISCOVERY_BACKOFF_DELAYS == [2.0, 4.0, 8.0]
+        assert ingestion_bridge.DISCOVERY_BACKOFF_DELAYS == [2.0, 4.0, 8.0, 16.0, 32.0]
 
     def test_enqueue_save_request_handles_503(self):
         error = _make_http_error(503, {

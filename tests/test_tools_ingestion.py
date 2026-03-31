@@ -10,6 +10,7 @@ from fastmcp.exceptions import ToolError
 
 from zotpilot.tools.ingestion import (
     _batch_store,
+    _run_save_worker,
     get_ingest_status,
     ingest_papers,
     save_from_url,
@@ -131,14 +132,22 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._ensure_inbox_collection", return_value="INBOX1"),
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
+            patch("zotpilot.tools.ingestion._get_writer"),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
                     "results": [
-                        {"success": True, "url": "https://example.com/paper", "item_key": "ITEM1", "title": "Paper"},
+                        {
+                            "success": True,
+                            "url": "https://example.com/paper",
+                            "item_key": "ITEM1",
+                            "title": "Paper",
+                            "routing_status": "routed_by_connector",
+                        },
                     ],
                 },
             ) as save_urls_mock,
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
         ):
             result = ingest_papers(papers)
             # Wait inside with-block so mock is still active when background thread runs
@@ -151,19 +160,27 @@ class TestIngestPapers:
         papers = [{"landing_page_url": "https://example.com/paper"}]
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
+            patch("zotpilot.tools.ingestion._get_writer"),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
                     "results": [
-                        {"success": True, "url": "https://example.com/paper", "item_key": "ITEM1", "title": "Paper"},
+                        {
+                            "success": True,
+                            "url": "https://example.com/paper",
+                            "item_key": "ITEM1",
+                            "title": "Paper",
+                            "routing_status": "routed_by_connector",
+                        },
                     ],
                 },
             ) as save_urls_mock,
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
         ):
             result = ingest_papers(papers, collection_key="COL1")
             _wait_for_batch(result["batch_id"])
+            assert save_urls_mock.call_args.kwargs["collection_key"] == "COL1"
 
-        assert save_urls_mock.call_args.kwargs["collection_key"] == "COL1"
         assert result["collection_used"] == "COL1"
 
     def test_no_identifier_marks_failed(self):
@@ -187,7 +204,9 @@ class TestIngestPapers:
         ]
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
+            patch("zotpilot.tools.ingestion._get_writer"),
             patch("zotpilot.tools.ingestion._lookup_local_item_key_by_doi", return_value=None),
+            patch("zotpilot.tools.ingestion._ensure_inbox_collection", return_value="INBOX1"),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -197,20 +216,23 @@ class TestIngestPapers:
                             "url": "https://arxiv.org/abs/2401.00001",
                             "item_key": "ITEM1",
                             "title": "Paper",
+                            "routing_status": "routed_by_connector",
                         },
                     ],
                 },
             ) as save_urls_mock,
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
         ):
             result = ingest_papers(papers)
             _wait_for_batch(result["batch_id"])
-
-        assert save_urls_mock.call_args.args[0] == ["https://arxiv.org/abs/2401.00001"]
+            assert save_urls_mock.call_args.args[0] == ["https://arxiv.org/abs/2401.00001"]
 
     def test_landing_page_has_priority_over_doi(self):
         papers = [{"doi": "10.1000/test", "landing_page_url": "https://publisher.example/paper"}]
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
+            patch("zotpilot.tools.ingestion._get_writer"),
+            patch("zotpilot.tools.ingestion._ensure_inbox_collection", return_value="INBOX1"),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -220,15 +242,16 @@ class TestIngestPapers:
                             "url": "https://publisher.example/paper",
                             "item_key": "ITEM1",
                             "title": "Paper",
+                            "routing_status": "routed_by_connector",
                         },
                     ],
                 },
             ) as save_urls_mock,
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
         ):
             result = ingest_papers(papers)
             _wait_for_batch(result["batch_id"])
-
-        assert save_urls_mock.call_args.args[0] == ["https://publisher.example/paper"]
+            assert save_urls_mock.call_args.args[0] == ["https://publisher.example/paper"]
 
     def test_local_doi_duplicate_skips_save(self):
         papers = [{"doi": "10.1000/existing", "landing_page_url": "https://publisher.example/paper"}]
@@ -541,3 +564,117 @@ class TestSaveFromUrl:
 
         save_urls_mock.assert_called_once_with(["https://example.com"], collection_key=None, tags=None)
         assert result["collection_used"] == "INBOX1"
+
+
+class TestRunSaveWorkerReconciliation:
+    def setup_method(self):
+        _batch_store.clear()
+
+    def test_updates_batch_item_routing_status_from_save_results(self):
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        batch = BatchState(
+            total=1,
+            collection_used="COL1",
+            pending_items=[IngestItemState(index=0, url="https://example.com/paper", title="Paper")],
+        )
+        with patch(
+            "zotpilot.tools.ingestion.save_urls",
+            return_value={
+                "results": [
+                    {
+                        "success": True,
+                        "url": "https://example.com/paper",
+                        "item_key": "ITEM1",
+                        "title": "Paper",
+                        "routing_status": "routed_by_backend",
+                    }
+                ],
+            },
+        ):
+            _run_save_worker(
+                batch,
+                [{"url": "https://example.com/paper", "_index": 0, "paper": {"title": "Paper"}}],
+                "COL1",
+            )
+
+        assert batch.is_final is True
+        assert batch.pending_items[0].routing_status == "routed_by_backend"
+
+    def test_reconciliation_prefers_local_api_then_web_api(self):
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        batch = BatchState(
+            total=1,
+            collection_used="COL1",
+            pending_items=[IngestItemState(index=0, url="https://example.com/paper", title="Paper")],
+        )
+        with (
+            patch(
+                "zotpilot.tools.ingestion.save_urls",
+                return_value={
+                    "results": [
+                        {
+                            "success": True,
+                            "url": "https://example.com/paper",
+                            "item_key": None,
+                            "title": "Paper",
+                            "routing_status": "routing_deferred",
+                            "warning": "deferred",
+                        }
+                    ],
+                },
+            ),
+            patch("zotpilot.tools.ingestion.time.sleep"),
+            patch("zotpilot.tools.ingestion._discover_via_local_api", return_value="ITEM1"),
+            patch("zotpilot.tools.ingestion._route_via_local_api", return_value=True) as route_local_mock,
+            patch("zotpilot.tools.ingestion._get_writer") as get_writer_mock,
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
+        ):
+            _run_save_worker(
+                batch,
+                [{"url": "https://example.com/paper", "_index": 0, "paper": {"title": "Paper"}}],
+                "COL1",
+            )
+
+        route_local_mock.assert_called_once_with("ITEM1", "COL1")
+        assert batch.pending_items[0].item_key == "ITEM1"
+        assert batch.pending_items[0].routing_status == "routed_by_reconciliation_local"
+        assert batch.pending_items[0].warning is None
+
+    def test_reconciliation_falls_back_to_web_api_routing(self):
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        batch = BatchState(
+            total=1,
+            collection_used="COL1",
+            pending_items=[IngestItemState(index=0, url="https://example.com/paper", title="Paper")],
+        )
+        writer = MagicMock()
+        with (
+            patch(
+                "zotpilot.tools.ingestion.save_urls",
+                return_value={
+                    "results": [
+                        {
+                            "success": True,
+                            "url": "https://example.com/paper",
+                            "item_key": "ITEM1",
+                            "title": "Paper",
+                            "warning": "not routed",
+                        }
+                    ],
+                },
+            ),
+            patch("zotpilot.tools.ingestion.time.sleep"),
+            patch("zotpilot.tools.ingestion._route_via_local_api", return_value=False),
+            patch("zotpilot.tools.ingestion._get_writer", return_value=writer),
+        ):
+            _run_save_worker(
+                batch,
+                [{"url": "https://example.com/paper", "_index": 0, "paper": {"title": "Paper"}}],
+                "COL1",
+            )
+
+        writer.add_to_collection.assert_called_once_with("ITEM1", "COL1")
+        assert batch.pending_items[0].routing_status == "routed_by_reconciliation_web"

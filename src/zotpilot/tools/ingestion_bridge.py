@@ -7,13 +7,14 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-DISCOVERY_BACKOFF_DELAYS = [2.0, 4.0, 8.0]
-ITEM_DISCOVERY_WINDOW_S = 60
+DISCOVERY_BACKOFF_DELAYS = [2.0, 4.0, 8.0, 16.0, 32.0]
+ITEM_DISCOVERY_WINDOW_S = 120
 SAVE_RESULT_POLL_TIMEOUT_S = 150.0
-SAVE_RESULT_POLL_OVERALL_TIMEOUT_S = 300.0
-SAVE_RESULT_POLL_PER_URL_BUDGET_S = 45.0
+SAVE_RESULT_POLL_OVERALL_TIMEOUT_S = 600.0
+SAVE_RESULT_POLL_PER_URL_BUDGET_S = 75.0
 SAVE_RESULT_POLL_OVERALL_GRACE_S = 120.0
-ROUTING_RETRY_DELAYS_S = [0.0, 1.0, 2.0]
+ROUTING_RETRY_DELAYS_S = [0.0, 2.0, 5.0]
+_PUBLISHER_TAG_SOURCES = {"arxiv.org", "biorxiv.org", "medrxiv.org"}
 
 ANTI_BOT_TITLE_PATTERNS = [
     "just a moment",
@@ -129,6 +130,29 @@ def extract_publisher_domain(url: str) -> str:
     if hostname.startswith("www."):
         hostname = hostname[4:]
     return hostname or url
+
+
+def _should_clean_publisher_tags(url: str) -> bool:
+    """Return True for sources known to inject unwanted auto-tags."""
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return any(hostname.endswith(source) for source in _PUBLISHER_TAG_SOURCES)
+
+
+def _cleanup_publisher_tags(item_key: str | None, url: str, writer, logger) -> None:
+    """Clear publisher-injected tags after a successful save."""
+    if not item_key or not _should_clean_publisher_tags(url):
+        return
+    try:
+        current_tags = []
+        if hasattr(writer, "_zot"):
+            item = writer._zot.item(item_key)
+            current_tags = list((item.get("data") or {}).get("tags") or [])
+        writer.set_item_tags(item_key, [])
+        logger.info("Cleared %d publisher auto-tags for %s", len(current_tags), item_key)
+    except Exception as exc:
+        logger.warning("Failed to clean publisher tags for %s: %s", item_key, exc)
 
 
 def wait_for_extension(
@@ -646,14 +670,53 @@ def apply_bridge_result_routing(
             ),
         }
 
+    needs_routing = bool(collection_key) or bool(tags)
+
+    def finalize_success(out: dict, routing_status: str | None = None) -> dict:
+        finalized = {**out}
+        if routing_status:
+            finalized["routing_status"] = routing_status
+        if finalized.get("item_key") and _should_clean_publisher_tags(finalized.get("url", "")):
+            try:
+                cleanup_writer = get_writer()
+            except Exception:
+                cleanup_writer = None
+            if cleanup_writer is not None:
+                _cleanup_publisher_tags(finalized.get("item_key"), finalized.get("url", ""), cleanup_writer, logger)
+        return finalized
+
+    connector_routing_applied = result.get("routing_applied")
+    if needs_routing and connector_routing_applied is True and result.get("item_key"):
+        return finalize_success({**result}, "routed_by_connector")
+
+    if needs_routing and connector_routing_applied is False:
+        if result.get("item_key"):
+            logger.warning(
+                "Connector routing failed (routing_warning=%s), falling back to Web API routing for %s",
+                result.get("routing_warning"),
+                result.get("item_key"),
+            )
+        else:
+            logger.error("item_key discovery failed for %s — deferring to reconciliation", result.get("url"))
+            return {
+                **result,
+                "routing_status": "routing_deferred",
+                "warning": (
+                    "item_key not discovered — collection/tag routing deferred to "
+                    "post-batch reconciliation. Use get_ingest_status to track."
+                ),
+            }
+    elif needs_routing and connector_routing_applied is None:
+        logger.debug("routing_applied absent — old connector version, falling through to Web API routing")
+
     config = get_config()
     if not config.zotero_api_key:
-        if collection_key or tags:
+        if needs_routing:
             return {
                 **result,
                 "warning": "collection_key and tags ignored — ZOTERO_API_KEY not configured",
             }
-        return result
+        return finalize_success(result)
 
     writer = get_writer()
 
@@ -707,9 +770,8 @@ def apply_bridge_result_routing(
                 ),
             }
 
-    needs_routing = bool(collection_key) or bool(tags)
     if not needs_routing:
-        return out
+        return finalize_success(out)
 
     if item_key is None:
         discovered = 0
@@ -724,6 +786,7 @@ def apply_bridge_result_routing(
                 "collection_key/tags not applied — item not found within discovery window. "
                 "Use add_to_collection(item_key, collection_key) once the item appears in Zotero."
             )
+            logger.error(warning)
         else:
             warning = f"collection_key/tags not applied — ambiguous match ({discovered} items found)"
         return {**out, "warning": warning}
@@ -731,4 +794,5 @@ def apply_bridge_result_routing(
     routing_warning = apply_collection_tag_routing_fn(item_key, collection_key, tags, writer)
     if routing_warning:
         out["warning"] = routing_warning
-    return out
+        return out
+    return finalize_success(out, "routed_by_backend")

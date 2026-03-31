@@ -6,6 +6,9 @@ import json
 import logging
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Literal
 
@@ -16,7 +19,7 @@ from pydantic import Field
 from ..bridge import DEFAULT_PORT, BridgeServer
 from ..state import _get_config, _get_writer, _get_zotero, mcp, register_reset_callback
 from . import ingestion_bridge, ingestion_search
-from .ingest_state import BatchState, BatchStore, IngestItemState, _POST_INGEST_INSTRUCTION
+from .ingest_state import _POST_INGEST_INSTRUCTION, BatchState, BatchStore, IngestItemState
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ _writer_lock = threading.Lock()
 _inbox_collection_key: str | None = None
 _inbox_lock = threading.Lock()
 _INBOX_COLLECTION_NAME = "INBOX"
+_ZOTERO_LOCAL_API_ITEMS_URL = "http://127.0.0.1:23119/api/users/0/items"
 
 
 def _clear_inbox_cache() -> None:
@@ -116,6 +120,77 @@ def _coerce_json_list(value, field_name: str):
     return value
 
 
+def _route_via_local_api(item_key: str, collection_key: str) -> bool:
+    """Route an item into a collection via Zotero Desktop local API."""
+    try:
+        req = urllib.request.Request(
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/{item_key}",
+            headers={"Accept": "application/json", "Zotero-Allowed-Request": "1"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            item = json.loads(resp.read())
+        version = item.get("version", 0)
+        data = item.get("data", item)
+        collections = set(data.get("collections", []))
+        collections.add(collection_key)
+
+        patch_req = urllib.request.Request(
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/{item_key}",
+            data=json.dumps({"collections": sorted(collections)}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Zotero-Allowed-Request": "1",
+                "If-Unmodified-Since-Version": str(version),
+            },
+            method="PATCH",
+        )
+        with urllib.request.urlopen(patch_req, timeout=5):
+            return True
+    except (urllib.error.URLError, ConnectionRefusedError, OSError):
+        return False
+    except Exception as exc:
+        logger.warning("Local API routing failed for %s: %s", item_key, exc)
+        return False
+
+
+def _discover_via_local_api(url: str, title: str | None) -> str | None:
+    """Try to discover a newly saved item via Zotero Desktop local API."""
+    if not title:
+        return None
+    try:
+        search_url = (
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/top?format=json&limit=5"
+            f"&q={urllib.parse.quote(title[:50])}"
+            f"&qmode=titleCreatorYear&sort=dateAdded&direction=desc"
+        )
+        req = urllib.request.Request(
+            search_url,
+            headers={"Accept": "application/json", "Zotero-Allowed-Request": "1"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            items = json.loads(resp.read())
+        if len(items) == 1:
+            return items[0].get("key")
+        if len(items) > 1:
+            logger.debug("Local API discovery: ambiguous match (%d items) for '%s'", len(items), title[:50])
+    except Exception:
+        return None
+    return None
+
+
+def _discover_via_web_api(url: str, title: str | None) -> str | None:
+    """Fallback item-key discovery via Zotero Web API."""
+    if not title:
+        return None
+    try:
+        keys = _get_writer().find_items_by_url_and_title(url, title, window_s=120)
+        if len(keys) == 1:
+            return keys[0]
+    except Exception:
+        return None
+    return None
+
+
 @mcp.tool()
 def search_academic_databases(
     query: Annotated[str, Field(description="Search query for academic papers")],
@@ -183,6 +258,8 @@ def _run_save_worker(
                         status="saved",
                         item_key=result.get("item_key"),
                         title=result.get("title") or candidate.get("paper", {}).get("title"),
+                        warning=result.get("warning"),
+                        routing_status=result.get("routing_status"),
                     )
                 else:
                     batch.update_item(
@@ -202,6 +279,79 @@ def _run_save_worker(
                     for item in batch.pending_items:
                         if item.index == idx and item.status == "pending":
                             batch.update_item(idx, status="failed", error="bridge save failed")
+
+        # Post-batch reconciliation for items that were saved but not fully routed.
+        unrouted_items = [
+            item
+            for item in batch.pending_items
+            if item.status == "saved" and item.item_key and not item.routing_status
+        ]
+        deferred_items = [
+            item for item in batch.pending_items if item.status == "saved" and not item.item_key
+        ]
+        if (unrouted_items or deferred_items) and resolved_collection_key:
+            logger.info(
+                "Starting reconciliation for %d unrouted and %d deferred items",
+                len(unrouted_items),
+                len(deferred_items),
+            )
+            time.sleep(15)
+            writer = None
+            for item in deferred_items:
+                discovered_key = _discover_via_local_api(item.url or "", item.title)
+                if not discovered_key:
+                    discovered_key = _discover_via_web_api(item.url or "", item.title)
+                if discovered_key:
+                    item.item_key = discovered_key
+                    unrouted_items.append(item)
+                else:
+                    batch.update_item(
+                        item.index,
+                        status="saved",
+                        warning="Reconciliation could not find the saved item in Zotero yet.",
+                        routing_status="routing_failed",
+                    )
+                    logger.error("Reconciliation: item_key still not found for %s", item.url)
+
+            for item in unrouted_items:
+                if not item.item_key:
+                    continue
+                try:
+                    if _route_via_local_api(item.item_key, resolved_collection_key):
+                        batch.update_item(
+                            item.index,
+                            status="saved",
+                            item_key=item.item_key,
+                            warning=None,
+                            routing_status="routed_by_reconciliation_local",
+                        )
+                    else:
+                        if writer is None:
+                            writer = _get_writer()
+                        writer.add_to_collection(item.item_key, resolved_collection_key)
+                        batch.update_item(
+                            item.index,
+                            status="saved",
+                            item_key=item.item_key,
+                            warning=None,
+                            routing_status="routed_by_reconciliation_web",
+                        )
+                    # Clean publisher auto-tags after successful routing
+                    if writer is None:
+                        writer = _get_writer()
+                    ingestion_bridge._cleanup_publisher_tags(
+                        item.item_key, item.url or "", writer, logger
+                    )
+                except Exception as exc:
+                    batch.update_item(
+                        item.index,
+                        status="saved",
+                        item_key=item.item_key,
+                        warning=f"Reconciliation routing failed: {exc}",
+                        routing_status="routing_failed",
+                    )
+                    logger.error("Reconciliation routing failed for %s: %s", item.item_key, exc)
+
     except Exception as exc:
         logger.error("Ingest worker failed: %s", exc, exc_info=True)
         for item in batch.pending_items:
@@ -546,8 +696,10 @@ def _apply_bridge_result_routing(
         tags,
         get_config=_get_config,
         get_writer=_get_writer,
-        discover_saved_item_key_fn=lambda title, url, known_key, writer, window_s=ingestion_bridge.ITEM_DISCOVERY_WINDOW_S: (
-            ingestion_bridge.discover_saved_item_key(title, url, known_key, writer, window_s=window_s, logger=logger)
+        discover_saved_item_key_fn=lambda title, url, known_key, writer, window_s=(
+            ingestion_bridge.ITEM_DISCOVERY_WINDOW_S
+        ): ingestion_bridge.discover_saved_item_key(
+            title, url, known_key, writer, window_s=window_s, logger=logger
         ),
         apply_collection_tag_routing_fn=lambda item_key, routed_collection_key, routed_tags, writer: (
             ingestion_bridge.apply_collection_tag_routing(
