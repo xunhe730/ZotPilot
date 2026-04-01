@@ -582,11 +582,11 @@ def _run_save_worker(
                 else:
                     batch.update_item(
                         item.index,
-                        status="saved",
-                        warning="Reconciliation could not find the saved item in Zotero yet.",
+                        status="failed",
+                        error="Item not found in Zotero after save — connector may have reported false success.",
                         routing_status="routing_failed",
                     )
-                    logger.error("Reconciliation: item_key still not found for %s", item.url)
+                    logger.error("Reconciliation: item_key not found for %s — demoted to failed", item.url)
 
             for item in unrouted_items:
                 if not item.item_key:
@@ -888,8 +888,31 @@ def ingest_papers(
                         "error": error.get("error") or "preflight failed",
                     }
                 )
-            # All candidates blocked — user must handle anti-bot/timeout then retry
+            # All connector candidates blocked — user must handle anti-bot/timeout then retry
             connector_candidates = []
+
+            # If no API candidates remain either, return immediately so the agent
+            # surfaces the blocked/error list to the user instead of polling.
+            if not api_candidates:
+                return {
+                    "batch_id": None,
+                    "is_final": True,
+                    "total": len(papers),
+                    "saved": saved,
+                    "duplicates": duplicates,
+                    "failed": failed,
+                    "pending_count": 0,
+                    "collection_used": resolved_collection_key,
+                    "results": results,
+                    "blocked": preflight_report.get("blocked", []),
+                    "errors": preflight_report.get("errors", []),
+                    "pending_items": [],
+                    "_instruction": (
+                        "Preflight detected blocked or errored URLs — batch halted. "
+                        "Show the blocked/errors list to the user and wait for them to "
+                        "resolve anti-bot verification in Chrome before retrying."
+                    ),
+                }
 
     # --- Build batch state (includes ALL candidates for index-based updates) ---
     pending_items = [

@@ -405,8 +405,10 @@ class TestIngestPapers:
 
         save_urls_mock.assert_not_called()
         assert result["failed"] == 1
+        assert result["is_final"] is True  # early return, no polling needed
         assert result["results"][0]["status"] == "failed"
-        assert "blocked" not in result  # no top-level blocked/errors arrays
+        assert result["blocked"][0]["url"] == "https://publisher.example/paper"
+        assert "halted" in result["_instruction"].lower()  # instructs agent to stop
 
     def test_bridge_top_level_failure_marks_urls_failed(self):
         papers = [{"landing_page_url": "https://publisher.example/paper"}]
