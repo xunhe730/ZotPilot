@@ -5,6 +5,7 @@ import os
 
 from ..state import mcp
 
+# Canonical tools only — these are the tools that agents should use.
 TOOL_GROUPS: dict[str, set[str]] = {
     "search": {
         "advanced_search",
@@ -21,17 +22,10 @@ TOOL_GROUPS: dict[str, set[str]] = {
     "browse": {
         "browse_library",
         "get_annotations",
-        "get_collection_papers",
-        "get_library_overview",
         "get_notes",
-        "list_collections",
-        "list_tags",
         "profile_library",
     },
     "cite": {
-        "find_citing_papers",
-        "find_references",
-        "get_citation_count",
         "get_citations",
     },
     "index": {
@@ -40,17 +34,10 @@ TOOL_GROUPS: dict[str, set[str]] = {
         "index_library",
     },
     "write": {
-        "add_item_tags",
-        "add_to_collection",
-        "batch_collections",
-        "batch_tags",
         "create_collection",
         "create_note",
         "manage_collections",
         "manage_tags",
-        "remove_from_collection",
-        "remove_item_tags",
-        "set_item_tags",
     },
     "ingest": {
         "get_ingest_status",
@@ -63,29 +50,44 @@ TOOL_GROUPS: dict[str, set[str]] = {
     },
 }
 
+# Deprecated aliases — still registered as @mcp.tool() but NOT in TOOL_GROUPS.
+# Kept for backward compat; will be removed in v0.6.0.
+# They route internally to the canonical tools above.
+_DEPRECATED_TOOLS: set[str] = {
+    "find_citing_papers", "find_references", "get_citation_count",
+    "get_library_overview", "list_tags", "list_collections", "get_collection_papers",
+    "add_item_tags", "set_item_tags", "remove_item_tags", "batch_tags",
+    "add_to_collection", "remove_from_collection", "batch_collections",
+}
+
 TOOL_PROFILES: dict[str, set[str]] = {
     "full": set(TOOL_GROUPS),
     "read_only": {"search", "context", "browse", "cite", "index", "admin"},
     "search_only": {"search", "context", "cite"},
 }
 
+# Module → all tool names it registers (canonical + deprecated).
+# Every module that has at least one enabled canonical tool gets imported.
+# After import, deprecated tools are removed via mcp.remove_tool().
 _MODULE_TOOLS: dict[str, set[str]] = {
     "search": TOOL_GROUPS["search"],
     "context": {"get_passage_context"},
     "library": {
-        "browse_library",
-        "get_annotations",
-        "get_collection_papers",
-        "get_library_overview",
-        "get_notes",
-        "get_paper_details",
-        "list_collections",
-        "list_tags",
+        "browse_library", "get_paper_details", "get_notes", "get_annotations",
         "profile_library",
+        # deprecated (registered by module, removed after import):
+        "get_library_overview", "list_tags", "list_collections", "get_collection_papers",
     },
-    "citations": TOOL_GROUPS["cite"],
+    "citations": {
+        "get_citations",
+        "find_citing_papers", "find_references", "get_citation_count",
+    },
     "indexing": TOOL_GROUPS["index"],
-    "write_ops": TOOL_GROUPS["write"],
+    "write_ops": {
+        "create_collection", "create_note", "manage_collections", "manage_tags",
+        "add_item_tags", "set_item_tags", "remove_item_tags", "batch_tags",
+        "add_to_collection", "remove_from_collection", "batch_collections",
+    },
     "ingestion": TOOL_GROUPS["ingest"],
     "admin": TOOL_GROUPS["admin"],
 }
@@ -123,12 +125,15 @@ ENABLED_TOOLS = _get_enabled_tools()
 
 def _register_enabled_modules() -> None:
     for module_name, module_tools in _MODULE_TOOLS.items():
-        if not (module_tools & ENABLED_TOOLS):
+        # Import module if it has at least one enabled canonical tool
+        canonical_tools = module_tools - _DEPRECATED_TOOLS
+        if not (canonical_tools & ENABLED_TOOLS):
             continue
         importlib.import_module(f"{__name__}.{module_name}")
+        # Remove tools not in ENABLED_TOOLS (includes all deprecated tools)
         for tool_name in module_tools - ENABLED_TOOLS:
             try:
-                mcp.remove_tool(tool_name)
+                mcp.local_provider.remove_tool(tool_name)
             except Exception:
                 continue
 
