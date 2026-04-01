@@ -479,11 +479,28 @@ def _run_save_worker(
                 else:
                     candidate = candidate_by_index.get(idx)
                 if result.get("success") is True:
+                    item_key = result.get("item_key")
+                    result_title = result.get("title") or (candidate.get("paper", {}).get("title") if candidate else None)
+                    # Post-save verification: if bridge claims success but no item_key,
+                    # try to discover the item in Zotero. If not found, demote to failed.
+                    if not item_key:
+                        discovered = _discover_via_local_api(url or "", result_title)
+                        if not discovered:
+                            discovered = _discover_via_web_api(url or "", result_title)
+                        if discovered:
+                            item_key = discovered
+                        else:
+                            batch.update_item(
+                                idx,
+                                status="failed",
+                                error="Connector reported success but item not found in Zotero. Save may have silently failed.",
+                            )
+                            continue
                     batch.update_item(
                         idx,
                         status="saved",
-                        item_key=result.get("item_key"),
-                        title=result.get("title") or (candidate.get("paper", {}).get("title") if candidate else None),
+                        item_key=item_key,
+                        title=result_title,
                         warning=result.get("warning"),
                         routing_status=result.get("routing_status"),
                     )

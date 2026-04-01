@@ -646,7 +646,9 @@ class TestRunSaveWorkerReconciliation:
         assert batch.is_final is True
         assert batch.pending_items[0].routing_status == "routed_by_backend"
 
-    def test_reconciliation_prefers_local_api_then_web_api(self):
+    def test_early_verification_discovers_item_key_when_bridge_omits_it(self):
+        """When bridge returns success=True but no item_key, early verification
+        discovers the key via _discover_via_local_api before reconciliation."""
         from zotpilot.tools.ingest_state import BatchState, IngestItemState
 
         batch = BatchState(
@@ -671,9 +673,9 @@ class TestRunSaveWorkerReconciliation:
                 },
             ),
             patch("zotpilot.tools.ingestion.time.sleep"),
-            patch("zotpilot.tools.ingestion._discover_via_local_api", return_value="ITEM1"),
-            patch("zotpilot.tools.ingestion._route_via_local_api", return_value=True) as route_local_mock,
-            patch("zotpilot.tools.ingestion._get_writer") as get_writer_mock,
+            patch("zotpilot.tools.ingestion._discover_via_local_api", return_value="ITEM1") as discover_mock,
+            patch("zotpilot.tools.ingestion._route_via_local_api", return_value=True),
+            patch("zotpilot.tools.ingestion._get_writer"),
             patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
         ):
             _run_save_worker(
@@ -683,10 +685,50 @@ class TestRunSaveWorkerReconciliation:
                 "COL1",
             )
 
-        route_local_mock.assert_called_once_with("ITEM1", "COL1")
+        # Early verification discovers item_key in Phase 1 (before reconciliation)
+        discover_mock.assert_called()
         assert batch.pending_items[0].item_key == "ITEM1"
-        assert batch.pending_items[0].routing_status == "routed_by_reconciliation_local"
-        assert batch.pending_items[0].warning is None
+        assert batch.pending_items[0].status == "saved"
+
+    def test_early_verification_marks_failed_when_item_not_found(self):
+        """When bridge returns success=True but item cannot be found in Zotero,
+        early verification demotes to failed instead of false success."""
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        batch = BatchState(
+            total=1,
+            collection_used="COL1",
+            pending_items=[IngestItemState(index=0, url="https://example.com/paper", title="Paper")],
+        )
+        with (
+            patch(
+                "zotpilot.tools.ingestion.save_urls",
+                return_value={
+                    "results": [
+                        {
+                            "success": True,
+                            "url": "https://example.com/paper",
+                            "item_key": None,
+                            "title": "Paper",
+                        }
+                    ],
+                },
+            ),
+            patch("zotpilot.tools.ingestion.time.sleep"),
+            patch("zotpilot.tools.ingestion._discover_via_local_api", return_value=None),
+            patch("zotpilot.tools.ingestion._discover_via_web_api", return_value=None),
+            patch("zotpilot.tools.ingestion._get_writer"),
+            patch("zotpilot.tools.ingestion.ingestion_bridge._cleanup_publisher_tags"),
+        ):
+            _run_save_worker(
+                batch,
+                [{"url": "https://example.com/paper", "_index": 0, "paper": {"title": "Paper"}}],
+                [],
+                "COL1",
+            )
+
+        assert batch.pending_items[0].status == "failed"
+        assert "not found in Zotero" in batch.pending_items[0].error
 
     def test_reconciliation_falls_back_to_web_api_routing(self):
         from zotpilot.tools.ingest_state import BatchState, IngestItemState
