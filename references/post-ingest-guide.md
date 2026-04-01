@@ -77,7 +77,7 @@ ONE batch verification call at the end — `advanced_search` by DOIs or `get_pap
 
 | # | Title | PDF | Indexed | Note | Collection | Tags |
 |---|-------|-----|---------|------|------------|------|
-| 1 | ... | ✅ | ✅ | ✅ | 固-液界面 | 减阻;实验 |
+| 1 | ... | ✅ | ✅ | ✅ | ML/NLP | deep-learning; NLP |
 
 Check:
 - No papers remain in INBOX (unless partial workflow)
