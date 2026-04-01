@@ -116,15 +116,20 @@ If intent is ambiguous, ask:
 6. De-duplicate → `advanced_search` (batch DOI check)
 7. Ingest → `ingest_papers` (defaults to INBOX)
 8. Wait → `get_ingest_status` (poll every ~10 seconds until `is_final` is true)
-9. **[USER_REQUIRED]** Show ingest results, ask whether to run post-ingest processing
-10. Post-ingest → see `references/post-ingest-guide.md`
+9. **[VERIFY]** 入库验证 — 对每个 `status="saved"` 的 item_key 调用 `get_paper_details`：
+   - 确认论文存在且 title 正确
+   - 记录 `pdf_available` 状态
+   - 如有 `status="failed"` 的条目，汇总失败原因
+10. **[USER_REQUIRED]** 展示验证后的入库结果表（title / PDF 状态 / 集合），ask whether to run post-ingest
+11. Post-ingest → see `references/post-ingest-guide.md`
 
 ### Direct Ingest
 
 1. `ingest_papers` or `save_urls`
 2. `get_ingest_status` (poll if `is_final` is false)
-3. **[USER_REQUIRED]** Ask whether to run post-ingest processing
-4. Post-ingest → see `references/post-ingest-guide.md`
+3. **[VERIFY]** 对每个 saved item_key 调用 `get_paper_details` 确认存在
+4. **[USER_REQUIRED]** 展示验证结果，ask whether to run post-ingest
+5. Post-ingest → see `references/post-ingest-guide.md`
 
 ### Organize
 
