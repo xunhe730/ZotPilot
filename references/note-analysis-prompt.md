@@ -14,13 +14,13 @@
    - 若文件存在：提取研究方向关键词、核心问题、方法偏好
    - 若文件不存在：
      - 标注"ZOTPILOT.md 未配置"
-     - 降级为：仅用 `list_collections` + `list_tags` 做粗粒度关联判断
+     - 降级为：仅用 `browse_library(view="collections")` + `browse_library(view="tags")` 做粗粒度关联判断
      - 在笔记"与本课题的关联"章节末尾追加：
        > ⚠️ 研究档案（ZOTPILOT.md）尚未配置，关联分析仅基于现有分类体系，准确度有限。
        > 建议运行 `profile_library` 生成个人研究档案以提升笔记质量。
 
-2. `list_collections` — 获取现有分类体系
-3. `list_tags` — 获取现有标签词汇表
+2. `browse_library(view="collections")` — 获取现有分类体系
+3. `browse_library(view="tags")` — 获取现有标签词汇表
 
 ---
 
@@ -113,7 +113,7 @@ search_papers(
 ```
 create_note(item_key="{item_key}", content="{笔记全文}")
 
-add_item_tags(item_key="{item_key}", tags=["note-done"])
+manage_tags(action="add", item_keys="{item_key}", tags=["note-done"])
 ```
 
 **批量进度日志**（每篇完成后输出一行）：
@@ -138,7 +138,7 @@ get_notes(item_key="{item_key}", query="[ZotPilot-Full]")
 ```
 
 - 若已有 `[ZotPilot-Full]` 前缀笔记 → 询问用户是否覆盖
-- 若已有 `[ZotPilot]` 精简笔记（Workflow A 结果）→ **不删除**，两者并存；`note-done` 标签已存在，Step 5 中 `add_item_tags` 会幂等添加（重复添加无副作用）
+- 若已有 `[ZotPilot]` 精简笔记（Workflow A 结果）→ **不删除**，两者并存；`note-done` 标签已存在，Step 5 中 `manage_tags(action="add")` 会幂等添加（重复添加无副作用）
 - 若无任何匹配 → 继续 Step 1
 
 ### Step 1：元数据召回
@@ -206,8 +206,8 @@ get_notes(item_key=None, query="{论文核心方法关键词}")
 
 ```
 # 引用图谱（容错执行）
-find_references(doc_id="{doc_id}")      # 本文引用了哪些
-find_citing_papers(doc_id="{doc_id}")   # 哪些论文引用了本文
+get_citations(doc_id="{doc_id}", direction="references")   # 本文引用了哪些
+get_citations(doc_id="{doc_id}", direction="citing")      # 哪些论文引用了本文
 ```
 
 若引文 API 调用失败（无 DOI 或网络错误）：填 `引用数据暂不可用（{{原因}}）`，不中断流程。
@@ -234,7 +234,7 @@ find_citing_papers(doc_id="{doc_id}")   # 哪些论文引用了本文
 ```
 create_note(item_key="{item_key}", content="{笔记全文}")
 
-add_item_tags(item_key="{item_key}", tags=["note-done", "deep-read"])
+manage_tags(action="add", item_keys="{item_key}", tags=["note-done", "deep-read"])
 ```
 
 ---

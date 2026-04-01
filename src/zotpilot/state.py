@@ -142,7 +142,6 @@ ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
 | Search external academic databases (OpenAlex)            | search_academic_databases   |
 | Batch add papers from search results to Zotero          | ingest_papers               |
 | Save browser pages into Zotero via Connector            | save_urls                   |
-| Save a single URL (alias for save_urls)                 | save_from_url               |
 
 **Note**: `search_topic` searches your LOCAL indexed Zotero library \
 (requires prior `index_library`). `search_academic_databases` queries \

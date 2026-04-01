@@ -1,5 +1,5 @@
 """Citation graph tools: citing papers, references, citation counts."""
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -25,73 +25,82 @@ def _get_doi(doc_id: str) -> str:
     return doi
 
 
-@mcp.tool()
-def find_citing_papers(
-    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
-    limit: Annotated[int, Field(description="Max citing papers to return", ge=1, le=100)] = 20,
-) -> list[dict]:
-    """Find papers that cite a given document. Requires DOI. Uses OpenAlex API."""
+def _get_openalex_work(doc_id: str):
     doi = _get_doi(doc_id)
-
     from ..openalex_client import OpenAlexClient
 
     _config = _get_config()
-
     client = OpenAlexClient(email=_config.openalex_email)
-
     work = client.get_work_by_doi(doi)
     if not work:
         raise ToolError(f"Paper not found in OpenAlex: {doi}")
-
-    citing = client.get_citing_works(work.openalex_id, limit)
-
-    return [client.format_work(w) for w in citing]
-
+    return doi, client, work
 
 @mcp.tool()
-def find_references(
+def get_citations(
     doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
-    limit: Annotated[int, Field(description="Max references to return", ge=1, le=100)] = 50,
-) -> list[dict]:
-    """Find papers referenced by a document (its bibliography). Requires DOI."""
-    doi = _get_doi(doc_id)
-
-    from ..openalex_client import OpenAlexClient
-
-    _config = _get_config()
-
-    client = OpenAlexClient(email=_config.openalex_email)
-
-    work = client.get_work_by_doi(doi)
-    if not work:
-        raise ToolError(f"Paper not found in OpenAlex: {doi}")
-
-    references = client.get_references(work.openalex_id, limit)
-
-    return [client.format_work(w) for w in references]
-
-
-@mcp.tool()
-def get_citation_count(
-    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+    direction: Annotated[
+        Literal["references", "citing", "count", "both"],
+        Field(description="'references' returns bibliography; 'citing' returns citing works; 'count' returns counts only; 'both' returns counts plus both lists"),  # noqa: E501
+    ] = "both",
+    limit: Annotated[int, Field(description="Max citing/references works to return per direction", ge=1, le=100)] = 20,
 ) -> dict:
-    """Get citation and reference counts for a document. Requires DOI."""
-    doi = _get_doi(doc_id)
+    """Get citation graph data for a document by DOI.
 
-    from ..openalex_client import OpenAlexClient
-
-    _config = _get_config()
-
-    client = OpenAlexClient(email=_config.openalex_email)
-
-    work = client.get_work_by_doi(doi)
-    if not work:
-        raise ToolError(f"Paper not found in OpenAlex: {doi}")
-
-    return {
+    Use direction to choose references, citing papers, counts only, or both lists together.
+    Returns OpenAlex identifiers, counts, and any requested work lists.
+    """
+    doi, client, work = _get_openalex_work(doc_id)
+    result = {
         "doc_id": doc_id,
         "doi": doi,
         "openalex_id": work.openalex_id,
         "cited_by_count": work.cited_by_count,
         "reference_count": len(work.references),
+    }
+    if direction in {"references", "both"}:
+        references = client.get_references(work.openalex_id, limit)
+        result["references"] = [client.format_work(w) for w in references]
+    if direction in {"citing", "both"}:
+        citing = client.get_citing_works(work.openalex_id, limit)
+        result["citing"] = [client.format_work(w) for w in citing]
+    return result
+
+
+@mcp.tool(
+    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
+)
+def find_citing_papers(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+    limit: Annotated[int, Field(description="Max citing papers to return", ge=1, le=100)] = 20,
+) -> list[dict]:
+    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
+    return get_citations(doc_id=doc_id, direction="citing", limit=limit)["citing"]
+
+
+@mcp.tool(
+    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
+)
+def find_references(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+    limit: Annotated[int, Field(description="Max references to return", ge=1, le=100)] = 50,
+) -> list[dict]:
+    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
+    return get_citations(doc_id=doc_id, direction="references", limit=limit)["references"]
+
+
+@mcp.tool(
+    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
+)
+def get_citation_count(
+    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
+) -> dict:
+    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
+    citation_data = get_citations(doc_id=doc_id, direction="count")
+    return {
+        "doc_id": citation_data["doc_id"],
+        "doi": citation_data["doi"],
+        "openalex_id": citation_data["openalex_id"],
+        "cited_by_count": citation_data["cited_by_count"],
+        "reference_count": citation_data["reference_count"],
     }

@@ -27,27 +27,81 @@ def _invalidate_collection_cache():
 
 
 @mcp.tool()
-def list_collections() -> list[dict]:
-    """List all Zotero collections (folders) with keys and hierarchy."""
+def browse_library(
+    view: Annotated[
+        Literal["overview", "tags", "collections", "collection_papers"],
+        Field(description="'overview' lists papers; 'tags' lists tag vocabulary; 'collections' lists folders; 'collection_papers' lists papers in one collection"),  # noqa: E501
+    ] = "overview",
+    collection_key: Annotated[
+        str | None,
+        Field(description="Required when view='collection_papers'. Collection key to inspect."),
+    ] = None,
+    limit: Annotated[int, Field(description="Max results per page or collection listing", ge=1)] = 100,
+    offset: Annotated[int, Field(description="Starting index for overview pagination", ge=0)] = 0,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Metadata richness for overview rows and collection/feed results"),
+    ] = "minimal",
+) -> dict | list[dict]:
+    """Browse lightweight library views without running a full library profile.
+
+    Use view='overview' for paginated papers, view='tags' for the tag vocabulary, view='collections' for folder hierarchy, or view='collection_papers' for papers in one collection.
+    Returns the same structures as the underlying browse tools for compatibility.
+    """
+    if view == "overview":
+        return _get_library_overview_impl(limit=limit, offset=offset, verbosity=verbosity)
+    if view == "tags":
+        return _list_tags_impl(limit=limit)
+    if view == "collections":
+        return _list_collections_impl()
+    if not collection_key:
+        raise ToolError(
+            "browse_library(view='collection_papers') requires collection_key. "
+            "Call browse_library(view='collections') or list_collections() first to choose a collection."
+        )
+    return _get_collection_papers_impl(collection_key=collection_key, limit=limit)
+
+
+def _list_collections_impl() -> list[dict]:
     return _get_zotero().get_all_collections()
 
 
-@mcp.tool()
+@mcp.tool(
+    description="DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."
+)
+def list_collections() -> list[dict]:
+    """List all Zotero collections (folders) with keys and hierarchy."""
+    return browse_library(view="collections")
+
+
+def _get_collection_papers_impl(collection_key: str, limit: int = 100) -> list[dict]:
+    return _get_zotero().get_collection_items(collection_key, limit)
+
+
+@mcp.tool(
+    description="DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."
+)
 def get_collection_papers(
     collection_key: Annotated[str, Field(description="Collection key from list_collections")],
     limit: Annotated[int, Field(description="Max papers to return", ge=1)] = 100,
 ) -> list[dict]:
-    """Get papers in a specific Zotero collection."""
-    return _get_zotero().get_collection_items(collection_key, limit)
+    """DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."""
+    return browse_library(view="collection_papers", collection_key=collection_key, limit=limit)
 
 
-@mcp.tool()
+def _list_tags_impl(limit: int = 200) -> list[dict]:
+    tags = _get_zotero().get_all_tags()
+    return tags[:limit]
+
+
+@mcp.tool(
+    description="DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."
+)
 def list_tags(
     limit: Annotated[int, Field(description="Max tags to return", ge=1)] = 200,
 ) -> list[dict]:
-    """List all tags in the library sorted by usage count."""
-    tags = _get_zotero().get_all_tags()
-    return tags[:limit]
+    """DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."""
+    return browse_library(view="tags", limit=limit)
 
 
 @mcp.tool()
@@ -94,16 +148,11 @@ def get_paper_details(
     }
 
 
-@mcp.tool()
-def get_library_overview(
-    limit: Annotated[int, Field(description="Papers per page", ge=1)] = 100,
-    offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
-    verbosity: Annotated[
-        Literal["minimal", "standard", "full"],
-        Field(description="Metadata richness for library rows"),
-    ] = "minimal",
+def _get_library_overview_impl(
+    limit: int = 100,
+    offset: int = 0,
+    verbosity: Literal["minimal", "standard", "full"] = "minimal",
 ) -> dict:
-    """Paginated overview of all papers in the library."""
     zotero = _get_zotero()
     all_items = zotero.get_all_items_with_pdfs()
 
@@ -139,6 +188,21 @@ def get_library_overview(
         "limit": limit,
         "papers": [_paper_row(item) for item in page],
     }
+
+
+@mcp.tool(
+    description="DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."
+)
+def get_library_overview(
+    limit: Annotated[int, Field(description="Papers per page", ge=1)] = 100,
+    offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Metadata richness for library rows"),
+    ] = "minimal",
+) -> dict:
+    """DEPRECATED — Use browse_library instead. Will be removed in v0.6.0."""
+    return browse_library(view="overview", limit=limit, offset=offset, verbosity=verbosity)
 
 
 @mcp.tool()
@@ -178,7 +242,6 @@ def get_notes(
     return notes
 
 
-@mcp.tool()
 def get_feeds(
     library_id: Annotated[int | None, Field(description="Feed library ID for items. None to list all feeds.")] = None,
     limit: Annotated[int, Field(description="Max feed items", ge=1, le=100)] = 20,

@@ -51,20 +51,20 @@ Call `get_paper_details(item_key)` in parallel with Step A to gather abstract, m
 
 For every paper selected for note generation, follow `references/note-analysis-prompt.md` Workflow A:
 
-- 去重检查 → 元数据召回 → 向量召回 → 填写模板 → `create_note` → `add_item_tags(["note-done"])`
+- 去重检查 → 元数据召回 → 向量召回 → 填写模板 → `create_note` → `manage_tags(action="add", item_keys="...", tags=["note-done"])`
 
 ### Step D — Classify into Collection
 
-- `list_collections` → find the best matching collection
-- If a match is found → `add_to_collection(item_key, collection_key)` and `remove_from_collection(item_key, inbox_key)`
-- If no match is found → `create_collection(name)` with a reasonable topic name, then add the paper there
+- `browse_library(view="collections")` → find the best matching collection
+- If a match is found → `manage_collections(action="add", item_keys="...", collection_key="...")` and `manage_collections(action="remove", item_keys="...", collection_key=inbox_key)`
+- If no match is found → `create_collection(name="...")` with a reasonable topic name, then add the paper there
 - If classification is uncertain → batch all uncertain papers and ask once at the end with suggested destinations
 
 ### Step E — Tag
 
-- `list_tags` → get the existing vocabulary
+- `browse_library(view="tags")` → get the existing vocabulary
 - Select from existing tags only
-- `add_item_tags(item_key, selected_tags)`
+- `manage_tags(action="add", item_keys="...", tags=[...])`
 - Never invent new tags silently. If none fit, batch those papers and ask once at the end
 
 ### Step F — Quality check

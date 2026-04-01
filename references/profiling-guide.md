@@ -35,4 +35,4 @@ The format is flexible — write what's useful, not what fits a schema.
 
 ## Organize library (classification advisor)
 
-`get_library_overview` + `list_collections` + `list_tags` → analyze themes via `search_topic` → diagnose issues (uncategorized papers, inconsistent tags, oversized collections) → propose collection hierarchy + tag normalization → interview user for confirmation → `batch_collections` + `batch_tags(add/remove)` to execute.
+`browse_library(view="overview")` + `browse_library(view="collections")` + `browse_library(view="tags")` → analyze themes via `search_topic` → diagnose issues (uncategorized papers, inconsistent tags, oversized collections) → propose collection hierarchy + tag normalization → interview user for confirmation → `manage_collections` + `manage_tags` to execute.

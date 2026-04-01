@@ -21,7 +21,6 @@ from ..state import (
 logger = logging.getLogger(__name__)
 
 
-@mcp.tool()
 def get_reranking_config() -> dict:
     """Get current reranking weights and valid section/quartile names."""
     _config = _get_config()
@@ -49,7 +48,6 @@ def get_reranking_config() -> dict:
     }
 
 
-@mcp.tool()
 def get_vision_costs(
     last_n: Annotated[int, Field(description="Recent log entries to include in detail", ge=0)] = 10,
 ) -> dict:

@@ -961,7 +961,6 @@ def get_ingest_status(
     return batch.full_status()
 
 
-@mcp.tool()
 def save_from_url(
     url: str,
     collection_key: str | None = None,

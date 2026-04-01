@@ -28,6 +28,37 @@ class TestListCollections:
         mock_zotero.get_all_collections.assert_called_once()
 
 
+class TestBrowseLibrary:
+    @patch("zotpilot.tools.library._get_zotero")
+    @patch("zotpilot.tools.library._get_store_optional")
+    def test_browse_library_overview(self, mock_get_store_opt, mock_get_zotero):
+        from zotpilot.tools.library import browse_library
+
+        item = MagicMock()
+        item.item_key = "DOC1"
+        item.title = "Paper 1"
+        item.year = "2024"
+        item.authors = ["A"]
+        item.publication = "Journal"
+        item.tags = ["ml"]
+        item.collections = ["COL1"]
+        item.citation_key = "citekey"
+        mock_get_zotero.return_value.get_all_items_with_pdfs.return_value = [item]
+        mock_get_store_opt.return_value.get_indexed_doc_ids.return_value = {"DOC1"}
+
+        result = browse_library(view="overview", limit=1, verbosity="full")
+
+        assert result["total"] == 1
+        assert result["papers"][0]["doc_id"] == "DOC1"
+        assert result["papers"][0]["indexed"] is True
+
+    def test_browse_library_collection_papers_requires_collection_key(self):
+        from zotpilot.tools.library import browse_library
+
+        with pytest.raises(ToolError, match="browse_library\\(view='collection_papers'\\) requires collection_key"):
+            browse_library(view="collection_papers")
+
+
 class TestListTags:
     @patch("zotpilot.tools.library._get_zotero")
     def test_list_tags(self, mock_get_zotero):
@@ -176,6 +207,22 @@ class TestAddItemTags:
         result = add_item_tags("ITEM1", ["new-tag"])
         assert result == {"success": True, "item_key": "ITEM1", "added": ["new-tag"]}
         mock_writer.add_item_tags.assert_called_once_with("ITEM1", ["new-tag"])
+
+
+class TestManageTags:
+    def test_manage_tags_requires_tags(self):
+        from zotpilot.tools.write_ops import manage_tags
+
+        with pytest.raises(ToolError, match="manage_tags requires tags"):
+            manage_tags(action="add", item_keys="ITEM1")
+
+
+class TestManageCollections:
+    def test_manage_collections_requires_collection_key(self):
+        from zotpilot.tools.write_ops import manage_collections
+
+        with pytest.raises(ToolError, match="manage_collections requires collection_key"):
+            manage_collections(action="add", item_keys="ITEM1")
 
 
 class TestCreateCollection:

@@ -302,10 +302,13 @@ class VectorStore:
         chunks = []
         if results['ids'] and results['ids'][0]:
             for i, chunk_id in enumerate(results['ids'][0]):
+                metadata = results['metadatas'][0][i]
+                if metadata is None:
+                    continue
                 chunks.append(StoredChunk(
                     id=chunk_id,
                     text=results['documents'][0][i],
-                    metadata=results['metadatas'][0][i],
+                    metadata=metadata,
                     score=1 - results['distances'][0][i]  # Convert distance to similarity
                 ))
         return chunks

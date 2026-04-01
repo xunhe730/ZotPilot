@@ -283,7 +283,7 @@ class TestMCPInstructions:
     def test_registered_tool_surface_matches_expected_set(self):
         tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
         registered = set()
-        pattern = re.compile(r"@mcp\.tool\(\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(")
+        pattern = re.compile(r"@mcp\.tool\([^)]*\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(", re.DOTALL)
         for path in tools_dir.glob("*.py"):
             registered.update(pattern.findall(path.read_text()))
 
@@ -293,31 +293,31 @@ class TestMCPInstructions:
             "advanced_search",
             "batch_collections",
             "batch_tags",
+            "browse_library",
             "create_collection",
             "create_note",
             "find_citing_papers",
             "find_references",
             "get_annotations",
             "get_citation_count",
+            "get_citations",
             "get_collection_papers",
-            "get_feeds",
             "get_index_stats",
             "get_library_overview",
             "get_notes",
             "get_paper_details",
             "get_passage_context",
-            "get_reranking_config",
             "get_unindexed_papers",
-            "get_vision_costs",
             "index_library",
             "get_ingest_status",
             "ingest_papers",
             "list_collections",
             "list_tags",
+            "manage_collections",
+            "manage_tags",
             "profile_library",
             "remove_from_collection",
             "remove_item_tags",
-            "save_from_url",
             "save_urls",
             "search_academic_databases",
             "search_boolean",
@@ -334,7 +334,7 @@ class TestMCPInstructions:
     def test_instructions_reference_only_registered_tools(self):
         tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
         registered = set()
-        pattern = re.compile(r"@mcp\.tool\(\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(")
+        pattern = re.compile(r"@mcp\.tool\([^)]*\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(", re.DOTALL)
         for path in tools_dir.glob("*.py"):
             registered.update(pattern.findall(path.read_text()))
 
