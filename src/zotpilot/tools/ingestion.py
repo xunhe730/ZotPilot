@@ -19,8 +19,11 @@ from pydantic import Field
 
 from ..bridge import DEFAULT_PORT, BridgeServer
 from ..state import _get_config, _get_writer, _get_zotero, mcp, register_reset_callback
+from ..workflow import SessionStore
+from ..workflow.session_store import current_library_id
 from . import ingestion_bridge, ingestion_search
 from .ingest_state import _POST_INGEST_INSTRUCTION, BatchState, BatchStore, IngestItemState
+from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ register_reset_callback(_clear_inbox_cache)
 
 _batch_store = BatchStore(max_batches=50, completed_ttl_s=1800.0)
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
+_session_store = SessionStore()
 
 
 def _clear_batch_store() -> None:
@@ -47,6 +51,39 @@ def _clear_batch_store() -> None:
 
 
 register_reset_callback(_clear_batch_store)
+
+
+def _check_pre_ingest_gate():
+    session = _session_store.get_active(statuses={"running", "awaiting_user"})
+    if session is None:
+        return None
+    if "candidate-review" not in session.approved_checkpoints:
+        session.touch(phase="candidate-review", status="awaiting_user")
+        _session_store.save(session)
+        raise ToolError(
+            "Research session requires user approval before ingest. "
+            "Present candidates to the user, then approve checkpoint 'candidate-review'."
+        )
+    if session.library_id != current_library_id():
+        raise ToolError("Library changed since the research session started. Cannot continue ingest.")
+    session.touch(phase="ingest", status="running")
+    _session_store.save(session)
+    return session
+
+
+def _update_session_after_ingest(batch: BatchState) -> None:
+    if not batch.session_id or not batch.is_final:
+        return
+    session = _session_store.load(batch.session_id)
+    if session is None:
+        return
+    item_keys = []
+    for item in batch.pending_items:
+        if item.item_key and item.item_key not in item_keys:
+            item_keys.append(item.item_key)
+    session = _session_store.update_items(session, item_keys, phase="post-ingest-review", status="awaiting_user")
+    session.drift_details = []
+    _session_store.save(session)
 
 # ---------------------------------------------------------------------------
 # URL classification for routing decisions
@@ -292,7 +329,7 @@ def _discover_via_web_api(url: str, title: str | None) -> str | None:
     return None
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "ingestion"))
 def search_academic_databases(
     query: Annotated[str, Field(description="Search query for academic papers")],
     limit: Annotated[int, Field(ge=1, le=100, description="Number of results (1-100)")] = 20,
@@ -480,7 +517,9 @@ def _run_save_worker(
                     candidate = candidate_by_index.get(idx)
                 if result.get("success") is True:
                     item_key = result.get("item_key")
-                    result_title = result.get("title") or (candidate.get("paper", {}).get("title") if candidate else None)
+                    result_title = result.get("title") or (
+                        candidate.get("paper", {}).get("title") if candidate else None
+                    )
                     # Post-save verification: if bridge claims success but no item_key,
                     # try to discover the item in Zotero. If not found, demote to failed.
                     if not item_key:
@@ -493,7 +532,10 @@ def _run_save_worker(
                             batch.update_item(
                                 idx,
                                 status="failed",
-                                error="Connector reported success but item not found in Zotero. Save may have silently failed.",
+                                error=(
+                                    "Connector reported success but item not found in Zotero. "
+                                    "Save may have silently failed."
+                                ),
                             )
                             continue
                     batch.update_item(
@@ -652,7 +694,7 @@ def _run_save_worker(
         batch.finalize()
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "ingestion"))
 def ingest_papers(
     papers: Annotated[
         list[dict] | str,
@@ -679,6 +721,8 @@ def ingest_papers(
     if len(papers) > 50:
         raise ToolError(f"Batch size {len(papers)} exceeds maximum of 50. Split into smaller batches.")
 
+    session = _check_pre_ingest_gate()
+
     if collection_key is None:
         collection_key = _ensure_inbox_collection()
     resolved_collection_key = collection_key
@@ -704,7 +748,12 @@ def ingest_papers(
 
         if normalized_doi and normalized_doi in batch_seen_dois:
             first_idx = batch_seen_dois[normalized_doi]
-            logger.warning("Skipping batch item %d due to duplicate DOI %s already seen at index %d", idx, normalized_doi, first_idx)
+            logger.warning(
+                "Skipping batch item %d due to duplicate DOI %s already seen at index %d",
+                idx,
+                normalized_doi,
+                first_idx,
+            )
             skipped_indices.add(idx)
             duplicates += 1
             results.append(
@@ -945,6 +994,7 @@ def ingest_papers(
         total=len(papers),
         collection_used=resolved_collection_key,
         pending_items=pending_items,
+        session_id=session.session_id if session is not None else None,
     )
 
     if not connector_candidates and not api_candidates:
@@ -978,7 +1028,7 @@ def ingest_papers(
     }
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "ingestion"))
 def get_ingest_status(
     batch_id: Annotated[str, Field(description="Batch ID returned by ingest_papers")],
 ) -> dict:
@@ -998,22 +1048,12 @@ def get_ingest_status(
                 "or the server was restarted. Check Zotero directly."
             ),
         }
+    _update_session_after_ingest(batch)
     return batch.full_status()
 
 
-def save_from_url(
-    url: str,
-    collection_key: str | None = None,
-    tags: Annotated[list[str] | str | None, Field(description="Tags to apply, as a list or JSON array string")] = None,
-) -> dict:
-    """Save a paper from URL to Zotero. Alias for save_urls([url])."""
-    batch = save_urls([url], collection_key=collection_key, tags=tags)
-    item = batch["results"][0] if batch["results"] else {"success": False, "error": "no result"}
-    item["collection_used"] = batch.get("collection_used")
-    return item
 
-
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "ingestion"))
 def save_urls(
     urls: Annotated[list[str] | str, Field(description="URLs to save. Max 10 per call.")],
     collection_key: Annotated[str | None, Field(description="Zotero collection key for all saved items")] = None,

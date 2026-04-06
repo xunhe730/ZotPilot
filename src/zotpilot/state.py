@@ -147,6 +147,14 @@ ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
 (requires prior `index_library`). `search_academic_databases` queries \
 EXTERNAL databases (OpenAlex) and finds papers not yet in your library.
 
+**Default `core` profile tools:**
+`search_topic`, `search_papers`, `get_passage_context`, `advanced_search`,
+`get_paper_details`, `search_academic_databases`, `ingest_papers`,
+`get_ingest_status`, `get_index_stats`, `research_session`
+
+Set `ZOTPILOT_TOOL_PROFILE=extended` to expose advanced browse/write/admin tools,
+or `ZOTPILOT_TOOL_PROFILE=all` for the complete tool surface.
+
 **Default research flow:**
 1. `search_topic` to discover what is already in the local library
 2. Optionally `search_papers` for supporting passages
@@ -159,14 +167,18 @@ set `context_chunks=1` only when adjacent context is useful. \
 `search_papers` or `get_passage_context` instead.
 
 `doc_id` is the canonical identifier in search and library results. \
-`get_library_overview` and `get_paper_details` return `doc_id` instead of `key`.
+`browse_library` and `get_paper_details` return `doc_id` instead of `key`.
 
 **Typical literature collection workflow:**
 1. `search_academic_databases` → review candidates
 2. `ingest_papers` with selected papers → added to Zotero with metadata and OA PDF
 
 advanced_search works without indexing — use for precise metadata \
-filters. get_notes/create_note for reading and writing notes.
+filters. Extended profile adds browse/write/admin tools such as \
+`browse_library`, `manage_tags`, `index_library`, and `switch_library`. \
+Use `browse_library(view="feeds")` for RSS feeds. `get_index_stats` also \
+handles unindexed-paper pagination plus optional reranking and vision-cost details. \
+Use `research_session` to create, resume, approve, or validate guarded research runs.
 
 Write operations (tags, collections, notes) require ZOTERO_API_KEY \
 and ZOTERO_USER_ID environment variables.

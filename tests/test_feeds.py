@@ -1,8 +1,6 @@
-"""Tests for get_feeds (ZoteroClient + MCP tool)."""
+"""Tests for feed browsing (ZoteroClient + browse_library tool)."""
 import sqlite3
-import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from zotpilot.zotero_client import ZoteroClient
 
@@ -89,7 +87,14 @@ class TestGetFeeds:
         """Old Zotero without feeds table."""
         db_path = tmp_path / "zotero.sqlite"
         conn = sqlite3.connect(str(db_path))
-        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT, libraryID INTEGER DEFAULT 1)")
+        conn.execute(
+            "CREATE TABLE items ("
+            "itemID INTEGER PRIMARY KEY, "
+            "itemTypeID INTEGER, "
+            "dateAdded TEXT, "
+            "key TEXT, "
+            "libraryID INTEGER DEFAULT 1)"
+        )
         conn.close()
         client = ZoteroClient(tmp_path)
         assert client.get_feeds() == []
@@ -119,7 +124,14 @@ class TestGetFeeds:
     def test_get_feed_items_no_table(self, tmp_path):
         db_path = tmp_path / "zotero.sqlite"
         conn = sqlite3.connect(str(db_path))
-        conn.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY, itemTypeID INTEGER, dateAdded TEXT, key TEXT, libraryID INTEGER DEFAULT 1)")
+        conn.execute(
+            "CREATE TABLE items ("
+            "itemID INTEGER PRIMARY KEY, "
+            "itemTypeID INTEGER, "
+            "dateAdded TEXT, "
+            "key TEXT, "
+            "libraryID INTEGER DEFAULT 1)"
+        )
         conn.close()
         client = ZoteroClient(tmp_path)
         assert client.get_feed_items(1) == []
@@ -144,8 +156,8 @@ class TestGetFeedsTool:
         ]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import get_feeds
-        result = get_feeds()
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="feeds")
         assert result["total"] == 1
         assert result["feeds"][0]["name"] == "ArXiv"
         mock_client.get_feeds.assert_called_once()
@@ -154,12 +166,20 @@ class TestGetFeedsTool:
     def test_get_feed_items_tool(self, mock_zotero):
         mock_client = MagicMock()
         mock_client.get_feed_items.return_value = [
-            {"key": "F1", "title": "Paper", "authors": "", "abstract": "", "url": "", "date_added": "", "read": False},
+            {
+                "key": "F1",
+                "title": "Paper",
+                "authors": "",
+                "abstract": "",
+                "url": "",
+                "date_added": "",
+                "read": False,
+            },
         ]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import get_feeds
-        result = get_feeds(library_id=1, limit=10)
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="feeds", library_id=1, limit=10)
         assert result["total"] == 1
         assert result["library_id"] == 1
         assert set(result["items"][0]) == {"key", "title", "date_added", "read"}
@@ -169,12 +189,20 @@ class TestGetFeedsTool:
     def test_get_feed_items_tool_full_preserves_legacy_fields(self, mock_zotero):
         mock_client = MagicMock()
         mock_client.get_feed_items.return_value = [
-            {"key": "F1", "title": "Paper", "authors": "Auth", "abstract": "Abstract", "url": "https://example.com", "date_added": "", "read": False},
+            {
+                "key": "F1",
+                "title": "Paper",
+                "authors": "Auth",
+                "abstract": "Abstract",
+                "url": "https://example.com",
+                "date_added": "",
+                "read": False,
+            },
         ]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import get_feeds
-        result = get_feeds(library_id=1, limit=10, verbosity="full")
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="feeds", library_id=1, limit=10, verbosity="full")
         assert result["items"][0]["authors"] == "Auth"
         assert result["items"][0]["abstract"] == "Abstract"
         assert result["items"][0]["url"] == "https://example.com"
@@ -187,8 +215,8 @@ class TestGetFeedsTool:
         ]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import get_feeds
-        result = get_feeds(library_id=1, limit=10)
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="feeds", library_id=1, limit=10)
         assert result["items"][0] == {
             "key": "F1",
             "title": "Paper",

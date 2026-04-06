@@ -41,33 +41,34 @@ compatibility:
 
 ## Tool Index
 
-| Tool | Purpose |
-|------|---------|
-| `search_papers` | Passage-level semantic search |
-| `search_topic` | Paper-level topic discovery |
-| `search_boolean` | Exact keyword search (author names, acronyms) |
-| `advanced_search` | Metadata filter (year/author/tag/DOI/collection, works without index) |
-| `search_tables` | Search table content (headers, cells, captions) |
-| `search_figures` | Search figure captions |
-| `get_passage_context` | Expand a search result with surrounding text |
-| `get_paper_details` | Full metadata + abstract for one paper |
-| `browse_library` | Browse library overview / tags / collections / collection papers |
-| `get_notes` | Read or search notes attached to papers |
-| `get_annotations` | Read highlights and comments (requires API key) |
-| `profile_library` | Full-library theme analysis |
-| `get_citations` | Citation graph: citing papers / references / counts |
-| `index_library` | Build or update vector index |
-| `get_index_stats` | Check index readiness and stats |
-| `get_unindexed_papers` | List papers not yet indexed |
-| `manage_tags` | Add / replace / remove tags (single or batch) |
-| `create_collection` | Create a new collection folder |
-| `manage_collections` | Add / remove papers from collections (single or batch) |
-| `create_note` | Create a note on a paper |
-| `search_academic_databases` | Search OpenAlex for papers NOT yet in library |
-| `ingest_papers` | Batch add papers by arXiv ID / DOI / URL |
-| `get_ingest_status` | Poll async ingestion progress |
-| `save_urls` | Save 1-10 URLs via browser connector |
-| `switch_library` | Switch active Zotero library |
+Default `core` profile exposes only the main workflow tools below. Extended/admin tools require `ZOTPILOT_TOOL_PROFILE=extended`, `research`, or `all`.
+
+| Tool | Purpose | Profile |
+|------|---------|---------|
+| `search_papers` | Passage-level semantic search | `core` |
+| `search_topic` | Paper-level topic discovery | `core` |
+| `advanced_search` | Metadata filter (year/author/tag/DOI/collection, works without index) | `core` |
+| `get_passage_context` | Expand a search result with surrounding text | `core` |
+| `get_paper_details` | Full metadata + abstract for one paper | `core` |
+| `search_academic_databases` | Search OpenAlex for papers NOT yet in library | `core` |
+| `ingest_papers` | Batch add papers by arXiv ID / DOI / URL | `core` |
+| `get_ingest_status` | Poll async ingestion progress | `core` |
+| `get_index_stats` | Check index readiness, unindexed papers, and optional index diagnostics | `core` |
+| `search_boolean` | Exact keyword search (author names, acronyms) | `extended` |
+| `search_tables` | Search table content (headers, cells, captions) | `extended` |
+| `search_figures` | Search figure captions | `extended` |
+| `browse_library` | Browse library overview / tags / collections / papers / feeds | `extended` |
+| `get_notes` | Read or search notes attached to papers | `extended` |
+| `get_annotations` | Read highlights and comments (requires API key) | `extended` |
+| `profile_library` | Full-library theme analysis | `extended` |
+| `get_citations` | Citation graph: citing papers / references / counts | `extended` |
+| `manage_tags` | Add / replace / remove tags (single or batch) | `extended` |
+| `create_collection` | Create a new collection folder | `extended` |
+| `manage_collections` | Add / remove papers from collections (single or batch) | `extended` |
+| `create_note` | Create a note on a paper | `extended` |
+| `save_urls` | Save 1-10 URLs via browser connector | `extended` |
+| `index_library` | Build or update vector index | `extended` |
+| `switch_library` | Switch active Zotero library | `extended/admin` |
 
 ## Critical Behaviors
 
@@ -98,17 +99,16 @@ If intent is ambiguous, ask:
 
 ### Local Search
 
-1. Check index readiness → `get_index_stats`
-   - If indexed → proceed with semantic search
-   - If no index → fall back to `search_boolean` / `advanced_search` only
-2. Discover relevant papers → `search_topic`
-3. Find specific passages → `search_papers`
-4. Expand context → `get_passage_context`
+1. Discover relevant papers → `search_topic`
+2. Find specific passages → `search_papers`
+3. Expand context → `get_passage_context`
+4. If semantic search errors because indexing is unavailable, fall back to `advanced_search`
+5. Use `search_boolean` only when the server is running in `extended` / `all` profile
 
 ### External Discovery
 
 1. Clarify intent (router above)
-2. Prerequisites check → `get_index_stats`; check `ZOTPILOT.md` for subscription info
+2. Check `ZOTPILOT.md` for subscription info
    - If `ZOTPILOT.md` missing → follow `references/profiling-guide.md` first
 3. Search candidates → `search_academic_databases`
 4. Score candidates → see `references/scoring-guide.md`
@@ -132,6 +132,8 @@ If intent is ambiguous, ask:
 
 ### Organize
 
+Requires `extended` or `all` profile.
+
 1. Browse library → `browse_library`
 2. Find target papers → `search_topic` or `advanced_search`
 3. Tag → `manage_tags`
@@ -140,7 +142,7 @@ If intent is ambiguous, ask:
 
 ### Profile
 
-Follow `references/profiling-guide.md`
+Requires `extended` or `all` profile. Follow `references/profiling-guide.md`.
 
 ---
 

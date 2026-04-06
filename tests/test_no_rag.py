@@ -130,14 +130,17 @@ class TestGetIndexStats:
         assert result["mode"] == "no-rag"
 
 
-class TestGetRerankingConfig:
-    @patch("zotpilot.tools.admin._get_config")
-    def test_no_rag_returns_disabled(self, mock_config):
+class TestGetIndexStatsMergedConfig:
+    @patch("zotpilot.tools.indexing._get_config")
+    def test_no_rag_returns_disabled_reranking_config(self, mock_config):
         mock_config.return_value = _MockConfig()
-        from zotpilot.tools.admin import get_reranking_config
-        result = get_reranking_config()
-        assert result["enabled"] is False
+        from zotpilot.tools.indexing import get_index_stats
+
+        result = get_index_stats(include_config=True)
+
         assert result["mode"] == "no-rag"
+        assert result["reranking_config"]["enabled"] is False
+        assert result["reranking_config"]["mode"] == "no-rag"
 
 
 class TestGetPaperDetailsNoRag:
@@ -234,8 +237,8 @@ class TestBasicToolsWorkInNoRag:
         mock_client.get_all_tags.return_value = [{"name": "ML", "count": 5}]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import list_tags
-        result = list_tags()
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="tags")
         assert len(result) == 1
         assert result[0]["name"] == "ML"
 

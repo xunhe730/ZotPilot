@@ -14,6 +14,20 @@ zotpilot update --dry-run    # 预览操作，不执行
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] - 2026-04-07
+
+### Added
+- **Packaged workflow skills / 内置工作流 skill**：新增 `src/zotpilot/skills/`，`zotpilot register` / `zotpilot update` 现在会部署打包后的 `ztp-research`、`ztp-setup`、`ztp-review`、`ztp-profile`
+- **Research session guardrail / 研究会话护栏**：新增 `research_session` 工具、JSON session 持久化、ingest/write gate，以及 `create_note(idempotent=True)` 幂等模式
+- **Research profile / research 工具档位**：新增 `ZOTPILOT_TOOL_PROFILE=research`
+
+### Changed
+- **MCP tool surface 收敛到 v0.5.0 目标**：移除 deprecated 别名，合并 `get_feeds` 到 `browse_library(view="feeds")`，合并 `get_unindexed_papers` / `get_reranking_config` / `get_vision_costs` 到 `get_index_stats(...)`
+- **Profile 调整**：`index_library` 提升到 `extended`，`get_index_stats` 提升到 `core`
+- **CLI lifecycle / 安装更新生命周期**：`zotpilot update` 对非 editable 安装改为部署包内 skill 文件；editable 安装提示在源码仓库执行 `git pull`
+
 ### Fixed
 - **ingest_papers collection 路由竞态修复**：Connector 通过本地 API 路由后，后端不再通过 Web API 重复写入（解决双重路由覆写问题）
 - **item_key 发现窗口扩大**：`RECENT_ITEMS_LIMIT` 10→50，`MAX_ATTEMPTS` 15→45，批量入库时 item 发现更稳定

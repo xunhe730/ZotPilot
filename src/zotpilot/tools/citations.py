@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from ..state import ToolError, _get_config, _get_store_optional, _get_zotero, mcp
+from .profiles import tool_tags
 
 
 def _get_doi(doc_id: str) -> str:
@@ -36,7 +37,7 @@ def _get_openalex_work(doc_id: str):
         raise ToolError(f"Paper not found in OpenAlex: {doi}")
     return doi, client, work
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "citations"))
 def get_citations(
     doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
     direction: Annotated[
@@ -67,40 +68,3 @@ def get_citations(
     return result
 
 
-@mcp.tool(
-    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
-)
-def find_citing_papers(
-    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
-    limit: Annotated[int, Field(description="Max citing papers to return", ge=1, le=100)] = 20,
-) -> list[dict]:
-    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
-    return get_citations(doc_id=doc_id, direction="citing", limit=limit)["citing"]
-
-
-@mcp.tool(
-    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
-)
-def find_references(
-    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
-    limit: Annotated[int, Field(description="Max references to return", ge=1, le=100)] = 50,
-) -> list[dict]:
-    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
-    return get_citations(doc_id=doc_id, direction="references", limit=limit)["references"]
-
-
-@mcp.tool(
-    description="DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."
-)
-def get_citation_count(
-    doc_id: Annotated[str, Field(description="Document ID (Zotero item key) from search results")],
-) -> dict:
-    """DEPRECATED — Use get_citations instead. Will be removed in v0.6.0."""
-    citation_data = get_citations(doc_id=doc_id, direction="count")
-    return {
-        "doc_id": citation_data["doc_id"],
-        "doi": citation_data["doi"],
-        "openalex_id": citation_data["openalex_id"],
-        "cited_by_count": citation_data["cited_by_count"],
-        "reference_count": citation_data["reference_count"],
-    }

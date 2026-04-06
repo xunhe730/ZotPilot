@@ -30,11 +30,12 @@ from ..state import (
     _get_zotero,
     mcp,
 )
+from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "search"))
 def search_papers(
     query: Annotated[str, Field(description="Natural language search query")],
     top_k: Annotated[int, Field(description="Number of results", ge=1, le=50)] = 10,
@@ -114,7 +115,7 @@ def search_papers(
     return [_result_to_dict(r, verbosity=verbosity) for r in top_results]
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "search"))
 def search_topic(
     query: Annotated[str, Field(description="Natural language topic description")],
     num_papers: Annotated[int, Field(description="Number of distinct papers to return", ge=1, le=50)] = 10,
@@ -257,7 +258,7 @@ def search_topic(
     return paper_results[:num_papers]
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "search"))
 def search_boolean(
     query: Annotated[str, Field(description="Space-separated search terms (case-insensitive)")],
     operator: Annotated[str, Field(description="AND (all terms required) or OR (any term)")] = "AND",
@@ -316,7 +317,7 @@ def search_boolean(
     return results
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "search"))
 def search_tables(
     query: Annotated[str, Field(description="Search query for table content")],
     top_k: Annotated[int, Field(description="Number of tables to return", ge=1, le=30)] = 10,
@@ -405,7 +406,7 @@ def search_tables(
     return output
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "search"))
 def search_figures(
     query: Annotated[str, Field(description="Search query for figure captions")],
     top_k: Annotated[int, Field(description="Number of figures to return", ge=1, le=30)] = 10,
@@ -461,7 +462,7 @@ def search_figures(
     return output
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "search"))
 def advanced_search(
     conditions: Annotated[str | list[dict], Field(description='[{field, op, value}]. Fields: title, author, year, tag, collection, publication, doi. Ops: contains, is, isNot, beginsWith, gt, lt.')],  # noqa: E501
     match: Annotated[Literal["all", "any"], Field(description="all=AND, any=OR")] = "all",

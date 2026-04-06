@@ -1,11 +1,15 @@
 """Indexing tools: index_library, get_index_stats."""
+import json
 import logging
 from collections import defaultdict
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
 
-from ..state import ToolError, _get_config, _get_retriever, _get_store, _get_zotero, mcp
+from ..reranker import VALID_QUARTILES, VALID_SECTIONS
+from ..state import ToolError, _get_config, _get_reranker, _get_retriever, _get_store, _get_zotero, mcp
+from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,111 @@ def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tupl
     return papers, total
 
 
-@mcp.tool()
+def _get_reranking_config_impl() -> dict:
+    _config = _get_config()
+    if _config.embedding_provider == "none":
+        return {
+            "enabled": False,
+            "mode": "no-rag",
+            "message": "Reranking unavailable in No-RAG mode. Configure an embedding provider to enable semantic search.",  # noqa: E501
+        }
+    _get_retriever()  # Ensure initialized
+    reranker = _get_reranker()
+
+    return {
+        "enabled": _config.rerank_enabled,
+        "alpha": reranker.alpha,
+        "section_weights": reranker.default_section_weights,
+        "journal_weights": {
+            k if k is not None else "unknown": v
+            for k, v in reranker.quartile_weights.items()
+            if k != ""
+        },
+        "valid_sections": sorted(VALID_SECTIONS),
+        "valid_quartiles": sorted(VALID_QUARTILES),
+        "oversample_multiplier": _config.oversample_multiplier,
+    }
+
+
+def _get_vision_costs_impl(last_n: int = 10) -> dict:
+    _config = _get_config()
+
+    log_path = Path(_config.chroma_db_path).parent / "vision_costs.json"
+
+    if not log_path.exists():
+        return {
+            "message": "Vision API has not been used yet -- no cost log found.",
+            "log_path": log_path.name,
+        }
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ToolError(f"Failed to read vision cost log: {exc}")
+
+    if not entries:
+        return {
+            "message": "Vision cost log exists but contains no entries.",
+            "log_path": log_path.name,
+        }
+
+    total_cost = 0.0
+    total_input = 0
+    total_output = 0
+    total_cache_write = 0
+    total_cache_read = 0
+    session_map: dict[str, dict] = {}
+
+    for entry in entries:
+        total_cost += entry.get("cost_usd", 0.0)
+        total_input += entry.get("input_tokens", 0)
+        total_output += entry.get("output_tokens", 0)
+        total_cache_write += entry.get("cache_write_tokens", 0)
+        total_cache_read += entry.get("cache_read_tokens", 0)
+
+        sid = entry.get("session_id", "unknown")
+        ts = entry.get("timestamp", "")
+        if sid not in session_map:
+            session_map[sid] = {"session_id": sid, "first_timestamp": ts, "table_count": 0, "cost_usd": 0.0}
+        session_map[sid]["table_count"] += 1
+        session_map[sid]["cost_usd"] += entry.get("cost_usd", 0.0)
+        if ts and ts < session_map[sid]["first_timestamp"]:
+            session_map[sid]["first_timestamp"] = ts
+
+    total_tables = len(entries)
+    avg_cost = total_cost / total_tables if total_tables else 0.0
+
+    sessions = [
+        {
+            "session_id": s["session_id"],
+            "first_timestamp": s["first_timestamp"],
+            "table_count": s["table_count"],
+            "cost_usd": round(s["cost_usd"], 6),
+        }
+        for s in session_map.values()
+    ]
+    sessions.sort(key=lambda x: x["first_timestamp"])
+
+    recent = entries[-last_n:] if last_n > 0 else []
+
+    return {
+        "total_cost_usd": round(total_cost, 6),
+        "total_tables": total_tables,
+        "avg_cost_per_table_usd": round(avg_cost, 6),
+        "tokens": {
+            "input": total_input,
+            "output": total_output,
+            "cache_write": total_cache_write,
+            "cache_read": total_cache_read,
+        },
+        "sessions": sessions,
+        "recent_entries": recent,
+        "log_path": log_path.name,
+    }
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
 def index_library(
     force_reindex: Annotated[bool, Field(description="Delete and rebuild index for matching items")] = False,
     limit: Annotated[int | None, Field(description="Max items to index, None for all")] = None,
@@ -120,16 +228,38 @@ def index_library(
     return response
 
 
-@mcp.tool()
-def get_index_stats() -> dict:
+@mcp.tool(tags=tool_tags("core", "indexing"))
+def get_index_stats(
+    limit: Annotated[int, Field(description="Papers per page for the unindexed paper list", ge=0, le=200)] = 50,
+    offset: Annotated[int, Field(description="Starting index for the unindexed paper list", ge=0)] = 0,
+    include_config: Annotated[bool, Field(description="Include reranking configuration details")] = False,
+    include_vision_costs: Annotated[
+        bool,
+        Field(description="Include vision extraction usage and cost summary"),
+    ] = False,
+    last_n: Annotated[
+        int,
+        Field(description="Recent vision cost log entries to include when include_vision_costs=true", ge=0),
+    ] = 10,
+) -> dict:
     """Get index statistics and list of unindexed papers. Call first to check readiness."""
     _config = _get_config()
     if _config.embedding_provider == "none":
-        return {
+        result = {
             "total_documents": 0,
+            "unindexed_count": 0,
+            "unindexed_papers": [],
+            "sample_unindexed": [],
+            "offset": offset,
+            "limit": limit,
             "mode": "no-rag",
             "message": "Indexing disabled in No-RAG mode. Use advanced_search, get_notes, list_tags, etc. for basic features. Configure an embedding provider to enable semantic search.",  # noqa: E501
         }
+        if include_config:
+            result["reranking_config"] = _get_reranking_config_impl()
+        if include_vision_costs:
+            result["vision_costs"] = _get_vision_costs_impl(last_n=last_n)
+        return result
     _get_retriever()  # Ensure initialized
     store = _get_store()
     _config = _get_config()
@@ -164,10 +294,10 @@ def get_index_stats() -> dict:
         journal_counts[key] += 1
 
     # Check for unindexed papers: items in Zotero with PDFs but not in ChromaDB
-    sample_unindexed = []
+    unindexed_papers = []
     unindexed_count = 0
     try:
-        sample_unindexed, unindexed_count = _collect_unindexed_papers(limit=5, offset=0)
+        unindexed_papers, unindexed_count = _collect_unindexed_papers(limit=limit, offset=offset)
     except Exception as e:
         logger.warning(f"Could not check for unindexed papers: {e}")
 
@@ -179,45 +309,22 @@ def get_index_stats() -> dict:
         "journal_coverage": dict(journal_counts),
         "chunk_types": dict(chunk_type_counts),
         "unindexed_count": unindexed_count,
-        "sample_unindexed": sample_unindexed,
+        "unindexed_papers": unindexed_papers,
+        "sample_unindexed": unindexed_papers[:5],
+        "offset": offset,
+        "limit": limit,
     }
 
     if unindexed_count:
-        sample_note = f" Showing {len(sample_unindexed)} sample(s)." if sample_unindexed else ""
+        sample_note = f" Showing {len(unindexed_papers)} result(s) from offset {offset}." if unindexed_papers else ""
         result["_notice"] = (
             f"\u26a0\ufe0f {unindexed_count} paper(s) in Zotero are not yet indexed."
             f"{sample_note} Call index_library() to update the RAG library."
         )
 
+    if include_config:
+        result["reranking_config"] = _get_reranking_config_impl()
+    if include_vision_costs:
+        result["vision_costs"] = _get_vision_costs_impl(last_n=last_n)
+
     return result
-
-
-@mcp.tool()
-def get_unindexed_papers(
-    limit: Annotated[int, Field(description="Papers per page", ge=1, le=200)] = 50,
-    offset: Annotated[int, Field(description="Starting index for pagination", ge=0)] = 0,
-) -> dict:
-    """List unindexed Zotero papers with pagination."""
-    _config = _get_config()
-    if _config.embedding_provider == "none":
-        return {
-            "total": 0,
-            "offset": offset,
-            "limit": limit,
-            "papers": [],
-            "mode": "no-rag",
-        }
-
-    _get_retriever()
-
-    try:
-        papers, total = _collect_unindexed_papers(limit=limit, offset=offset)
-    except Exception as e:
-        raise ToolError(f"Could not collect unindexed papers: {e}")
-
-    return {
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "papers": papers,
-    }

@@ -19,7 +19,6 @@ from zotpilot.tools.ingestion import (
     get_ingest_status,
     ingest_papers,
     resolve_doi_to_landing_url,
-    save_from_url,
     search_academic_databases,
 )
 
@@ -594,20 +593,6 @@ class TestIngestPapersAsync:
         assert result["pending_count"] == 0
         save_urls_mock.assert_not_called()
 
-
-class TestSaveFromUrl:
-    def test_aliases_save_urls_and_preserves_collection_used(self):
-        with patch(
-            "zotpilot.tools.ingestion.save_urls",
-            return_value={
-                "results": [{"success": True, "url": "https://example.com", "item_key": "ITEM1"}],
-                "collection_used": "INBOX1",
-            },
-        ) as save_urls_mock:
-            result = save_from_url("https://example.com")
-
-        save_urls_mock.assert_called_once_with(["https://example.com"], collection_key=None, tags=None)
-        assert result["collection_used"] == "INBOX1"
 
 
 class TestRunSaveWorkerReconciliation:

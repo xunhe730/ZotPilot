@@ -80,6 +80,7 @@ class BatchState:
     total: int
     collection_used: str | None
     pending_items: list[IngestItemState]
+    session_id: str | None = None
     batch_id: str = field(default_factory=_default_batch_id)
     state: Literal["queued", "running", "completed", "completed_with_errors", "failed", "cancelled"] = "queued"
     is_final: bool = False
@@ -155,6 +156,7 @@ class BatchState:
             saved, failed, pending_count = self._counts()
             return {
                 "batch_id": self.batch_id,
+                "session_id": self.session_id,
                 "state": self.state,
                 "is_final": self.is_final,
                 "total": self.total,
@@ -170,6 +172,7 @@ class BatchState:
             saved, failed, pending_count = self._counts()
             status: dict = {
                 "batch_id": self.batch_id,
+                "session_id": self.session_id,
                 "state": self.state,
                 "is_final": self.is_final,
                 "total": self.total,

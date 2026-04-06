@@ -12,7 +12,7 @@ from zotpilot.state import ToolError
 class TestListCollections:
     @patch("zotpilot.tools.library._get_zotero")
     def test_list_collections(self, mock_get_zotero):
-        from zotpilot.tools.library import list_collections
+        from zotpilot.tools.library import browse_library
 
         mock_zotero = MagicMock()
         mock_zotero.get_all_collections.return_value = [
@@ -21,7 +21,7 @@ class TestListCollections:
         ]
         mock_get_zotero.return_value = mock_zotero
 
-        result = list_collections()
+        result = browse_library(view="collections")
         assert len(result) == 2
         assert result[0]["key"] == "COL1"
         assert result[1]["name"] == "NLP"
@@ -52,17 +52,17 @@ class TestBrowseLibrary:
         assert result["papers"][0]["doc_id"] == "DOC1"
         assert result["papers"][0]["indexed"] is True
 
-    def test_browse_library_collection_papers_requires_collection_key(self):
+    def test_browse_library_papers_requires_collection_key(self):
         from zotpilot.tools.library import browse_library
 
-        with pytest.raises(ToolError, match="browse_library\\(view='collection_papers'\\) requires collection_key"):
-            browse_library(view="collection_papers")
+        with pytest.raises(ToolError, match="browse_library\\(view='papers'\\) requires collection_key"):
+            browse_library(view="papers")
 
 
 class TestListTags:
     @patch("zotpilot.tools.library._get_zotero")
     def test_list_tags(self, mock_get_zotero):
-        from zotpilot.tools.library import list_tags
+        from zotpilot.tools.library import browse_library
 
         mock_zotero = MagicMock()
         mock_zotero.get_all_tags.return_value = [
@@ -71,7 +71,7 @@ class TestListTags:
         ]
         mock_get_zotero.return_value = mock_zotero
 
-        result = list_tags(limit=10)
+        result = browse_library(view="tags", limit=10)
         assert len(result) == 2
         assert result[0]["name"] == "deep-learning"
         mock_zotero.get_all_tags.assert_called_once()
@@ -184,12 +184,12 @@ class TestGetPaperDetails:
 class TestSetItemTags:
     @patch("zotpilot.tools.write_ops._get_writer")
     def test_set_item_tags(self, mock_get_writer):
-        from zotpilot.tools.write_ops import set_item_tags
+        from zotpilot.tools.write_ops import manage_tags
 
         mock_writer = MagicMock()
         mock_get_writer.return_value = mock_writer
 
-        result = set_item_tags("ITEM1", ["tag1", "tag2"])
+        result = manage_tags(action="set", item_keys="ITEM1", tags=["tag1", "tag2"])
         assert result == {"success": True, "item_key": "ITEM1", "tags": ["tag1", "tag2"]}
         mock_writer.set_item_tags.assert_called_once_with("ITEM1", ["tag1", "tag2"])
 
@@ -198,13 +198,13 @@ class TestAddItemTags:
     @patch("zotpilot.tools.write_ops._get_zotero")
     @patch("zotpilot.tools.write_ops._get_writer")
     def test_add_item_tags(self, mock_get_writer, mock_get_zotero):
-        from zotpilot.tools.write_ops import add_item_tags
+        from zotpilot.tools.write_ops import manage_tags
 
         mock_writer = MagicMock()
         mock_get_writer.return_value = mock_writer
         mock_get_zotero.return_value.get_all_tags.return_value = [{"name": "new-tag", "count": 1}]
 
-        result = add_item_tags("ITEM1", ["new-tag"])
+        result = manage_tags(action="add", item_keys="ITEM1", tags=["new-tag"])
         assert result == {"success": True, "item_key": "ITEM1", "added": ["new-tag"]}
         mock_writer.add_item_tags.assert_called_once_with("ITEM1", ["new-tag"])
 
@@ -248,15 +248,15 @@ class TestCreateCollection:
 # citations.py tools
 # ---------------------------------------------------------------------------
 
-class TestFindCitingPapers:
+class TestGetCitations:
     @patch("zotpilot.tools.citations._get_config")
     @patch("zotpilot.tools.citations._get_store_optional")
-    def test_find_citing_papers_no_doi(self, mock_get_store_opt, mock_get_config):
-        from zotpilot.tools.citations import find_citing_papers
+    def test_get_citations_no_doi(self, mock_get_store_opt, mock_get_config):
+        from zotpilot.tools.citations import get_citations
 
         mock_store = MagicMock()
         mock_store.get_document_meta.return_value = {"doc_id": "DOC1"}  # no "doi" key
         mock_get_store_opt.return_value = mock_store
 
         with pytest.raises(ToolError, match="no DOI"):
-            find_citing_papers("DOC1")
+            get_citations("DOC1")

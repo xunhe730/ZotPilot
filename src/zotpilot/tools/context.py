@@ -5,9 +5,10 @@ from typing import Annotated
 from pydantic import Field
 
 from ..state import ToolError, _get_config, _get_store, mcp
+from .profiles import tool_tags
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "context"))
 def get_passage_context(
     doc_id: Annotated[str, Field(description="Document ID from search results")],
     chunk_index: Annotated[int, Field(description="Chunk index from search results")],

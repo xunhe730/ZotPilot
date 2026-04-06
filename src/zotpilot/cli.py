@@ -733,6 +733,7 @@ def cmd_update(args):
     """Upgrade ZotPilot CLI and skill files."""
     errors: list[str] = []
     warnings: list[str] = []
+    installer, uv_cmd = _detect_cli_installer()
 
     # Step 1: Version info
     old_ver = _get_current_version()
@@ -762,7 +763,6 @@ def cmd_update(args):
 
     # Step 3: CLI update (unless --skill-only)
     if not args.skill_only:
-        installer, uv_cmd = _detect_cli_installer()
         if installer == "editable":
             print("Dev install detected — update by running git pull in the repo")
             warnings.append("editable install: CLI update skipped")
@@ -822,104 +822,22 @@ def cmd_update(args):
 
     # Step 4: Skill update (unless --cli-only)
     if not args.cli_only:
-        all_dirs = _get_skill_dirs()
-        print(f"Found {len(all_dirs)} skill directory(ies):")
-        for sd in all_dirs:
-            if sd.is_broken_symlink:
-                target = "(target missing)"
-                tag = " [broken symlink]"
-            elif sd.is_symlink:
-                target = str(sd.path.resolve())
-                tag = " [symlink]"
-            elif sd.is_duplicate:
-                target = str(sd.path.resolve())
-                tag = " [duplicate]"
-            else:
-                target = None
-                tag = ""
-            if target is not None:
-                print(f"  {sd.path}{tag} → {target}")
-            else:
-                print(f"  {sd.path}")
+        from ._platforms import deploy_skills
 
-        for sd in all_dirs:
-            if sd.is_broken_symlink:
-                print(f"Warning: {sd.path} is a broken symlink (target missing) — re-clone to fix")
-                warnings.append(f"broken symlink: {sd.path}")
-                continue
-            if sd.is_symlink:
-                print(f"Skipping {sd.path} — symlink to {sd.path.resolve()} (update the source repo manually)")
-                warnings.append(f"symlink skipped: {sd.path}")
-                continue
-            if sd.is_duplicate:
-                print(f"Skipping {sd.path} — same physical dir already updated")
-                warnings.append(f"duplicate skipped: {sd.path}")
-                continue
-            skill_dir = sd.path
-            if not (skill_dir / ".git").exists():
-                print(f"Warning: {skill_dir} not a git repo")
-                print(f"Reinstall: git clone https://github.com/xunhe730/ZotPilot.git {skill_dir}")
-                warnings.append(f"not a git repo: {skill_dir}")
-                continue
-            if not _is_zotpilot_skill_repo(skill_dir):
-                print(f"Warning: {skill_dir} does not match ZotPilot skill signature — skipping")
-                print(f"Reinstall: git clone https://github.com/xunhe730/ZotPilot.git {skill_dir}")
-                warnings.append(f"identity check failed: {skill_dir}")
-                continue
-            # Remote URL check — informational only, never a skip gate
+        if installer == "editable":
+            print("Dev install detected — skill files read from the source repo")
+            print("Run 'git pull' in the repo to update skills")
+            warnings.append("editable install: run git pull manually")
+        elif args.dry_run:
+            print("[dry-run] Would deploy packaged skill files to detected platform skill directories")
+        else:
             try:
-                r_remote = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    cwd=skill_dir,
-                    capture_output=True,
-                    text=True,
-                )
-                if r_remote.returncode == 0:
-                    url = r_remote.stdout.strip()
-                    if url and "ZotPilot" not in url and "xunhe730" not in url:
-                        print(f"Note: {skill_dir} remote URL {url!r} does not look like the canonical ZotPilot repo")
-                        warnings.append(f"non-canonical remote: {skill_dir}")
-            except FileNotFoundError:
-                pass
-            # Dirty tree check
-            try:
-                r = subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    cwd=skill_dir,
-                    capture_output=True,
-                    text=True,
-                )
-            except FileNotFoundError:
-                print(f"git not found in PATH — run manually: cd {skill_dir} && git pull")
-                errors.append(f"git not in PATH: {skill_dir}")
-                continue
-            if r.returncode != 0:
-                print(f"Warning: {skill_dir} git status failed (returncode={r.returncode}) — skipping")
-                warnings.append(f"git status failed: {skill_dir}")
-                continue
-            if r.stdout.strip():
-                print(f"Warning: {skill_dir} has uncommitted changes — skipping to avoid data loss")
-                warnings.append(f"dirty working tree: {skill_dir}")
-                continue
-            if args.dry_run:
-                print(f"[dry-run] Would run: git pull --ff-only in {skill_dir}")
-            else:
-                try:
-                    r = subprocess.run(
-                        ["git", "pull", "--ff-only"],
-                        cwd=skill_dir,
-                        capture_output=True,
-                        text=True,
-                    )
-                    if r.returncode != 0:
-                        print(r.stderr)
-                        errors.append(f"git pull failed: {skill_dir}")
-                    else:
-                        lines = r.stdout.strip().splitlines()
-                        print(lines[0] if lines else "Already up to date.")
-                except FileNotFoundError:
-                    print(f"git not found in PATH — run manually: cd {skill_dir} && git pull")
-                    errors.append(f"git not in PATH: {skill_dir}")
+                deploy_results = deploy_skills()
+                failed = [plat for plat, ok in deploy_results.items() if not ok]
+                warnings.extend(f"skill deploy failed: {plat}" for plat in failed)
+            except FileNotFoundError as exc:
+                print(f"Skill deployment failed: {exc}", file=sys.stderr)
+                errors.append("skill deployment failed")
 
     # Step 5: Post-update summary
     if not args.dry_run:
@@ -957,7 +875,7 @@ def cmd_bridge(args):
 
 def cmd_register(args):
     """Register ZotPilot MCP server on AI agent platforms."""
-    from ._platforms import register
+    from ._platforms import PLATFORMS, deploy_skills, register
 
     results = register(
         platforms=args.platforms,
@@ -966,6 +884,13 @@ def cmd_register(args):
         zotero_api_key=args.zotero_api_key,
         zotero_user_id=args.zotero_user_id,
     )
+    skill_platforms = [
+        plat
+        for plat, ok in results.items()
+        if ok and PLATFORMS.get(plat, {}).get("skills_dir")
+    ]
+    if skill_platforms:
+        deploy_skills(platforms=skill_platforms)
     return 0 if results and all(results.values()) else 1
 
 

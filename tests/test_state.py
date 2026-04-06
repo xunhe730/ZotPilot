@@ -1,4 +1,5 @@
 """Tests for shared state helpers in zotpilot.state."""
+import ast
 import re
 import threading
 from pathlib import Path
@@ -15,6 +16,26 @@ from zotpilot.state import (
     _merge_results_by_chunk,
     _result_to_dict,
 )
+
+
+def _registered_tool_names() -> set[str]:
+    tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
+    registered: set[str] = set()
+    for path in tools_dir.glob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute):
+                    if (
+                        isinstance(decorator.func.value, ast.Name)
+                        and decorator.func.value.id == "mcp"
+                        and decorator.func.attr == "tool"
+                    ):
+                        registered.add(node.name)
+                        break
+    return registered
 
 # ---------------------------------------------------------------------------
 # _build_chromadb_filters
@@ -281,43 +302,26 @@ class TestThreadSafety:
 
 class TestMCPInstructions:
     def test_registered_tool_surface_matches_expected_set(self):
-        tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
-        registered = set()
-        pattern = re.compile(r"@mcp\.tool\([^)]*\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(", re.DOTALL)
-        for path in tools_dir.glob("*.py"):
-            registered.update(pattern.findall(path.read_text()))
+        registered = _registered_tool_names()
 
         expected = {
-            "add_item_tags",
-            "add_to_collection",
             "advanced_search",
-            "batch_collections",
-            "batch_tags",
             "browse_library",
             "create_collection",
             "create_note",
-            "find_citing_papers",
-            "find_references",
             "get_annotations",
-            "get_citation_count",
             "get_citations",
-            "get_collection_papers",
             "get_index_stats",
-            "get_library_overview",
             "get_notes",
             "get_paper_details",
             "get_passage_context",
-            "get_unindexed_papers",
             "index_library",
             "get_ingest_status",
             "ingest_papers",
-            "list_collections",
-            "list_tags",
             "manage_collections",
             "manage_tags",
             "profile_library",
-            "remove_from_collection",
-            "remove_item_tags",
+            "research_session",
             "save_urls",
             "search_academic_databases",
             "search_boolean",
@@ -325,18 +329,13 @@ class TestMCPInstructions:
             "search_papers",
             "search_tables",
             "search_topic",
-            "set_item_tags",
             "switch_library",
         }
 
         assert registered == expected
 
     def test_instructions_reference_only_registered_tools(self):
-        tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
-        registered = set()
-        pattern = re.compile(r"@mcp\.tool\([^)]*\)\s*\ndef ([a-zA-Z_][a-zA-Z0-9_]*)\(", re.DOTALL)
-        for path in tools_dir.glob("*.py"):
-            registered.update(pattern.findall(path.read_text()))
+        registered = _registered_tool_names()
 
         referenced = {
             name

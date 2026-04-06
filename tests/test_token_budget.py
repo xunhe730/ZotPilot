@@ -315,12 +315,12 @@ class TestContextAndIndexingContracts:
             patch("zotpilot.tools.indexing._get_store", return_value=store),
             patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
         ):
-            result = get_index_stats()
+            result = get_index_stats(limit=5)
 
         assert result["unindexed_count"] == 199
         assert len(result["sample_unindexed"]) == 5
-        assert "unindexed_papers" not in result
-        assert len(json.dumps(result, ensure_ascii=False)) < 1500
+        assert len(result["unindexed_papers"]) == 5
+        assert len(json.dumps(result, ensure_ascii=False)) < 2000
 
     def test_index_library_summary_is_opt_in(self):
         from zotpilot.tools.indexing import index_library
@@ -399,14 +399,17 @@ class TestContextAndIndexingContracts:
         assert result["vision_budget_skipped"] is True
         assert result["vision_skip_reason"] == "table cap 5"
 
-    def test_get_unindexed_papers_paginates(self):
-        from zotpilot.tools.indexing import get_unindexed_papers
+    def test_get_index_stats_paginates_unindexed_papers(self):
+        from zotpilot.tools.indexing import get_index_stats
 
         store = MagicMock()
         store.get_indexed_doc_ids.return_value = {"KEY0"}
+        store.count.return_value = 10
+        store.collection.get.return_value = {"metadatas": []}
         zotero = MagicMock()
         zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(6)]
         config = _make_config()
+        config.stats_sample_limit = 10
 
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
@@ -414,20 +417,20 @@ class TestContextAndIndexingContracts:
             patch("zotpilot.tools.indexing._get_store", return_value=store),
             patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
         ):
-            result = get_unindexed_papers(limit=2, offset=1)
+            result = get_index_stats(limit=2, offset=1)
 
-        assert result["total"] == 5
+        assert result["unindexed_count"] == 5
         assert result["offset"] == 1
         assert result["limit"] == 2
-        assert len(result["papers"]) == 2
-        assert result["papers"][0]["doc_id"] == "KEY2"
+        assert len(result["unindexed_papers"]) == 2
+        assert result["unindexed_papers"][0]["doc_id"] == "KEY2"
 
 
 class TestLibraryIdentifierContracts:
     @patch("zotpilot.tools.library._get_store_optional")
     @patch("zotpilot.tools.library._get_zotero")
     def test_get_library_overview_uses_doc_id(self, mock_get_zotero, mock_store_opt):
-        from zotpilot.tools.library import get_library_overview
+        from zotpilot.tools.library import browse_library
 
         item = _make_item(1)
         mock_client = MagicMock()
@@ -438,8 +441,8 @@ class TestLibraryIdentifierContracts:
         mock_store.get_indexed_doc_ids.return_value = {"KEY1"}
         mock_store_opt.return_value = mock_store
 
-        minimal = get_library_overview(limit=1)
-        full = get_library_overview(limit=1, verbosity="full")
+        minimal = browse_library(view="overview", limit=1)
+        full = browse_library(view="overview", limit=1, verbosity="full")
 
         assert minimal["papers"][0]["doc_id"] == "KEY1"
         assert "key" not in minimal["papers"][0]

@@ -6,9 +6,13 @@ from typing import Annotated, Literal, TypedDict
 from pydantic import Field
 
 from ..state import ToolError, _get_writer, _get_zotero, mcp
+from ..workflow import SessionStore
+from ..workflow.session_store import current_library_id
 from .library import _invalidate_collection_cache
+from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
+_session_store = SessionStore()
 
 
 def _coerce_list(value) -> list:
@@ -89,41 +93,28 @@ def _normalize_tags(tags, *, tool_name: str) -> list[str]:
     return normalized
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."
-)
-def set_item_tags(
-    item_key: Annotated[str, Field(description="Zotero item key")],
-    tags: Annotated[list[str], Field(description="New tag list (replaces all existing)")],
-) -> dict:
-    """DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."""
-    return manage_tags(action="set", item_keys=item_key, tags=tags)
+def _get_running_research_session():
+    return _session_store.get_active(library_id=current_library_id(), statuses={"running"})
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."
-)
-def add_item_tags(
-    item_key: Annotated[str, Field(description="Zotero item key")],
-    tags: Annotated[list[str], Field(description="Tags to add")],
-    allow_new: Annotated[
-        bool,
-        Field(description="When false, reject tags not already in the library vocabulary"),
-    ] = False,
-) -> dict:
-    """DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."""
-    return manage_tags(action="add", item_keys=item_key, tags=tags, allow_new=allow_new)
+def _check_post_ingest_gate():
+    session = _get_running_research_session()
+    if session is None:
+        return None
+    if "post-ingest-review" not in session.approved_checkpoints:
+        raise ToolError("Post-ingest steps require user approval after ingest verification.")
+    return session
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."
-)
-def remove_item_tags(
-    item_key: Annotated[str, Field(description="Zotero item key")],
-    tags: Annotated[list[str], Field(description="Tags to remove")],
-) -> dict:
-    """DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."""
-    return manage_tags(action="remove", item_keys=item_key, tags=tags)
+def _mark_session_note_created(session, item_key: str) -> None:
+    if session is None:
+        return
+    for item in session.items:
+        if item.item_key == item_key:
+            item.note_count += 1
+            break
+    _session_store.save(session)
+
 
 
 def _add_to_collection_impl(
@@ -169,38 +160,8 @@ def _remove_from_collection_impl(item_key: str, collection_key: str) -> dict:
     return {"success": True, "item_key": item_key, "collection_key": collection_key}
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_collections instead. Will be removed in v0.6.0."
-)
-def add_to_collection(
-    item_key: Annotated[str, Field(description="Zotero item key")],
-    collection_key: Annotated[str, Field(description="Target collection key from list_collections")],
-    auto_cleanup_inbox: Annotated[
-        bool,
-        Field(description="When true, remove the paper from INBOX after adding to target collection"),
-    ] = True,
-) -> dict:
-    """DEPRECATED — Use manage_collections instead. Will be removed in v0.6.0."""
-    return manage_collections(
-        action="add",
-        item_keys=item_key,
-        collection_key=collection_key,
-        auto_cleanup_inbox=auto_cleanup_inbox,
-    )
 
-
-@mcp.tool(
-    description="DEPRECATED — Use manage_collections instead. Will be removed in v0.6.0."
-)
-def remove_from_collection(
-    item_key: Annotated[str, Field(description="Zotero item key")],
-    collection_key: Annotated[str, Field(description="Collection key to remove from")],
-) -> dict:
-    """DEPRECATED — Use manage_collections instead. Will be removed in v0.6.0."""
-    return manage_collections(action="remove", item_keys=item_key, collection_key=collection_key)
-
-
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "write"))
 def create_collection(
     name: Annotated[str, Field(description="Display name for the collection")],
     parent_key: Annotated[str | None, Field(description="Parent collection key for nesting, None for top-level")] = None,  # noqa: E501
@@ -211,17 +172,44 @@ def create_collection(
     return result
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "write"))
 def create_note(
     item_key: Annotated[str, Field(description="Parent item key")],
     content: Annotated[str, Field(description="Note content (plain text or HTML)")],
     title: Annotated[str | None, Field(description="Note title (prepended as heading)")] = None,
     tags: Annotated[list[str] | None, Field(description="Tags for the note")] = None,
+    idempotent: Annotated[
+        bool,
+        Field(description="Skip creation if the item already has a [ZotPilot] note"),
+    ] = False,
 ) -> dict:
     """Create a child note on a Zotero item. Requires ZOTERO_API_KEY."""
+    session = _check_post_ingest_gate()
     if tags is not None:
         tags = _coerce_list(tags) or None
-    return _get_writer().create_note(item_key, content, title=title, tags=tags)
+    writer = _get_writer()
+
+    if idempotent:
+        existing_notes = writer.get_notes(item_key=item_key, limit=50)
+        for note in existing_notes:
+            note_title = note.get("title") or ""
+            note_content = note.get("content") or ""
+            if note_title.startswith("[ZotPilot]") or "[ZotPilot]" in note_content:
+                return {
+                    "skipped": True,
+                    "reason": "existing_zotpilot_note",
+                    "item_key": item_key,
+                    "existing_note_key": note.get("key"),
+                }
+        if title:
+            if not title.startswith("[ZotPilot]"):
+                title = f"[ZotPilot] {title}"
+        else:
+            title = "[ZotPilot] Note"
+
+    result = writer.create_note(item_key, content, title=title, tags=tags)
+    _mark_session_note_created(session, item_key)
+    return result
 
 
 def _extract_tag_item(item) -> tuple[str | None, list[str] | None]:
@@ -251,9 +239,6 @@ def _batch_tag_result(items: list, operation):
     return {"total": len(items), "succeeded": succeeded, "failed": len(items) - succeeded, "results": results}
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_tags instead. Will be removed in v0.6.0."
-)
 def batch_tags(
     action: Annotated[Literal["add", "set", "remove"], Field(description="add=append, set=replace all (destructive), remove=delete specific tags")],  # noqa: E501
     items: Annotated[list[dict], Field(description="List of {item_key, tags} objects. Max 100.")],
@@ -308,7 +293,7 @@ def batch_tags(
     return _batch_tag_result(items, ops[action])
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "write"))
 def manage_tags(
     action: Annotated[
         Literal["add", "set", "remove"],
@@ -330,8 +315,10 @@ def manage_tags(
     """Manage tags on one or more Zotero items.
 
     WARNING: action='set' is DESTRUCTIVE and replaces all existing tags on each item.
-    Use action to add, set, or remove tags; single-item input returns the single-item result, and list input routes to batch processing.
+    Use action to add, set, or remove tags; single-item input returns the
+    single-item result, and list input routes to batch processing.
     """
+    _check_post_ingest_gate()
     normalized_tags = _normalize_tags(tags, tool_name="manage_tags")
     keys = _normalize_item_keys(item_keys)
     if len(keys) == 1:
@@ -346,9 +333,6 @@ def manage_tags(
     return batch_tags(action=action, items=items, allow_new=allow_new)
 
 
-@mcp.tool(
-    description="DEPRECATED — Use manage_collections instead. Will be removed in v0.6.0."
-)
 def batch_collections(
     action: Annotated[Literal["add", "remove"], Field(description="add=add to collection, remove=remove from collection")],  # noqa: E501
     item_keys: Annotated[list[str], Field(description="Zotero item keys. Max 100.")],
@@ -375,7 +359,7 @@ def batch_collections(
     return {"total": len(item_keys), "succeeded": succeeded, "failed": len(item_keys) - succeeded, "results": results}
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "write"))
 def manage_collections(
     action: Annotated[
         Literal["add", "remove"],
@@ -391,7 +375,12 @@ def manage_collections(
     ] = None,
     auto_cleanup_inbox: Annotated[
         bool,
-        Field(description="When action='add' with a single item, remove the paper from INBOX after adding to the target collection"),
+        Field(
+            description=(
+                "When action='add' with a single item, remove the paper from INBOX "
+                "after adding to the target collection"
+            )
+        ),
     ] = True,
 ) -> dict:
     """Manage collection membership for one or more Zotero items.
@@ -399,6 +388,7 @@ def manage_collections(
     Use action='add' or action='remove' with a target collection key.
     Single-item add preserves INBOX auto-cleanup; list input routes to batch processing.
     """
+    _check_post_ingest_gate()
     if not collection_key:
         raise ToolError(
             "manage_collections requires collection_key. "

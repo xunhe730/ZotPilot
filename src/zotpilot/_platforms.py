@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
+from importlib import resources
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -60,17 +62,6 @@ PLATFORMS = {
         "binary": None,
         "label": "Windsurf",
         "skills_dir": "~/.codeium/windsurf/skills",
-    },
-    # Tier 2: no skills_dir (MCP config-file registration only)
-    "cline": {
-        "tier": 2,
-        "binary": None,
-        "label": "Cline",
-    },
-    "roo": {
-        "tier": 2,
-        "binary": None,
-        "label": "Roo Code",
     },
 }
 
@@ -266,25 +257,193 @@ def _strip_jsonc_comments(text: str) -> str:
 def print_skill_hints(platforms: list[str]) -> None:
     """Print the skill directory path for each Tier 1 platform.
 
-    Skill installation (clone/copy/symlink) is the agent's responsibility,
-    not this script's. This function just tells the agent where to put it.
+    Registration now deploys packaged skill files as individual directories
+    (one per skill).  This function reports the current state.
     """
     tier1 = [p for p in platforms if PLATFORMS.get(p, {}).get("tier") == 1]
     if not tier1:
         return
     for plat in tier1:
         info = PLATFORMS[plat]
-        skills_dir = info.get("skills_dir", "")
-        target = Path(skills_dir).expanduser() / "zotpilot"
-        skill_md = target / "SKILL.md"
-        if skill_md.is_file():
-            print(f"  {info['label']}: skill found at {target}")
-        elif target.is_symlink():
-            print(f"  {info['label']}: BROKEN symlink at {target} — re-clone repo")
-        elif target.exists():
-            print(f"  {info['label']}: {target} exists but missing SKILL.md — re-clone repo")
+        base = Path(info.get("skills_dir", "")).expanduser()
+        router_dir = base / "zotpilot"
+        if (router_dir / "SKILL.md").is_file():
+            # Count deployed skill dirs
+            skill_dirs = [d for d in base.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()
+                          and d.name.startswith(("zotpilot", "ztp-"))]
+            print(f"  {info['label']}: {len(skill_dirs)} skills deployed under {base}")
         else:
-            print(f"  {info['label']}: skill NOT found — clone repo to {target}")
+            print(f"  {info['label']}: skills NOT found — register will deploy to {base}")
+
+
+_VERSION_MARKER = ".zotpilot-version.json"
+
+
+def _skill_source_dir() -> Path:
+    source = resources.files("zotpilot").joinpath("skills")
+    return Path(str(source))
+
+
+def _skill_source_files() -> list[Path]:
+    source = _skill_source_dir()
+    if not source.exists():
+        return []
+    return sorted(path for path in source.glob("*.md") if path.is_file())
+
+
+def _skill_name_for_file(skill_file: Path) -> str:
+    """Map source filename to deployed directory name.
+
+    SKILL.md → zotpilot (routing shell)
+    ztp-research.md → ztp-research
+    """
+    return "zotpilot" if skill_file.name == "SKILL.md" else skill_file.stem
+
+
+def _skill_targets_for_platform(
+    _plat: str,
+    skills_dir: Path,
+    skill_files: list[Path],
+) -> list[tuple[Path, list[Path]]]:
+    """Each skill file gets its own directory with SKILL.md inside.
+
+    Deployed structure:
+        skills_dir/zotpilot/SKILL.md      (routing shell)
+        skills_dir/ztp-research/SKILL.md
+        skills_dir/ztp-setup/SKILL.md
+        skills_dir/ztp-review/SKILL.md
+        skills_dir/ztp-profile/SKILL.md
+    """
+    return [
+        (skills_dir / _skill_name_for_file(skill_file), [skill_file])
+        for skill_file in skill_files
+    ]
+
+
+def _version_marker_path(target: Path) -> Path:
+    return target / _VERSION_MARKER
+
+
+def _read_version_marker(target: Path) -> dict | None:
+    marker = _version_marker_path(target)
+    if not marker.exists():
+        return None
+    try:
+        return json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_version_marker(target: Path, version: str, skill_files: list[Path]) -> None:
+    marker = _version_marker_path(target)
+    payload = {
+        "version": version,
+        "deployed_at": datetime.now(timezone.utc).isoformat(),
+        "skills": [path.name for path in skill_files],
+    }
+    marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _migrate_legacy_bundle(skills_dir: Path) -> None:
+    """Remove a legacy bundle directory or symlink at skills_dir/zotpilot.
+
+    v0.4.x deployed all skill files into a single ``zotpilot/`` directory
+    (bundle layout) or used a symlink to the repo root.  v0.5.0 uses flat
+    layout (one directory per skill).  If the old ``zotpilot/`` target is a
+    symlink or a bundle with multiple ``.md`` files, replace it so the new
+    per-skill directories can be created cleanly.
+    """
+    legacy = skills_dir / "zotpilot"
+    if not legacy.exists() and not legacy.is_symlink():
+        return
+
+    # Symlink (editable install or manual) → remove unconditionally
+    if legacy.is_symlink():
+        legacy.unlink()
+        print(f"    migrated: removed legacy symlink {legacy}")
+        return
+
+    # Bundle directory with multiple .md files → remove
+    md_files = list(legacy.glob("*.md"))
+    if len(md_files) > 1:
+        shutil.rmtree(legacy)
+        print(f"    migrated: removed legacy bundle directory {legacy}")
+        return
+
+    # Single SKILL.md inside zotpilot/ → already flat layout, keep it
+
+
+def _should_skip_deploy(target: Path, version: str) -> tuple[bool, str]:
+    if target.is_symlink():
+        # Stale symlink from editable install — remove and redeploy
+        target.unlink()
+        return False, "deploy"
+    marker = _read_version_marker(target)
+    if not marker:
+        return False, "deploy"
+    target_version = str(marker.get("version", "")).strip()
+    if not target_version:
+        return False, "deploy"
+    if target_version == version:
+        return True, "up-to-date"
+    if target_version > version:
+        return True, "target-newer-than-package"
+    return False, "upgrade"
+
+
+def deploy_skills(platforms: list[str] | None = None) -> dict[str, bool]:
+    """Deploy packaged skill files as individual directories per platform.
+
+    Each skill file becomes its own directory with a ``SKILL.md`` inside:
+        ``~/.claude/skills/ztp-research/SKILL.md``
+
+    On upgrade from v0.4.x bundle layout, the legacy ``zotpilot/`` bundle
+    directory (or symlink) is automatically migrated first.
+    """
+    from . import __version__
+
+    skill_files = _skill_source_files()
+    if not skill_files:
+        raise FileNotFoundError(f"No packaged skill files found in {_skill_source_dir()}")
+
+    if not platforms:
+        platforms = [name for name, info in PLATFORMS.items() if info.get("skills_dir")]
+
+    results: dict[str, bool] = {}
+    for plat in platforms:
+        info = PLATFORMS.get(plat)
+        skills_dir = info.get("skills_dir") if info else None
+        if not skills_dir:
+            results[plat] = False
+            continue
+
+        base = Path(skills_dir).expanduser()
+
+        # Migrate legacy bundle/symlink before deploying flat dirs
+        _migrate_legacy_bundle(base)
+
+        targets = _skill_targets_for_platform(plat, base, skill_files)
+        platform_ok = True
+
+        for target, source_files in targets:
+            skip, reason = _should_skip_deploy(target, __version__)
+            if skip:
+                print(f"  {info['label']}: {target.name} {reason}")
+                platform_ok = platform_ok and (reason == "up-to-date")
+                continue
+
+            target.mkdir(parents=True, exist_ok=True)
+            # Clean existing .md files before writing new ones
+            for existing_md in target.glob("*.md"):
+                existing_md.unlink()
+            for skill_file in source_files:
+                shutil.copy2(skill_file, target / "SKILL.md")
+            _write_version_marker(target, __version__, source_files)
+            print(f"  {info['label']}: deployed {target.name} to {target}")
+
+        results[plat] = platform_ok
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +733,7 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
                 entry["environment"] = env
             print(f"    Manual: Add to {config_path}:")
             print(f'    {{"{mcp_key}": {{"zotpilot": {json.dumps(entry)}}},')
-            print(f'     "experimental": {{"mcp_timeout": 600000}}}}')
+            print('     "experimental": {"mcp_timeout": 600000}}')
         else:
             mcp_key = "mcpServers"
             entry = {"type": "stdio", "command": zp, "args": []}

@@ -10,7 +10,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 from zotpilot.tools import ingestion_bridge
-from zotpilot.tools.ingestion import _apply_bridge_result_routing, save_from_url, save_urls
+from zotpilot.tools.ingestion import _apply_bridge_result_routing, save_urls
 
 
 def _make_config(api_key="KEY"):
@@ -114,17 +114,6 @@ class TestSaveUrls:
 
         assert enqueue_mock.call_args.args[3] == ["ml", "nlp"]
 
-
-class TestSaveFromUrl:
-    def test_is_thin_alias(self):
-        with patch("zotpilot.tools.ingestion.save_urls", return_value={
-            "results": [{"success": True, "url": "https://example.com", "item_key": "ITEM1"}],
-            "collection_used": "INBOX1",
-        }) as save_urls_mock:
-            result = save_from_url("https://example.com", collection_key="COL1", tags=["tag1"])
-
-        save_urls_mock.assert_called_once_with(["https://example.com"], collection_key="COL1", tags=["tag1"])
-        assert result["collection_used"] == "INBOX1"
 
 
 class TestApplyBridgeResultRouting:
