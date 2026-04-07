@@ -173,21 +173,82 @@ def _mcp_config_path(plat: str) -> Path | None:
 # Detection
 # ---------------------------------------------------------------------------
 
+def _detect_app_install(plat: str) -> bool:
+    """Check whether an editor-based client is actually installed.
+
+    Cannot rely on MCP config files alone — ``zotpilot register`` itself may
+    have created them as a side effect on a previous run.  Look for evidence
+    that the actual application exists.
+    """
+    home = _home()
+    system = platform.system()
+
+    if plat == "cursor":
+        if system == "Darwin":
+            return Path("/Applications/Cursor.app").exists()
+        if system == "Windows":
+            local_appdata = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+            return (local_appdata / "Programs" / "cursor" / "Cursor.exe").exists()
+        # Linux
+        return any(shutil.which(name) for name in ("cursor",))
+
+    if plat == "windsurf":
+        if system == "Darwin":
+            return Path("/Applications/Windsurf.app").exists()
+        if system == "Windows":
+            local_appdata = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
+            return (local_appdata / "Programs" / "Windsurf" / "Windsurf.exe").exists()
+        return any(shutil.which(name) for name in ("windsurf",))
+
+    if plat == "opencode":
+        # OpenCode without a binary on PATH may still be a real install
+        # via local node_modules.  Look for a package.json that mentions
+        # opencode under its config dir.
+        cfg_dir = home / ".config" / "opencode"
+        pkg = cfg_dir / "package.json"
+        if pkg.exists():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8"))
+                deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+                if any("opencode" in name for name in deps):
+                    return True
+            except (json.JSONDecodeError, OSError):
+                pass
+        return False
+
+    return False
+
+
 def detect_platforms() -> list[str]:
-    """Return list of platform names detected on this machine."""
+    """Return list of platform names actually installed on this machine.
+
+    Detection rules:
+    - CLI-based clients (Claude Code, Codex, Gemini, OpenCode): require the
+      binary to be present on PATH.
+    - Editor-based clients (Cursor, Windsurf): require the actual application
+      bundle/executable to be installed.
+    - OpenCode (no global binary): also accept a real install discovered via
+      ``~/.config/opencode/package.json``.
+
+    Critically, ``zotpilot register`` may create the per-platform config dirs
+    as a side effect when deploying skill files.  Detection therefore must NOT
+    treat the existence of the config dir or file as proof of installation.
+    """
     found: set[str] = set()
+
+    # Step 1: CLI binaries
     for name, info in PLATFORMS.items():
         binary = info.get("binary")
         if binary and shutil.which(binary):
             found.add(name)
-    # Tier 2 + opencode (may be installed as IDE without CLI binary)
-    for name in ("cursor", "windsurf", "cline", "roo", "opencode"):
+
+    # Step 2: Editor-based clients (and OpenCode local install fallback)
+    for name in ("cursor", "windsurf", "opencode"):
         if name in found:
             continue
-        path = _mcp_config_path(name)
-        if path and (path.exists() or path.parent.exists()):
+        if _detect_app_install(name):
             found.add(name)
-    # Return in stable order matching PLATFORMS dict
+
     return [p for p in PLATFORMS if p in found]
 
 
@@ -407,7 +468,14 @@ def deploy_skills(platforms: list[str] | None = None) -> dict[str, bool]:
         raise FileNotFoundError(f"No packaged skill files found in {_skill_source_dir()}")
 
     if not platforms:
-        platforms = [name for name, info in PLATFORMS.items() if info.get("skills_dir")]
+        # Only deploy to platforms that are actually installed.
+        # Filter further by which ones have a skills_dir defined.
+        detected = set(detect_platforms())
+        platforms = [name for name, info in PLATFORMS.items()
+                     if info.get("skills_dir") and name in detected]
+        if not platforms:
+            print("  No skill-supporting platforms detected — skipping skill deployment")
+            return {}
 
     results: dict[str, bool] = {}
     for plat in platforms:
@@ -684,10 +752,17 @@ def register(
             return {}
         print(f"Detected platforms: {', '.join(PLATFORMS[p]['label'] for p in platforms)}")
 
-    # Check skill installation status for Tier 1 platforms
-    print_skill_hints(platforms)
+    # Deploy skill files first — independent of MCP registration outcome.
+    # Skills and MCP are orthogonal: a user can still benefit from the skill
+    # prompts even if the MCP add command fails (e.g., CLI syntax drift).
+    print("Deploying skill files...")
+    try:
+        deploy_skills(platforms=[p for p in platforms if PLATFORMS.get(p, {}).get("skills_dir")])
+    except FileNotFoundError as exc:
+        print(f"  WARNING: skill deployment skipped — {exc}", file=sys.stderr)
 
     # Register MCP server
+    print("Registering MCP server...")
     results = {}
     for plat in platforms:
         if plat not in _REGISTER_FNS:

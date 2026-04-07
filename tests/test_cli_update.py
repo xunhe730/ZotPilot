@@ -497,11 +497,12 @@ class TestCmdUpdate:
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
+             patch("zotpilot._platforms.detect_platforms", return_value=["claude-code"]), \
              patch("zotpilot._platforms.deploy_skills", return_value={"claude-code": True}) as mock_deploy:
             result = cmd_update(args)
 
         assert result == 0
-        mock_deploy.assert_called_once_with()
+        mock_deploy.assert_called_once_with(platforms=["claude-code"])
 
     def test_symlink_skill_dir_skipped(self, tmp_path, capsys):
         """skill dir is_symlink=True → git pull not called."""

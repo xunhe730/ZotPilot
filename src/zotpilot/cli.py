@@ -822,7 +822,7 @@ def cmd_update(args):
 
     # Step 4: Skill update (unless --cli-only)
     if not args.cli_only:
-        from ._platforms import deploy_skills
+        from ._platforms import PLATFORMS, deploy_skills, detect_platforms
 
         if installer == "editable":
             print("Dev install detected — skill files read from the source repo")
@@ -831,13 +831,20 @@ def cmd_update(args):
         elif args.dry_run:
             print("[dry-run] Would deploy packaged skill files to detected platform skill directories")
         else:
-            try:
-                deploy_results = deploy_skills()
-                failed = [plat for plat, ok in deploy_results.items() if not ok]
-                warnings.extend(f"skill deploy failed: {plat}" for plat in failed)
-            except FileNotFoundError as exc:
-                print(f"Skill deployment failed: {exc}", file=sys.stderr)
-                errors.append("skill deployment failed")
+            detected = detect_platforms()
+            targets = [p for p in detected if PLATFORMS.get(p, {}).get("skills_dir")]
+            if not targets:
+                print("Deploying skills... (no skill-supporting platforms detected)")
+            else:
+                labels = ", ".join(PLATFORMS[p]["label"] for p in targets)
+                print(f"Deploying skills to: {labels}")
+                try:
+                    deploy_results = deploy_skills(platforms=targets)
+                    failed = [plat for plat, ok in deploy_results.items() if not ok]
+                    warnings.extend(f"skill deploy failed: {plat}" for plat in failed)
+                except FileNotFoundError as exc:
+                    print(f"Skill deployment failed: {exc}", file=sys.stderr)
+                    errors.append("skill deployment failed")
 
     # Step 5: Post-update summary
     if not args.dry_run:
@@ -874,8 +881,14 @@ def cmd_bridge(args):
 
 
 def cmd_register(args):
-    """Register ZotPilot MCP server on AI agent platforms."""
-    from ._platforms import PLATFORMS, deploy_skills, register
+    """Register ZotPilot MCP server on AI agent platforms.
+
+    The `register()` call handles both skill file deployment and MCP server
+    registration as a single flow — the two are deliberately decoupled at the
+    platform-loop level so a skill can still be installed even if the MCP
+    add command fails on that platform.
+    """
+    from ._platforms import register
 
     results = register(
         platforms=args.platforms,
@@ -884,13 +897,6 @@ def cmd_register(args):
         zotero_api_key=args.zotero_api_key,
         zotero_user_id=args.zotero_user_id,
     )
-    skill_platforms = [
-        plat
-        for plat, ok in results.items()
-        if ok and PLATFORMS.get(plat, {}).get("skills_dir")
-    ]
-    if skill_platforms:
-        deploy_skills(platforms=skill_platforms)
     return 0 if results and all(results.values()) else 1
 
 
