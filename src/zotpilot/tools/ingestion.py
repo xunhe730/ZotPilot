@@ -492,6 +492,10 @@ def _run_save_worker(
         batch.state = "running"
         saved = 0
         failed = 0
+        # Pre-declare so the post-reconciliation PDF verification block can
+        # check `writer is None` even when neither Phase 2 nor reconciliation
+        # ran (e.g. all items routed_by_backend on first try).
+        writer: object | None = None
 
         # --- Phase 1: Connector saves ---
         candidate_by_index: dict[int, dict] = {c["_index"]: c for c in connector_candidates}
