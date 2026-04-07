@@ -451,7 +451,13 @@ def deploy_skills(platforms: list[str] | None = None) -> dict[str, bool]:
 # ---------------------------------------------------------------------------
 
 def _register_claude_code(env: dict[str, str]) -> bool:
-    """Register via `claude mcp add`."""
+    """Register via ``claude mcp add``.
+
+    The ``-e/--env`` flag is declared as variadic in claude-code (``<env...>``),
+    so any positional args placed *after* ``-e`` are greedily consumed as env
+    values.  To avoid that, put ``<name>`` and ``<commandOrUrl>`` FIRST and the
+    variadic ``-e`` flags LAST.
+    """
     try:
         zp = _zotpilot_command(allow_fallback=False)
     except RuntimeError as e:
@@ -459,10 +465,9 @@ def _register_claude_code(env: dict[str, str]) -> bool:
         return False
     subprocess.run(["claude", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
-    cmd = ["claude", "mcp", "add", "-s", "user"]
+    cmd = ["claude", "mcp", "add", "--scope", "user", "zotpilot", zp]
     for k, v in env.items():
         cmd.extend(["-e", f"{k}={v}"])
-    cmd.extend(["zotpilot", "--", zp])
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -716,7 +721,7 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
     zp = _zotpilot_command()
     if plat == "claude-code":
         env_flags = " ".join(f"-e {k}={v}" for k, v in env.items())
-        print(f"    Manual: claude mcp add -s user {env_flags} zotpilot -- {zp}")
+        print(f"    Manual: claude mcp add --scope user zotpilot {zp} {env_flags}")
     elif plat == "codex":
         env_flags = " ".join(f"--env {k}={v}" for k, v in env.items())
         print(f"    Manual: codex mcp add zotpilot {env_flags} -- {zp}")
