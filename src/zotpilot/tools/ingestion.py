@@ -335,6 +335,10 @@ def search_academic_databases(
     limit: Annotated[int, Field(ge=1, le=100, description="Number of results (1-100)")] = 20,
     year_min: Annotated[int | None, Field(description="Earliest publication year filter")] = None,
     year_max: Annotated[int | None, Field(description="Latest publication year filter")] = None,
+    high_quality: Annotated[
+        bool,
+        Field(description="Filter retracted/non-articles/no-DOI; require cited_by_count>10"),
+    ] = True,
     sort_by: Annotated[
         Literal["relevance", "citationCount", "publicationDate"],
         Field(description="Sort order: relevance (default), citationCount, or publicationDate"),
@@ -347,7 +351,9 @@ def search_academic_databases(
 
     Uses OpenAlex only.
     Supports "author:Name" prefix for author-scoped search (use "author:Name | topic"
-    for combined queries) and DOI strings for exact lookup."""
+    for combined queries) and DOI strings for exact lookup. Returned items include
+    venue metadata (`venue.h_index`, `venue.two_yr_mean_citedness`) and a
+    `top_venue` flag."""
     return ingestion_search.search_academic_databases_impl(
         _get_config(),
         query,
@@ -355,6 +361,7 @@ def search_academic_databases(
         year_min,
         year_max,
         sort_by,
+        high_quality,
         httpx_module=httpx,
         tool_error_cls=ToolError,
         logger=logger,

@@ -107,3 +107,4 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=zotpilot --cov-report=term-missing --cov-fail-under=29"
+markers = ["benchmark: external API benchmark, slow"]

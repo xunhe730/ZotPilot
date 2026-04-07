@@ -24,6 +24,24 @@ from zotpilot.models import (
 )
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--benchmark",
+        action="store_true",
+        default=False,
+        help="run external benchmark tests",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--benchmark"):
+        return
+    skip_benchmark = pytest.mark.skip(reason="need --benchmark to run")
+    for item in items:
+        if "benchmark" in item.keywords:
+            item.add_marker(skip_benchmark)
+
+
 @pytest.fixture
 def sample_chunks():
     """Create sample chunks for testing."""

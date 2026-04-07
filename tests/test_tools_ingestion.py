@@ -80,7 +80,7 @@ class TestSearchAcademicDatabases:
     def test_returns_formatted_list(self):
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
-            patch("zotpilot.tools.ingestion.httpx.get", return_value=_mock_oa_response()),
+            patch("zotpilot.openalex_client.httpx.get", return_value=_mock_oa_response()),
         ):
             results = search_academic_databases("attention mechanism")
 
@@ -98,7 +98,7 @@ class TestSearchAcademicDatabases:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
             patch(
-                "zotpilot.tools.ingestion.httpx.get",
+                "zotpilot.openalex_client.httpx.get",
                 side_effect=httpx.HTTPStatusError("service unavailable", request=MagicMock(), response=mock_resp),
             ),
         ):
@@ -111,7 +111,7 @@ class TestSearchAcademicDatabases:
                 "zotpilot.tools.ingestion._get_config",
                 return_value=_make_config(openalex_email="me@example.com"),
             ),
-            patch("zotpilot.tools.ingestion.httpx.get", return_value=_mock_oa_response()) as mock_get,
+            patch("zotpilot.openalex_client.httpx.get", return_value=_mock_oa_response()) as mock_get,
         ):
             search_academic_databases("attention mechanism")
 
@@ -153,7 +153,10 @@ class TestIngestPapers:
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
             patch("zotpilot.tools.ingestion._get_writer"),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -183,7 +186,10 @@ class TestIngestPapers:
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
             patch("zotpilot.tools.ingestion._get_writer"),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -222,7 +228,10 @@ class TestIngestPapers:
                 return_value={"10.1000/test": "https://publisher.example/article"},
             ),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch("zotpilot.tools.ingestion._run_save_worker"),
         ):
             result = ingest_papers([{"doi": "10.1000/test"}])
@@ -255,7 +264,10 @@ class TestIngestPapers:
             patch("zotpilot.tools.ingestion._lookup_local_item_key_by_doi", return_value=None),
             patch("zotpilot.tools.ingestion._ensure_inbox_collection", return_value="INBOX1"),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -283,7 +295,10 @@ class TestIngestPapers:
             patch("zotpilot.tools.ingestion._get_writer"),
             patch("zotpilot.tools.ingestion._ensure_inbox_collection", return_value="INBOX1"),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -340,7 +355,10 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(preflight_enabled=True)),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.ingestion_bridge.preflight_urls",
                 return_value={
@@ -400,7 +418,10 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(preflight_enabled=True)),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.ingestion_bridge.preflight_urls",
                 return_value={
@@ -428,7 +449,10 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(preflight_enabled=False)),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -454,7 +478,10 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(preflight_enabled=False)),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -483,7 +510,10 @@ class TestIngestPapers:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=_make_config(preflight_enabled=False)),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension", return_value={"extension_connected": True}),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
             patch(
                 "zotpilot.tools.ingestion.save_urls",
                 return_value={
@@ -612,7 +642,6 @@ class TestIngestPapersAsync:
         assert result["is_final"] is True
         assert result["pending_count"] == 0
         save_urls_mock.assert_not_called()
-
 
 
 class TestRunSaveWorkerReconciliation:
