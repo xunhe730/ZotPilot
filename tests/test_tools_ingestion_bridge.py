@@ -80,6 +80,7 @@ class TestSaveUrls:
 
     def test_json_string_urls_are_supported(self):
         with patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True), \
+             patch("zotpilot.tools.ingestion.ingestion_bridge.get_extension_status", return_value={"extension_connected": True}), \
              patch("zotpilot.tools.ingestion.ingestion_bridge.enqueue_save_request", return_value=("req-1", None)), \
              patch("zotpilot.tools.ingestion.ingestion_bridge.poll_batch_save_results", return_value=[
                  {"success": True, "url": "https://example.com", "item_key": "ITEM1"},
@@ -91,6 +92,7 @@ class TestSaveUrls:
 
     def test_enqueue_errors_are_preserved(self):
         with patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True), \
+             patch("zotpilot.tools.ingestion.ingestion_bridge.get_extension_status", return_value={"extension_connected": True}), \
              patch("zotpilot.tools.ingestion.ingestion_bridge.enqueue_save_request", return_value=(None, {
                  "success": False,
                  "error_code": "extension_not_connected",
@@ -105,6 +107,7 @@ class TestSaveUrls:
 
     def test_tags_json_string_is_parsed(self):
         with patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True), \
+             patch("zotpilot.tools.ingestion.ingestion_bridge.get_extension_status", return_value={"extension_connected": True}), \
              patch("zotpilot.tools.ingestion.ingestion_bridge.poll_batch_save_results", return_value=[]), \
              patch(
                  "zotpilot.tools.ingestion.ingestion_bridge.enqueue_save_request",
