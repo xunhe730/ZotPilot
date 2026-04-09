@@ -1,0 +1,31 @@
+{
+  "verbs": [
+    "call",
+    "run",
+    "check",
+    "verify",
+    "read",
+    "report",
+    "present",
+    "ask",
+    "set",
+    "use",
+    "load",
+    "fetch",
+    "surface",
+    "stop",
+    "wait",
+    "retry",
+    "poll",
+    "merge",
+    "deduplicate",
+    "sort",
+    "extract",
+    "assign",
+    "format",
+    "group",
+    "issue",
+    "pass"
+  ],
+  "_note": "Allowed imperative verbs for bullet points in SKILL.md and ztp-research.md prose. P9 drift guard checks that bullet-level imperatives in SKILL stay in this set, which prevents control-flow verbs like 'transition', 'approve', 'gate', 'block' from creeping into SKILL prose. Update this list via PR when new SKILL-appropriate verbs are introduced."
+}

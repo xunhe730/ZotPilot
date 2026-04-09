@@ -1,7 +1,8 @@
 """Tests for journal_ranker module (pure functions + JournalRanker lookup)."""
+
 import pytest
-from pathlib import Path
-from zotpilot.journal_ranker import _normalize_title, _expand_abbreviations, JournalRanker
+
+from zotpilot.journal_ranker import JournalRanker, _expand_abbreviations, _normalize_title
 
 
 class TestNormalizeTitle:

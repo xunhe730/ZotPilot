@@ -235,6 +235,22 @@ def cmd_index(args):
 
     batch_size = args.batch_size if args.batch_size > 0 else None
 
+    # CLI is human-in-the-loop, so bypass the index_library MCP gate. Surface a
+    # one-line warning if there is an unresolved metadata-only decision so the
+    # user knows why some items will be skipped.
+    try:
+        from .tools.ingestion import _batch_store
+        found = _batch_store.find_unresolved_metadata_only(None)
+        if found is not None:
+            decision, _ = found
+            print(
+                f"Note: indexing {len(decision.item_keys)} metadata-only item(s) from "
+                f"batch {decision.batch_id} — re-run ingest on VPN to attach PDFs.",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
     indexer = Indexer(config)
     result = indexer.index_all(
         force_reindex=args.force,

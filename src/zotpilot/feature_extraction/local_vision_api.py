@@ -63,7 +63,7 @@ class LocalVisionAPI:
         prompt_mode: str = "compact",
     ) -> None:
         try:
-            import openai as _openai
+            import openai as _openai  # type: ignore[import-not-found]  # no stubs available
         except ImportError:
             raise ImportError(
                 "openai package required for LocalVisionAPI: "

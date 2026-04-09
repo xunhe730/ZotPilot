@@ -440,9 +440,14 @@ class TestIngestPapers:
         save_urls_mock.assert_not_called()
         assert result["failed"] == 1
         assert result["is_final"] is True  # early return, no polling needed
+        assert result["state"] == "failed"
         assert result["results"][0]["status"] == "failed"
         assert result["blocked"][0]["url"] == "https://publisher.example/paper"
-        assert "halted" in result["_instruction"].lower()  # instructs agent to stop
+        # Post-2026-04-08 contract: halt is structured via blocking_decisions,
+        # not advisory _instruction prose.
+        assert any(
+            d["decision_id"] == "preflight_blocked" for d in result["blocking_decisions"]
+        )
 
     def test_bridge_top_level_failure_marks_urls_failed(self):
         papers = [{"landing_page_url": "https://publisher.example/paper"}]
@@ -596,7 +601,7 @@ class TestIngestPapersAsync:
         assert "batch_id" in result
         assert result["batch_id"].startswith("ing_")
         assert "pending_count" in result
-        assert "_instruction" in result
+        assert "_instruction" not in result
 
     def test_duplicates_resolved_immediately(self):
         papers = [{"doi": "10.1000/existing", "landing_page_url": "https://publisher.example/paper"}]

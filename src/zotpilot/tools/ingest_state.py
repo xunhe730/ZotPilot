@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +64,32 @@ def _default_batch_id() -> str:
     return f"ing_{uuid.uuid4().hex[:12]}"
 
 
-_POST_INGEST_INSTRUCTION = (
-    "Present ingest results to user. Ask ONCE whether to run post-ingest workflow. "
-    "If confirmed, execute IN ORDER:\n"
-    "1. index_library for new papers (parallel, up to 5)\n"
-    "2. Generate brief notes per paper\n"
-    "3. Classify into DEEPEST matching sub-collection + INBOX auto-removed\n"
-    "4. Tags: call list_tags() first -> select from existing vocabulary ONLY -> "
-    "use set_item_tags to REPLACE all tags (clears publisher auto-tags). "
-    "NEVER invent new tags without explicit user approval (set allow_new=True).\n"
-    "5. Quality check: verify INBOX empty, all papers in sub-collections, "
-    "no publisher tags remaining."
-)
+
+@dataclass
+class BlockingDecision:
+    """Structured decision that requires user resolution before proceeding.
+
+    `item_keys` references items in the canonical `pdf_missing_items` list by key
+    only — never duplicates titles, urls, or other payload fields.
+    """
+
+    decision_id: str
+    batch_id: str | None
+    item_keys: tuple[str, ...]
+    description: str
+    resolved: bool = False
+    created_at: float = field(default_factory=time.monotonic)
+
+
+def _build_suggested_next_steps() -> list[dict]:
+    """Static ordered list of post-ingest steps. NO `tool` or `args` keys."""
+    return [
+        {"step_id": "index", "description": "Run full-text indexing on saved items.", "depends_on": []},
+        {"step_id": "note", "description": "Generate per-paper summary notes.", "depends_on": ["index"]},
+        {"step_id": "classify", "description": "Move items from INBOX into collections.", "depends_on": ["note"]},
+        {"step_id": "tag", "description": "Apply tags from existing vocabulary.", "depends_on": ["classify"]},
+        {"step_id": "verify", "description": "Confirm INBOX cleared and tags applied.", "depends_on": ["tag"]},
+    ]
 
 
 @dataclass
@@ -89,6 +103,8 @@ class BatchState:
     is_final: bool = False
     created_at: float = field(default_factory=time.monotonic)
     finalized_at: float | None = None
+    blocking_decisions: list["BlockingDecision"] = field(default_factory=list)
+    suggested_next_steps: list[dict] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def update_item(
@@ -116,19 +132,19 @@ class BatchState:
                 return
             item.status = status
             if item_key is not _UNSET:
-                item.item_key = item_key
+                item.item_key = cast("str | None", item_key)
             if title is not _UNSET:
-                item.title = title
+                item.title = cast("str | None", title)
             if error is not _UNSET:
-                item.error = error
+                item.error = cast("str | None", error)
             if warning is not _UNSET:
-                item.warning = warning
+                item.warning = cast("str | None", warning)
             if routing_status is not _UNSET:
-                item.routing_status = routing_status
+                item.routing_status = cast("str | None", routing_status)
             if ingest_method is not _UNSET:
-                item.ingest_method = ingest_method
+                item.ingest_method = cast("str | None", ingest_method)
             if has_pdf is not _UNSET:
-                item.has_pdf = has_pdf
+                item.has_pdf = cast("bool | None", has_pdf)
 
     def finalize(self) -> None:
         """Set is_final=True, determine state, set finalized_at."""
@@ -203,18 +219,41 @@ class BatchState:
             }
             if pdf_missing_items:
                 status["pdf_missing_items"] = pdf_missing_items
-            if self.is_final and saved > 0:
-                instruction = _POST_INGEST_INSTRUCTION
-                if saved_metadata_only > 0:
-                    instruction += (
-                        f"\n\u26a0\ufe0f {saved_metadata_only} paper(s) saved as metadata-only (no PDF). "
-                        "Ask user: (1) log in to institutional VPN and re-ingest, "
-                        "(2) keep as metadata references, "
-                        "(3) delete metadata-only items. Indexing will skip these."
-                    )
-                status["_instruction"] = instruction
-            elif not self.is_final and pending_count > 0:
-                status["_instruction"] = f"Use get_ingest_status(batch_id='{self.batch_id}') to track progress"
+
+            # Emit metadata_only_choice as a structured BlockingDecision when finalized.
+            # `pdf_missing_items` remains the canonical payload; this references by item_key only.
+            if self.is_final and saved_metadata_only > 0 and not any(
+                d.decision_id == "metadata_only_choice" and d.batch_id == self.batch_id
+                for d in getattr(self, "blocking_decisions", [])
+            ):
+                getattr(self, "blocking_decisions", []).append(BlockingDecision(
+                    decision_id="metadata_only_choice",
+                    batch_id=self.batch_id,
+                    item_keys=tuple(
+                        it.item_key
+                        for it in self.pending_items
+                        if it.status == "saved" and it.has_pdf is False and it.item_key
+                    ),
+                    description=(
+                        f"{saved_metadata_only} item(s) saved as metadata-only. "
+                        "User must choose: retry on VPN, keep as metadata, or delete."
+                    ),
+                ))
+
+            status["blocking_decisions"] = [
+                {
+                    "decision_id": d.decision_id,
+                    "batch_id": d.batch_id,
+                    "item_keys": list(d.item_keys),
+                    "description": d.description,
+                    "resolved": d.resolved,
+                }
+                for d in getattr(self, "blocking_decisions", [])
+            ]
+            status["suggested_next_steps"] = (
+                _build_suggested_next_steps() if self.is_final and saved > 0 else []
+            )
+
             return status
 
 
@@ -247,6 +286,43 @@ class BatchStore:
         """Return number of stored batches."""
         with self._lock:
             return len(self._batches)
+
+    def find_unresolved_metadata_only(
+        self, session_id: str | None
+    ) -> tuple["BlockingDecision", "BatchState"] | None:
+        """Find an unresolved metadata_only_choice in the most recent matching batch.
+
+        When session_id is provided, only batches from that session are checked.
+        When session_id is None, all batches are searched (session-agnostic gate).
+
+        Returns None when:
+        - no matching batch has an unresolved metadata_only_choice
+        - any lookup error occurs (fail-open with WARNING log)
+
+        Reads BatchStore directly without caching. Concurrency: point-in-time
+        snapshot, no lock held across the caller's downstream work.
+        """
+        try:
+            with self._lock:
+                if session_id is not None:
+                    candidates = [
+                        b for b in self._batches.values() if b.session_id == session_id
+                    ]
+                else:
+                    candidates = list(self._batches.values())
+            if not candidates:
+                return None
+            candidates.sort(key=lambda b: b.created_at, reverse=True)
+            most_recent = candidates[0]
+            for d in getattr(most_recent, "blocking_decisions", []):
+                if d.decision_id == "metadata_only_choice" and not d.resolved:
+                    return d, most_recent
+            return None
+        except Exception as exc:
+            logger.warning(
+                "metadata-only gate lookup failed: %s — failing open", exc
+            )
+            return None
 
     def evict_expired(self) -> None:
         """Evict finalized batches whose finalized_at is older than TTL."""

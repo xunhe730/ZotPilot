@@ -1,12 +1,12 @@
 """Tests for Zotero auto-detection."""
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
+
 from zotpilot.zotero_detector import (
-    detect_zotero_data_dir,
-    _validate_data_dir,
-    _parse_profiles_ini,
     _parse_prefs_js,
+    _parse_profiles_ini,
+    _validate_data_dir,
+    detect_zotero_data_dir,
 )
 
 

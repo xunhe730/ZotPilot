@@ -10,16 +10,15 @@ import tempfile
 
 os.environ["ZOTPILOT_SESSIONS_DIR"] = tempfile.mkdtemp(prefix="zotpilot-test-sessions-")
 
-import pytest
-from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from zotpilot.models import (
     Chunk,
     PageExtraction,
-    SectionSpan,
-    StoredChunk,
     RetrievalResult,
+    SectionSpan,
     ZoteroItem,
 )
 

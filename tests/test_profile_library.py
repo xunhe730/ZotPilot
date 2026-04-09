@@ -1,7 +1,7 @@
 """Tests for profile_library MCP tool."""
 import sqlite3
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 
 def _make_sqlite_row(data: dict):

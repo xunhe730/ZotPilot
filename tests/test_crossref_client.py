@@ -1,5 +1,4 @@
 """Tests for CrossRef API client."""
-import pytest
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -10,7 +9,6 @@ from zotpilot.crossref_client import (
     _extract_authors,
     _extract_year,
 )
-
 
 # ---------------------------------------------------------------------------
 # Type mapping

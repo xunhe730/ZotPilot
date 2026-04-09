@@ -140,7 +140,11 @@ ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
 | Find data tables                                        | search_tables               |
 | Find figures or diagrams                                | search_figures              |
 | Search external academic databases (OpenAlex)            | search_academic_databases   |
-| Batch add papers from search results to Zotero          | ingest_papers               |
+| Directly ingest explicit DOI/arXiv/URL lists            | ingest_by_identifiers       |
+| Confirm selected search candidates                      | confirm_candidates          |
+| Resolve blocked preflight and rerun checks              | resolve_preflight           |
+| Approve ingest after preflight                          | approve_ingest             |
+| Check research batch progress                           | get_batch_status           |
 | Save browser pages into Zotero via Connector            | save_urls                   |
 
 **Note**: `search_topic` searches your LOCAL indexed Zotero library \
@@ -149,8 +153,10 @@ EXTERNAL databases (OpenAlex) and finds papers not yet in your library.
 
 **Default `core` profile tools:**
 `search_topic`, `search_papers`, `get_passage_context`, `advanced_search`,
-`get_paper_details`, `search_academic_databases`, `ingest_papers`,
-`get_ingest_status`, `get_index_stats`, `research_session`
+`get_paper_details`, `search_academic_databases`, `ingest_by_identifiers`,
+`confirm_candidates`, `resolve_preflight`, `approve_ingest`, `get_batch_status`,
+`approve_post_ingest`, `authorize_taxonomy_changes`, `approve_post_process`,
+`reindex_degraded`, `get_index_stats`
 
 Set `ZOTPILOT_TOOL_PROFILE=extended` to expose advanced browse/write/admin tools,
 or `ZOTPILOT_TOOL_PROFILE=all` for the complete tool surface.
@@ -171,15 +177,17 @@ set `context_chunks=1` only when adjacent context is useful. \
 
 **Typical literature collection workflow:**
 1. `search_academic_databases` → review candidates
-2. `ingest_papers` with selected papers → added to Zotero with metadata and OA PDF
+2. `confirm_candidates` → preflight
+3. `approve_ingest` → background ingest
+4. `get_batch_status` → poll until post-ingest verification is ready
+5. `approve_post_ingest` → background post-process
+6. `approve_post_process` → finalize
 
 advanced_search works without indexing — use for precise metadata \
 filters. Extended profile adds browse/write/admin tools such as \
 `browse_library`, `manage_tags`, `index_library`, and `switch_library`. \
 Use `browse_library(view="feeds")` for RSS feeds. `get_index_stats` also \
 handles unindexed-paper pagination plus optional reranking and vision-cost details. \
-Use `research_session` to create, resume, approve, or validate guarded research runs.
-
 Write operations (tags, collections, notes) require ZOTERO_API_KEY \
 and ZOTERO_USER_ID environment variables.
 """

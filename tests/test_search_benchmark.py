@@ -14,7 +14,6 @@ import pytest
 from zotpilot.openalex_client import OpenAlexClient
 from zotpilot.tools.ingestion_search import (
     fetch_openalex_by_doi,
-    format_openalex_paper,
     search_openalex,
 )
 
@@ -32,7 +31,8 @@ BENCHMARK_CASES = [
     ("hallmarks of cancer", "10.1016/j.cell.2011.02.013", "DOI direct"),
     ("10.1126/science.aaw4741", "10.1126/science.aaw4741", "DOI singleton"),
     ('"hidden fluid mechanics"', "10.1126/science.aaw4741", "exact title"),
-    ("author:Brunton | sparse identification", "10.1073/pnas.1517384113", "author anchor"),  # Brunton SINDy — canonical, less data corruption
+    # Brunton SINDy — canonical, less data corruption
+    ("author:Brunton | sparse identification", "10.1073/pnas.1517384113", "author anchor"),
     ("AI medical diagnosis", None, "negative_no_retracted"),
     ("Foucault discipline punish power", "10.2307/1864376", "DOI direct"),
 ]

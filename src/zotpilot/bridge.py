@@ -215,7 +215,7 @@ class BridgeServer:
         command = {**command}  # defensive copy — never mutate caller's dict
         if "request_id" not in command:
             command["request_id"] = uuid.uuid4().hex[:12]
-        request_id = command["request_id"]
+        request_id: str = str(command["request_id"])
         with self._lock:
             self._queue.append(command)
         return request_id
@@ -274,7 +274,7 @@ class BridgeServer:
         import urllib.request
         try:
             resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=2)
-            return resp.status == 200
+            return bool(resp.status == 200)
         except Exception:
             return False
 

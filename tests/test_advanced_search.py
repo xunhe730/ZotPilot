@@ -1,11 +1,11 @@
 """Tests for advanced_search (ZoteroClient method) and advanced_search (MCP tool)."""
 import sqlite3
-import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from zotpilot.zotero_client import ZoteroClient
+import pytest
 
+from zotpilot.zotero_client import ZoteroClient
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -430,10 +430,10 @@ class TestAdvancedSearch:
 class TestAdvancedSearchTool:
     def test_tool_invalid_field_raises_toolerror(self, tmp_path):
         """MCP tool converts ValueError (invalid field) to ToolError."""
-        from zotpilot.tools.search import advanced_search
         from zotpilot.state import ToolError
+        from zotpilot.tools.search import advanced_search
 
-        db = _create_search_db(tmp_path)
+        _create_search_db(tmp_path)
         mock_client = _make_client(tmp_path)
 
         with patch("zotpilot.tools.search._get_zotero", return_value=mock_client):
@@ -444,10 +444,10 @@ class TestAdvancedSearchTool:
 
     def test_tool_invalid_op_raises_toolerror(self, tmp_path):
         """MCP tool converts ValueError (invalid op) to ToolError."""
-        from zotpilot.tools.search import advanced_search
         from zotpilot.state import ToolError
+        from zotpilot.tools.search import advanced_search
 
-        db = _create_search_db(tmp_path)
+        _create_search_db(tmp_path)
         mock_client = _make_client(tmp_path)
 
         with patch("zotpilot.tools.search._get_zotero", return_value=mock_client):
@@ -476,6 +476,7 @@ class TestAdvancedSearchTool:
     def test_tool_accepts_json_string_conditions(self, tmp_path):
         """MCP tool parses conditions passed as a JSON string (FastMCP list param workaround)."""
         import json
+
         from zotpilot.tools.search import advanced_search
 
         db = _create_search_db(tmp_path)
@@ -492,8 +493,8 @@ class TestAdvancedSearchTool:
 
     def test_tool_invalid_json_string_raises_toolerror(self, tmp_path):
         """MCP tool raises ToolError when conditions is an invalid JSON string."""
-        from zotpilot.tools.search import advanced_search
         from zotpilot.state import ToolError
+        from zotpilot.tools.search import advanced_search
 
         _create_search_db(tmp_path)
         mock_client = _make_client(tmp_path)

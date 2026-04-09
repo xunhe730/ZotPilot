@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from ..openalex_client import OpenAlexClient
 
@@ -255,3 +256,59 @@ def search_academic_databases_impl(
 
     logger.info("OpenAlex search failed (%s)", error)
     raise tool_error_cls(f"Academic search failed: OpenAlex ({error}).")
+
+
+# ---------------------------------------------------------------------------
+# URL classification helpers (moved from ingestion.py)
+# ---------------------------------------------------------------------------
+
+_PDF_URL_RE = re.compile(
+    r"(?:"
+    r"\.pdf(?:[?#]|$)"
+    r"|/pdf(?:[?/]|$)"
+    r"|/content/pdf/"
+    r"|pdf\.sciencedirect\.com"
+    r")",
+    re.IGNORECASE,
+)
+_DOI_REDIRECT_RE = re.compile(r"^https?://(?:dx\.)?doi\.org/10\.", re.IGNORECASE)
+
+
+def is_pdf_or_doi_url(url: str | None) -> bool:
+    """Return True if url is a direct PDF link or a doi.org redirect."""
+    if not url:
+        return False
+    return bool(_PDF_URL_RE.search(url)) or bool(_DOI_REDIRECT_RE.match(url))
+
+
+_LINKINGHUB_PII_RE = re.compile(
+    r"^https?://linkinghub\.elsevier\.com/retrieve/pii/(S[0-9X]+)",
+    re.IGNORECASE,
+)
+
+
+def normalize_landing_url(url: str) -> str:
+    """Convert known intermediate redirectors to final landing pages."""
+    m = _LINKINGHUB_PII_RE.match(url)
+    if m:
+        return f"https://www.sciencedirect.com/science/article/pii/{m.group(1)}"
+    return url
+
+
+def classify_ingest_candidate(
+    paper: dict,
+    normalized_doi: str | None,
+    arxiv_id: str | None,
+    landing_page_url: str | None,
+) -> Literal["connector", "api", "reject"]:
+    """Classify a paper candidate for routing."""
+    if arxiv_id:
+        return "connector"
+    if landing_page_url and not is_pdf_or_doi_url(landing_page_url):
+        return "connector"
+    resolved_url = paper.get("_resolved_landing_url")
+    if resolved_url and not is_pdf_or_doi_url(resolved_url):
+        return "connector"
+    if normalized_doi or (paper.get("doi") and not landing_page_url):
+        return "api"
+    return "reject"

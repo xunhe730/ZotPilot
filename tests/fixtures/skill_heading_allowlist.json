@@ -1,0 +1,13 @@
+{
+  "headings": [
+    "## §4 — Search SOP for fuzzy NL queries (REQUIRED)",
+    "### Step 4.1 — Context priming via WebFetch (REQUIRED)",
+    "### Step 4.2 — Issue 3-5 PRECISE queries in parallel",
+    "### Step 4.3 — Merge client-side",
+    "### Step 4.4 — Report transparently to the user",
+    "### Worked example",
+    "### Hard rules",
+    "### When to skip §4"
+  ],
+  "_note": "Known-good baseline extracted from src/zotpilot/skills/ztp-research.md on 2026-04-08. These are the only H2/H3 headings present in the file. P9 drift guard uses this list to detect new control-flow headings added to SKILL prose."
+}

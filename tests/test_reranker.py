@@ -1,15 +1,10 @@
 """Tests for the reranker."""
-import pytest
-from dataclasses import replace
+from zotpilot.models import RetrievalResult
 from zotpilot.reranker import (
     Reranker,
-    validate_section_weights,
     validate_journal_weights,
-    DEFAULT_SECTION_WEIGHTS,
-    VALID_SECTIONS,
-    VALID_QUARTILES,
+    validate_section_weights,
 )
-from zotpilot.models import RetrievalResult
 
 
 def _make_result(score=0.8, section="results", journal_quartile="Q1", **kwargs):

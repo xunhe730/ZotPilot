@@ -4,15 +4,16 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from ..state import (
+    ToolError,
     _clear_library_override,
     _get_zotero,
     _set_library_override,
     mcp,
 )
-from ..workflow import SessionStore
+from ..workflow import BatchStore
 from .profiles import tool_tags
 
-_session_store = SessionStore()
+_batch_store = BatchStore()
 
 
 @mcp.tool(tags=tool_tags("admin", "admin"))
@@ -37,7 +38,14 @@ def switch_library(
         _clear_library_override()
         return {"switched": True, "library_type": "user", "message": "Reset to default user library"}
 
-    active_session = _session_store.get_active(library_id=str(_get_zotero().library_id))
+    active_batch = _batch_store.get_active(
+        library_id=str(_get_zotero().library_id),
+        phases={"ingesting", "post_processing", "AwaitingTaxonomyAuthorization"},
+    )
+    if active_batch is not None:
+        raise ToolError(
+            f"Cannot switch library while batch {active_batch.batch_id} is active in phase {active_batch.phase}."
+        )
     _set_library_override(library_id, library_type)
     result = {
         "switched": True,
@@ -49,9 +57,4 @@ def switch_library(
             f"Note: RAG search and indexing still use the default user library."
         ),
     }
-    if active_session is not None:
-        result["warning"] = (
-            f"Active research session {active_session.session_id} was left in library "
-            f"{active_session.library_id}. Approve, cancel, or resume it before switching back."
-        )
     return result

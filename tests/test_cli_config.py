@@ -2,15 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 import pytest
 
-from zotpilot.cli import _config_set, _mask_secret, _coerce_value
-from zotpilot.config import Config, _default_config_dir
-
+from zotpilot.cli import _coerce_value, _config_set, _mask_secret
+from zotpilot.config import Config
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -19,6 +17,7 @@ from zotpilot.config import Config, _default_config_dir
 def _run_config(args: list[str], config_path: Path, monkeypatch, capsys):
     """Invoke cmd_config() directly with the given sub-args."""
     import argparse
+
     from zotpilot.cli import cmd_config
 
     parser = argparse.ArgumentParser()

@@ -1,9 +1,12 @@
 """Tests for batch write operations (merged batch_tags + batch_collections)."""
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from zotpilot.tools.write_ops import (
-    batch_tags, batch_collections, _BATCH_MAX,
+    _BATCH_MAX,
+    batch_collections,
+    batch_tags,
 )
 
 

@@ -6,13 +6,10 @@ from typing import Annotated, Literal, TypedDict
 from pydantic import Field
 
 from ..state import ToolError, _get_writer, _get_zotero, mcp
-from ..workflow import SessionStore
-from ..workflow.session_store import current_library_id
 from .library import _invalidate_collection_cache
 from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
-_session_store = SessionStore()
 
 
 def _coerce_list(value) -> list:
@@ -93,30 +90,6 @@ def _normalize_tags(tags, *, tool_name: str) -> list[str]:
     return normalized
 
 
-def _get_running_research_session():
-    return _session_store.get_active(library_id=current_library_id(), statuses={"running"})
-
-
-def _check_post_ingest_gate():
-    session = _get_running_research_session()
-    if session is None:
-        return None
-    if "post-ingest-review" not in session.approved_checkpoints:
-        raise ToolError("Post-ingest steps require user approval after ingest verification.")
-    return session
-
-
-def _mark_session_note_created(session, item_key: str) -> None:
-    if session is None:
-        return
-    for item in session.items:
-        if item.item_key == item_key:
-            item.note_count += 1
-            break
-    _session_store.save(session)
-
-
-
 def _add_to_collection_impl(
     item_key: str,
     collection_key: str,
@@ -184,7 +157,6 @@ def create_note(
     ] = False,
 ) -> dict:
     """Create a child note on a Zotero item. Requires ZOTERO_API_KEY."""
-    session = _check_post_ingest_gate()
     if tags is not None:
         tags = _coerce_list(tags) or None
     writer = _get_writer()
@@ -208,7 +180,6 @@ def create_note(
             title = "[ZotPilot] Note"
 
     result = writer.create_note(item_key, content, title=title, tags=tags)
-    _mark_session_note_created(session, item_key)
     return result
 
 
@@ -318,7 +289,6 @@ def manage_tags(
     Use action to add, set, or remove tags; single-item input returns the
     single-item result, and list input routes to batch processing.
     """
-    _check_post_ingest_gate()
     normalized_tags = _normalize_tags(tags, tool_name="manage_tags")
     keys = _normalize_item_keys(item_keys)
     if len(keys) == 1:
@@ -388,7 +358,6 @@ def manage_collections(
     Use action='add' or action='remove' with a target collection key.
     Single-item add preserves INBOX auto-cleanup; list input routes to batch processing.
     """
-    _check_post_ingest_gate()
     if not collection_key:
         raise ToolError(
             "manage_collections requires collection_key. "

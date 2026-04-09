@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 import json
+import logging as _logging
+import threading as _threading
 import time
 import urllib.error
+import urllib.parse as _urllib_parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+from concurrent.futures import as_completed as _as_completed
+from typing import Any, Callable
 from urllib.parse import urlparse
+
+import httpx as _httpx
 
 DISCOVERY_BACKOFF_DELAYS = [2.0, 4.0, 8.0, 16.0, 32.0]
 ITEM_DISCOVERY_WINDOW_S = 120
@@ -198,11 +206,11 @@ def _cleanup_publisher_tags(item_key: str | None, url: str, writer, logger) -> N
         logger.warning("Failed to clean publisher tags for %s: %s", item_key, exc)
 
 
-def get_extension_status(bridge_url: str) -> dict:
+def get_extension_status(bridge_url: str) -> dict[str, Any]:
     """Query /status and return the parsed JSON, or an error dict."""
     try:
         response = urllib.request.urlopen(f"{bridge_url}/status", timeout=3)
-        return json.loads(response.read())
+        return dict(json.loads(response.read()))
     except Exception as exc:
         return {"extension_connected": False, "error": str(exc)}
 
@@ -351,7 +359,7 @@ def preflight_urls(
         }
 
     sample, skipped_urls = sample_preflight_urls(urls, sample_size)
-    report = {
+    report: dict[str, Any] = {
         "checked": len(sample),
         "accessible": [],
         "blocked": [],
@@ -545,7 +553,7 @@ def poll_single_save_result(
     *,
     sleep_fn=time.sleep,
     monotonic_fn=time.monotonic,
-) -> dict:
+) -> dict[str, Any]:
     """Poll one bridge save request until it completes or times out."""
     deadline = monotonic_fn() + timeout_s
     while monotonic_fn() < deadline:
@@ -553,7 +561,7 @@ def poll_single_save_result(
         try:
             response = urllib.request.urlopen(f"{bridge_url}/result/{request_id}", timeout=5)
             if response.status == 200:
-                return json.loads(response.read())
+                return dict(json.loads(response.read()))
         except Exception:
             pass
     return {
@@ -704,7 +712,7 @@ def discover_saved_item_key(
             logger.warning("Item discovery query failed: %s", exc)
         return None
     if len(items) == 1:
-        return items[0]
+        return str(items[0])
     return None
 
 
@@ -925,3 +933,616 @@ def apply_bridge_result_routing(
         out["warning"] = routing_warning
         return out
     return finalize_success(out, "routed_by_backend")
+
+
+# ---------------------------------------------------------------------------
+# Local Zotero API helpers and DOI resolution (moved from ingestion.py)
+# ---------------------------------------------------------------------------
+
+_bridge_logger = _logging.getLogger(__name__)
+
+_ZOTERO_LOCAL_API_ITEMS_URL = "http://127.0.0.1:23119/api/users/0/items"
+
+
+def resolve_doi_to_landing_url(doi: str) -> str | None:
+    """Resolve DOI to publisher landing page via doi.org redirect."""
+    from .ingestion_search import normalize_landing_url
+    try:
+        response = _httpx.head(
+            f"https://doi.org/{doi}",
+            follow_redirects=False,
+            timeout=10.0,
+        )
+        if response.status_code in (301, 302, 303, 307, 308):
+            url = response.headers.get("location")
+            if url:
+                return normalize_landing_url(url)
+    except Exception as exc:
+        _bridge_logger.debug("DOI resolution failed for %s: %s", doi, exc)
+    return None
+
+
+def resolve_dois_concurrent(dois: list[str]) -> dict[str, str | None]:
+    """Resolve multiple DOIs concurrently."""
+    if not dois:
+        return {}
+    results: dict[str, str | None] = {}
+    with _ThreadPoolExecutor(max_workers=min(len(dois), 10)) as pool:
+        futures = {pool.submit(resolve_doi_to_landing_url, doi): doi for doi in dois}
+        for future in _as_completed(futures):
+            doi = futures[future]
+            try:
+                results[doi] = future.result()
+            except Exception:
+                results[doi] = None
+    return results
+
+
+def route_via_local_api(item_key: str, collection_key: str) -> bool:
+    """Route an item into a collection via Zotero Desktop local API."""
+    try:
+        req = urllib.request.Request(
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/{item_key}",
+            headers={"Accept": "application/json", "Zotero-Allowed-Request": "1"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            item = json.loads(resp.read())
+        version = item.get("version", 0)
+        data = item.get("data", item)
+        collections = set(data.get("collections", []))
+        collections.add(collection_key)
+        patch_req = urllib.request.Request(
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/{item_key}",
+            data=json.dumps({"collections": sorted(collections)}).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Zotero-Allowed-Request": "1",
+                "If-Unmodified-Since-Version": str(version),
+            },
+            method="PATCH",
+        )
+        with urllib.request.urlopen(patch_req, timeout=5):
+            return True
+    except (urllib.error.URLError, ConnectionRefusedError, OSError):
+        return False
+    except Exception as exc:
+        _bridge_logger.warning("Local API routing failed for %s: %s", item_key, exc)
+        return False
+
+
+def discover_item_via_local_api(url: str, title: str | None) -> str | None:
+    """Try to discover a newly saved item via Zotero Desktop local API."""
+    if not title:
+        return None
+    try:
+        search_url = (
+            f"{_ZOTERO_LOCAL_API_ITEMS_URL}/top?format=json&limit=5"
+            f"&q={_urllib_parse.quote(title[:50])}"
+            f"&qmode=titleCreatorYear&sort=dateAdded&direction=desc"
+        )
+        req = urllib.request.Request(
+            search_url,
+            headers={"Accept": "application/json", "Zotero-Allowed-Request": "1"},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            items = json.loads(resp.read())
+        if len(items) == 1:
+            key = items[0].get("key")
+            return str(key) if key is not None else None
+        if len(items) > 1:
+            _bridge_logger.debug(
+                "Local API discovery: ambiguous match (%d items) for '%s'", len(items), title[:50]
+            )
+    except Exception:
+        return None
+    return None
+
+
+def discover_item_via_web_api(url: str, title: str | None, writer, writer_lock) -> str | None:
+    """Fallback item-key discovery via Zotero Web API."""
+    if not title:
+        return None
+    try:
+        with writer_lock:
+            keys = writer.find_items_by_url_and_title(url, title, window_s=120)
+        if len(keys) == 1:
+            return str(keys[0])
+    except Exception:
+        return None
+    return None
+
+
+def save_via_api(
+    candidate: dict,
+    resolved_collection_key: str | None,
+    tags: list[str] | None,
+    batch,
+    writer,
+    writer_lock: _threading.Lock,
+    logger=None,
+) -> dict:
+    """Save a single paper via API (CrossRef/arXiv + pyzotero), bypassing Connector."""
+    from fastmcp.exceptions import ToolError
+
+    from ..state import _get_resolver
+    from .ingestion_search import normalize_doi
+
+    if logger is None:
+        logger = _bridge_logger
+
+    paper = candidate["paper"]
+    idx = candidate["_index"]
+
+    doi = paper.get("doi")
+    arxiv_id = paper.get("arxiv_id")
+    landing_page_url = paper.get("landing_page_url")
+
+    normalized_doi = normalize_doi(doi)
+    arxiv_doi = normalize_doi(f"10.48550/arxiv.{arxiv_id}") if arxiv_id else None
+    if not normalized_doi:
+        normalized_doi = arxiv_doi
+
+    if arxiv_id:
+        identifier = f"arxiv:{arxiv_id}"
+    elif normalized_doi:
+        identifier = normalized_doi
+    elif landing_page_url:
+        identifier = landing_page_url
+    else:
+        batch.update_item(idx, status="failed", error="no usable identifier for API resolution")
+        return {"success": False, "error": "no usable identifier"}
+
+    try:
+        resolver = _get_resolver()
+        metadata = resolver.resolve(identifier)
+
+        if not metadata.abstract:
+            abstract_snippet = paper.get("abstract_snippet") or paper.get("abstract")
+            if abstract_snippet:
+                metadata.abstract = abstract_snippet
+
+        with writer_lock:
+            collection_keys = [resolved_collection_key] if resolved_collection_key else None
+            result = writer.create_item_from_metadata(
+                metadata,
+                collection_keys=collection_keys,
+                tags=tags,
+            )
+
+        item_key = None
+        if result and "successful" in result:
+            for value in result["successful"].values():
+                item_key = value.get("key") or value.get("data", {}).get("key")
+                if item_key:
+                    break
+
+        if not item_key:
+            raise ToolError("create_item_from_metadata returned no item key")
+
+        try:
+            with writer_lock:
+                writer.try_attach_oa_pdf(
+                    item_key,
+                    doi=metadata.doi,
+                    oa_url=paper.get("oa_url") or metadata.oa_url,
+                    arxiv_id=metadata.arxiv_id,
+                )
+        except Exception as attach_exc:
+            logger.debug("PDF attach best-effort failed for %s: %s", item_key, attach_exc)
+
+        connector_error = candidate.get("_connector_error")
+        warning = None
+        if connector_error:
+            warning = (
+                f"Connector failed ({connector_error}); saved via API (metadata only, no PDF). "
+                "Check Chrome/Connector if you need PDF."
+            )
+
+        batch.update_item(
+            idx,
+            status="saved",
+            item_key=item_key,
+            title=metadata.title,
+            routing_status="routed_by_api",
+            ingest_method="api",
+            warning=warning,
+        )
+        if item_key:
+            _cleanup_publisher_tags(item_key, landing_page_url or "", writer, logger)
+        return {"success": True, "item_key": item_key, "title": metadata.title, "error": None}
+
+    except Exception as exc:
+        logger.warning("API save failed for index %d: %s", idx, exc)
+        batch.update_item(idx, status="failed", error=str(exc))
+        return {"success": False, "error": str(exc)}
+
+
+def run_save_worker(
+    batch,
+    connector_candidates: list[dict],
+    api_candidates: list[dict],
+    resolved_collection_key: str | None,
+    save_urls_fn: Callable,
+    get_writer_fn: Callable,
+    writer_lock: _threading.Lock,
+    logger=None,
+    route_fn: Callable | None = None,
+    discover_fn: Callable | None = None,
+    save_via_api_fn: Callable | None = None,
+    discover_web_fn: Callable | None = None,
+) -> None:
+    """Background worker: connector save → API fallback → reconciliation → PDF verify."""
+    if logger is None:
+        logger = _bridge_logger
+    _route_fn = route_fn if route_fn is not None else route_via_local_api
+    _discover_fn = discover_fn if discover_fn is not None else discover_item_via_local_api
+    _save_via_api_fn = save_via_api_fn if save_via_api_fn is not None else save_via_api
+    _discover_web_fn = discover_web_fn
+
+    try:
+        batch.state = "running"
+        writer: Any = None
+
+        # --- Phase 1: Connector saves ---
+        candidate_by_index: dict[int, dict] = {c["_index"]: c for c in connector_candidates}
+        candidate_by_url: dict[str, dict] = {c["url"]: c for c in connector_candidates}
+        urls_to_save = [c["url"] for c in connector_candidates]
+
+        for start in range(0, len(urls_to_save), 10):
+            chunk = urls_to_save[start : start + 10]
+            batch_result = save_urls_fn(chunk, collection_key=resolved_collection_key, tags=None)
+            batch_results = list(batch_result.get("results") or [])
+            returned_urls = {r.get("url") for r in batch_results if r.get("url")}
+
+            top_level_failed = batch_result.get("success") is False
+            for result in batch_results:
+                idx = result.get("index")
+                url = result.get("url")
+                if idx is None:
+                    candidate = candidate_by_url.get(url)
+                    if candidate is None:
+                        continue
+                    idx = candidate["_index"]
+                else:
+                    candidate = candidate_by_index.get(idx)
+                if result.get("success") is True:
+                    item_key = result.get("item_key")
+                    result_title = result.get("title") or (
+                        candidate.get("paper", {}).get("title") if candidate else None
+                    )
+                    if not item_key:
+                        discovered = _discover_fn(url or "", result_title)
+                        if not discovered:
+                            if _discover_web_fn is not None:
+                                discovered = _discover_web_fn(url or "", result_title)
+                            else:
+                                discovered = discover_item_via_web_api(
+                                    url or "", result_title, get_writer_fn(), writer_lock
+                                )
+                        if discovered:
+                            item_key = discovered
+                        else:
+                            batch.update_item(
+                                idx,
+                                status="failed",
+                                error=(
+                                    "Connector reported success but item not found in Zotero. "
+                                    "Save may have silently failed."
+                                ),
+                            )
+                            continue
+                    batch.update_item(
+                        idx,
+                        status="saved",
+                        item_key=item_key,
+                        title=result_title,
+                        warning=result.get("warning"),
+                        routing_status=result.get("routing_status"),
+                    )
+                else:
+                    batch.update_item(
+                        idx,
+                        status="failed",
+                        error=result.get("error") or result.get("error_message") or "bridge save failed",
+                    )
+
+            for url in chunk:
+                candidate = candidate_by_url.get(url)
+                if candidate is None:
+                    continue
+                idx = candidate["_index"]
+                if top_level_failed or url not in returned_urls:
+                    for item in batch.pending_items:
+                        if item.index == idx and item.status == "pending":
+                            batch.update_item(idx, status="failed", error="bridge save failed")
+
+        # --- Phase 2: API fallback for failed connector items ---
+        connector_api_retries: list[dict] = []
+        for candidate in connector_candidates:
+            paper = candidate["paper"]
+            if not paper.get("doi"):
+                continue
+            for item in batch.pending_items:
+                if item.index == candidate["_index"] and item.status == "failed":
+                    connector_error = item.error or "connector save failed"
+                    connector_api_retries.append(
+                        {
+                            **candidate,
+                            "url": None,
+                            "ingest_method": "api",
+                            "_connector_error": connector_error,
+                        }
+                    )
+                    batch.update_item(
+                        candidate["_index"],
+                        status="pending",
+                        ingest_method="api",
+                        warning=(
+                            f"Connector failed ({connector_error}); retrying via API (metadata only, no PDF). "
+                            "Check Chrome/Connector if you need PDF."
+                        ),
+                        error=None,
+                    )
+                    break
+
+        phase2_api_candidates = api_candidates + connector_api_retries
+        if phase2_api_candidates:
+            writer = get_writer_fn()
+            for candidate in phase2_api_candidates:
+                _save_via_api_fn(
+                    candidate,
+                    resolved_collection_key=resolved_collection_key,
+                    tags=None,
+                    batch=batch,
+                    writer=writer,
+                    writer_lock=writer_lock,
+                    logger=logger,
+                )
+
+        # Post-batch reconciliation
+        unrouted_items = [
+            item for item in batch.pending_items
+            if item.status == "saved" and item.item_key and not item.routing_status and item.ingest_method != "api"
+        ]
+        deferred_items = [item for item in batch.pending_items if item.status == "saved" and not item.item_key]
+        if (unrouted_items or deferred_items) and resolved_collection_key:
+            logger.info(
+                "Starting reconciliation for %d unrouted and %d deferred items",
+                len(unrouted_items), len(deferred_items),
+            )
+            time.sleep(15)
+            writer = None
+            for item in deferred_items:
+                discovered_key = _discover_fn(item.url or "", item.title)
+                if not discovered_key:
+                    try:
+                        if _discover_web_fn is not None:
+                            discovered_key = _discover_web_fn(item.url or "", item.title)
+                        else:
+                            w = get_writer_fn()
+                            discovered_key = discover_item_via_web_api(item.url or "", item.title, w, writer_lock)
+                    except Exception:
+                        pass
+                if discovered_key:
+                    item.item_key = discovered_key
+                    unrouted_items.append(item)
+                else:
+                    batch.update_item(
+                        item.index,
+                        status="failed",
+                        error="Item not found in Zotero after save — connector may have reported false success.",
+                        routing_status="routing_failed",
+                    )
+                    logger.error("Reconciliation: item_key not found for %s — demoted to failed", item.url)
+
+            for item in unrouted_items:
+                if not item.item_key:
+                    continue
+                try:
+                    if _route_fn(item.item_key, resolved_collection_key):
+                        batch.update_item(
+                            item.index, status="saved", item_key=item.item_key,
+                            warning=None, routing_status="routed_by_reconciliation_local",
+                        )
+                    else:
+                        if writer is None:
+                            writer = get_writer_fn()
+                        with writer_lock:
+                            writer.add_to_collection(item.item_key, resolved_collection_key)
+                        batch.update_item(
+                            item.index, status="saved", item_key=item.item_key,
+                            warning=None, routing_status="routed_by_reconciliation_web",
+                        )
+                    if writer is None:
+                        writer = get_writer_fn()
+                    _cleanup_publisher_tags(item.item_key, item.url or "", writer, logger)
+                except Exception as exc:
+                    batch.update_item(
+                        item.index, status="saved", item_key=item.item_key,
+                        warning=f"Reconciliation routing failed: {exc}",
+                        routing_status="routing_failed",
+                    )
+                    logger.error("Reconciliation routing failed for %s: %s", item.item_key, exc)
+
+        # Post-reconciliation: verify PDF attachments
+        saved_items_with_keys = [
+            item for item in batch.pending_items if item.status == "saved" and item.item_key
+        ]
+        if saved_items_with_keys:
+            if writer is None:
+                try:
+                    writer = get_writer_fn()
+                except Exception as exc:
+                    logger.warning("PDF verification: writer unavailable: %s", exc)
+                    writer = None
+            if writer is not None and hasattr(writer, "check_has_pdf"):
+                with writer_lock:
+                    for item in saved_items_with_keys:
+                        try:
+                            has_pdf = writer.check_has_pdf(item.item_key)
+                            existing_warning = item.warning or ""
+                            new_warning = (
+                                "metadata_only: no PDF attachment — institutional access may be required"
+                                if not has_pdf else existing_warning or None
+                            )
+                            batch.update_item(
+                                item.index, status=item.status, has_pdf=has_pdf,
+                                warning=new_warning if new_warning else existing_warning,
+                            )
+                        except Exception as exc:
+                            logger.warning("check_has_pdf failed for %s: %s", item.item_key, exc)
+
+    except Exception as exc:
+        logger.error("Ingest worker failed: %s", exc, exc_info=True)
+        for item in batch.pending_items:
+            if item.status == "pending":
+                batch.update_item(item.index, status="failed", error=f"worker error: {exc}")
+    finally:
+        batch.finalize()
+
+
+# ---------------------------------------------------------------------------
+# Connector availability + preflight helpers (called by ingest_papers)
+# ---------------------------------------------------------------------------
+
+def check_connector_availability(
+    connector_candidates: list[dict],
+    default_port: int,
+    bridge_server_cls,
+) -> tuple[bool, str | None, float | None]:
+    """Check bridge + extension availability for connector candidates.
+
+    Returns (extension_connected, detail_error, last_seen_s).
+    detail_error is None when extension is connected.
+    """
+    bridge_running = bridge_server_cls.is_running(default_port)
+    if not bridge_running:
+        try:
+            bridge_server_cls.auto_start(default_port)
+            bridge_running = True
+        except Exception:
+            bridge_running = False
+
+    extension_connected = False
+    last_seen_s: float | None = None
+    if bridge_running:
+        ext_status = wait_for_extension(f"http://127.0.0.1:{default_port}")
+        extension_connected = bool(ext_status.get("extension_connected"))
+        last_seen_s = ext_status.get("extension_last_seen_s")
+
+    if extension_connected:
+        return True, None, None
+
+    if not bridge_running:
+        detail = (
+            "ZotPilot bridge could not be started. "
+            "Run 'zotpilot bridge' manually or check the logs."
+        )
+    elif last_seen_s is not None:
+        detail = (
+            f"ZotPilot Connector last sent a heartbeat {last_seen_s:.0f}s ago "
+            "(stale). Make sure Chrome is open and the ZotPilot Connector "
+            "extension is enabled, then retry ingest_papers."
+        )
+    else:
+        detail = (
+            "ZotPilot Connector has not connected to the bridge. "
+            "Make sure Chrome is open and the ZotPilot Connector extension "
+            "is installed and enabled, then retry ingest_papers."
+        )
+    return False, detail, last_seen_s
+
+
+def run_preflight_check(
+    connector_candidates: list[dict],
+    default_port: int,
+    bridge_server_cls,
+    logger,
+    *,
+    sleep_fn=time.sleep,
+    monotonic_fn=time.monotonic,
+) -> tuple[list[dict], list[dict], dict | None]:
+    """Run preflight on connector candidate URLs.
+
+    Returns (updated_connector_candidates, preflight_failures, blocking_decision_dict).
+    preflight_failures is a list of result dicts with status=failed.
+    blocking_decision_dict is non-None when ALL candidates were blocked (batch must halt).
+    """
+    from .ingest_state import BlockingDecision
+
+    urls_to_save = [c["url"] for c in connector_candidates]
+    preflight_report = preflight_urls(
+        urls_to_save,
+        sample_size=5,
+        default_port=default_port,
+        bridge_server_cls=bridge_server_cls,
+        logger=logger,
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+    )
+
+    if preflight_report.get("all_clear", False):
+        return connector_candidates, [], None
+
+    failures: list[dict] = []
+    blocked_domains: set[str] = set()
+
+    for blocked in preflight_report.get("blocked", []):
+        blocked_url = blocked.get("url") or ""
+        blocked_domains.add(extract_publisher_domain(blocked_url))
+        failures.append({
+            "url": blocked_url,
+            "status": "failed",
+            "error_code": blocked.get("error_code") or "anti_bot_detected",
+            "error": (
+                blocked.get("error")
+                or "Anti-bot protection detected. "
+                "Please complete browser verification in Chrome, then retry. "
+                "DO NOT retry with save_urls or DOI links — "
+                "you'll hit the same wall and produce a partial-success batch."
+            ),
+        })
+
+    for error in preflight_report.get("errors", []):
+        error_url = error.get("url") or ""
+        blocked_domains.add(extract_publisher_domain(error_url))
+        failures.append({
+            "url": error_url,
+            "status": "failed",
+            "error_code": error.get("error_code") or "preflight_failed",
+            "error": error.get("error") or "preflight failed",
+        })
+
+    remaining = [
+        c for c in connector_candidates
+        if extract_publisher_domain(c["url"]) not in blocked_domains
+    ]
+    dropped = len(connector_candidates) - len(remaining)
+    if dropped:
+        logger.info(
+            "Preflight: dropped %d connector candidate(s) from %d blocked domain(s); %d remain.",
+            dropped, len(blocked_domains), len(remaining),
+        )
+
+    if not remaining:
+        decision = BlockingDecision(
+            decision_id="preflight_blocked",
+            batch_id=None,
+            item_keys=tuple(),
+            description=(
+                "Preflight detected anti-bot protection (CAPTCHA / Cloudflare / login). "
+                "User must complete browser verification in Chrome, then retry the SAME "
+                "ingest_papers call with identical inputs. "
+                "DO NOT retry with save_urls or DOI links — same wall, worse state."
+            ),
+        )
+        blocking_dict = {
+            "decision_id": decision.decision_id,
+            "batch_id": decision.batch_id,
+            "item_keys": list(decision.item_keys),
+            "description": decision.description,
+            "resolved": decision.resolved,
+        }
+        return remaining, failures, blocking_dict
+
+    return remaining, failures, None

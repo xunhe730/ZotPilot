@@ -21,7 +21,7 @@ from zotpilot.state import (
 def _registered_tool_names() -> set[str]:
     tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
     registered: set[str] = set()
-    for path in tools_dir.glob("*.py"):
+    for path in tools_dir.rglob("*.py"):
         tree = ast.parse(path.read_text())
         for node in tree.body:
             if not isinstance(node, ast.FunctionDef):
@@ -305,10 +305,16 @@ class TestMCPInstructions:
         registered = _registered_tool_names()
 
         expected = {
+            "approve_ingest",
+            "approve_post_ingest",
+            "approve_post_process",
             "advanced_search",
+            "authorize_taxonomy_changes",
             "browse_library",
+            "confirm_candidates",
             "create_collection",
             "create_note",
+            "get_batch_status",
             "get_annotations",
             "get_citations",
             "get_index_stats",
@@ -316,12 +322,12 @@ class TestMCPInstructions:
             "get_paper_details",
             "get_passage_context",
             "index_library",
-            "get_ingest_status",
-            "ingest_papers",
+            "ingest_by_identifiers",
             "manage_collections",
             "manage_tags",
             "profile_library",
-            "research_session",
+            "reindex_degraded",
+            "resolve_preflight",
             "save_urls",
             "search_academic_databases",
             "search_boolean",

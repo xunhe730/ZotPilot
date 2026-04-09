@@ -1,7 +1,6 @@
 """Tests for the PDF chunker."""
-import pytest
-from zotpilot.pdf.chunker import Chunker
 from zotpilot.models import PageExtraction, SectionSpan
+from zotpilot.pdf.chunker import Chunker
 
 
 class TestChunker:
@@ -14,7 +13,9 @@ class TestChunker:
         chunker = Chunker(chunk_size=1000, overlap=100)
         text = "Short text that fits in one chunk."
         pages = [PageExtraction(page_num=1, markdown=text, char_start=0)]
-        sections = [SectionSpan(label="introduction", char_start=0, char_end=len(text), heading_text="", confidence=1.0)]
+        sections = [SectionSpan(
+            label="introduction", char_start=0, char_end=len(text), heading_text="", confidence=1.0
+        )]
 
         chunks = chunker.chunk(text, pages, sections)
         assert len(chunks) == 1

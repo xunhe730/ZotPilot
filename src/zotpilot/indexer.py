@@ -192,7 +192,10 @@ class Indexer:
             items = [i for i in items if i.item_key == item_key]
             if not items:
                 logger.error(f"No item found with key: {item_key}")
-                return {"results": [], "indexed": 0, "failed": 0, "empty": 0, "skipped": 0, "already_indexed": 0, "skipped_no_pdf": []}
+                return {
+                    "results": [], "indexed": 0, "failed": 0, "empty": 0,
+                    "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
+                }
 
         if title_pattern:
             import re

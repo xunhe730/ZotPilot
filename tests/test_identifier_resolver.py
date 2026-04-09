@@ -1,12 +1,11 @@
 """Tests for IdentifierResolver."""
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastmcp.exceptions import ToolError
 
-from zotpilot.identifier_resolver import IdentifierResolver, PaperMetadata
 from zotpilot.crossref_client import CrossRefWork
-
+from zotpilot.identifier_resolver import IdentifierResolver
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -69,7 +68,7 @@ class TestIdentifierDetection:
 
     def test_doi_org_url(self):
         resolver = self._resolver_with_mock_crossref()
-        meta = resolver.resolve("https://doi.org/10.1038/test")
+        resolver.resolve("https://doi.org/10.1038/test")
         resolver._crossref.get_by_doi.assert_called_once()
         args = resolver._crossref.get_by_doi.call_args[0][0]
         assert args == "10.1038/test"
@@ -346,8 +345,8 @@ class TestS2Resolution:
         data = {**S2_PAPER_RESPONSE, "externalIds": {"DOI": "10.1038/test", "ArXiv": None}}
         resolver = IdentifierResolver()
         resolver._crossref = MagicMock()
+
         from zotpilot.crossref_client import CrossRefWork
-        from dataclasses import field as _field
         work = CrossRefWork(
             doi="10.1038/test", title="CrossRef Title", authors=[],
             year=2023, item_type="journalArticle", abstract=None,

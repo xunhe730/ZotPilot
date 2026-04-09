@@ -468,7 +468,8 @@ class TestIngestionPreflightContracts:
         with (
             patch("zotpilot.tools.ingestion._get_config", return_value=mock_config),
             patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
-            patch("zotpilot.tools.ingestion.ingestion_bridge.get_extension_status", return_value={"extension_connected": True}),
+            patch("zotpilot.tools.ingestion.ingestion_bridge.get_extension_status",
+                  return_value={"extension_connected": True}),
             patch("zotpilot.tools.ingestion.ingestion_bridge.preflight_urls", return_value=report),
             patch("zotpilot.tools.ingestion._lookup_local_item_key_by_doi", return_value=None),
         ):

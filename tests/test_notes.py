@@ -1,11 +1,11 @@
 """Tests for get_notes (ZoteroClient method) and get_notes / create_note (MCP tools)."""
 import sqlite3
-import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from zotpilot.zotero_client import ZoteroClient
-
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -257,8 +257,8 @@ class TestCreateNoteTool:
 
     def test_create_note_no_api_key(self):
         """create_note propagates ToolError when writer is unavailable."""
-        from zotpilot.tools.write_ops import create_note
         from zotpilot.state import ToolError
+        from zotpilot.tools.write_ops import create_note
 
         with patch(
             "zotpilot.tools.write_ops._get_writer",

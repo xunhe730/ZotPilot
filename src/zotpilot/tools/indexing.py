@@ -143,6 +143,11 @@ def _get_vision_costs_impl(last_n: int = 10) -> dict:
     }
 
 
+def _check_post_ingest_gate_for_index(session_id: str | None) -> None:
+    """No-op: session-based index gate removed with legacy session machinery."""
+    return
+
+
 @mcp.tool(tags=tool_tags("extended", "indexing"))
 def index_library(
     force_reindex: Annotated[bool, Field(description="Delete and rebuild index for matching items")] = False,
@@ -153,13 +158,58 @@ def index_library(
     batch_size: Annotated[int, Field(description="Items per batch (default 20). Set 0 for all at once. Call repeatedly until has_more=false. Vision extraction is auto-disabled in batch mode; use batch_size=0 for vision.")] = 20,  # noqa: E501
     max_pages: Annotated[int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")] = None,  # noqa: E501
     include_summary: Annotated[bool, Field(description="Include extended indexing summary fields")] = False,
+    acknowledge_metadata_only: Annotated[bool, Field(description="Set True after presenting metadata_only_choice to the user and receiving consent.")] = False,  # noqa: E501
+    session_id: Annotated[
+        str | None,
+        Field(description=(
+            "Optional research session id. When called from inside a "
+            "ztp-research workflow, the SOP requires passing the active "
+            "session_id so the post-ingest-review gate can fire. CLI / "
+            "ad-hoc indexing should leave this None."
+        )),
+    ] = None,
 ) -> dict:
-    """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all."""  # noqa: E501
+    """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all.
+
+    Post-ingest gate: when called from a ztp-research workflow, pass session_id so the
+    post-ingest-review checkpoint gate can fire. Indexing before checkpoint 2 approval writes
+    unverified items into ChromaDB and burns embedding API quota (2026-04-08 incident).
+    CLI / ad-hoc indexing: leave session_id=None to bypass the gate entirely.
+    """  # noqa: E501
+    _check_post_ingest_gate_for_index(session_id)
     from dataclasses import replace as dc_replace
 
     from ..indexer import Indexer
+    from .ingestion import _batch_store
 
     _config = _get_config()
+
+    # Gate: refuse to index when an unresolved metadata_only_choice exists,
+    # unless the caller has explicitly acknowledged.
+    # Bypassed entirely in no-RAG mode (no embedder to run regardless).
+    if _config.embedding_provider != "none":
+        found = _batch_store.find_unresolved_metadata_only(None)
+        if found is not None and not acknowledge_metadata_only:
+            decision, _batch = found
+            return {
+                "status": "blocked",
+                "blocking_decision": "metadata_only_choice",
+                "batch_id": decision.batch_id,
+                "item_keys": list(decision.item_keys),
+                "description": decision.description,
+                "user_consent_required": True,
+                "resolution_parameter": "acknowledge_metadata_only",
+            }
+        if acknowledge_metadata_only and found is not None:
+            decision, batch = found
+            decision.resolved = True
+            _batch_store.put(batch)
+            logger.info(
+                "metadata_only_choice resolved via acknowledge_metadata_only=True "
+                "(batch=%s, items=%d)",
+                decision.batch_id,
+                len(decision.item_keys),
+            )
 
     errors = _config.validate()
     if errors:
@@ -310,7 +360,7 @@ def get_index_stats(
         journal_counts[key] += 1
 
     # Check for unindexed papers: items in Zotero with PDFs but not in ChromaDB
-    unindexed_papers = []
+    unindexed_papers: list[dict] = []
     unindexed_count = 0
     try:
         unindexed_papers, unindexed_count = _collect_unindexed_papers(limit=limit, offset=offset)

@@ -148,10 +148,26 @@ Requires `extended` or `all` profile. Follow `references/profiling-guide.md`.
 
 ## Error Recovery
 
+### Critical: Preflight Blocks Are Non-Negotiable
+
+When `ingest_papers` returns `error_code: "anti_bot_detected"` with
+`blocking_decisions[].decision_id == "preflight_blocked"`, this is a HARD HALT.
+Why this matters: preflight is the user-intervention gate, not a routing hint.
+On 2026-04-08, an agent that ignored this and retried via `save_urls` + DOI
+links produced a partial-success batch (3 succeeded, 6 hit the same Cloudflare
+wall five more times) and corrupted the post-ingest review state. Required
+action:
+
+1. Surface `blocking_decisions` to the user verbatim.
+2. Ask user to complete browser verification (CAPTCHA / Cloudflare / login) in Chrome.
+3. Wait for user confirmation, then retry `ingest_papers` with IDENTICAL inputs.
+4. NEVER fall back to `save_urls` or DOI links — same wall, worse state.
+
 | Error / symptom | Cause | Fix |
 |---|---|---|
 | `extension_not_connected` | Chrome not open or Connector not installed | Open Chrome, check extensions, enable ZotPilot Connector |
-| `anti_bot_detected` | Publisher blocked the save | Retry with `doi.org/{doi}`, or ask user to open page in Chrome first |
+| `anti_bot_detected` (preflight, `blocking_decisions[preflight_blocked]`) | 整批硬阻塞 — publisher/CDN blocked automated requests at preflight | STOP. Surface `blocking_decisions` to user. Wait for browser verification. Retry `ingest_papers` with identical inputs. DO NOT fall back to `save_urls` or DOI links. |
+| `anti_bot_detected` (per-URL, save phase) | Single URL blocked during save | Fallback OK: `save_urls([f"https://doi.org/{doi}"])` or ask user to open page manually in Chrome. |
 | `translator_fallback_detected` | No Zotero translator matched | Saved as web snapshot — user should verify in Zotero |
 | `pdf: "none"` + warning | PDF not attached | Metadata saved. **Acceptable** when user has no subscription or publisher is paywalled. For OA papers, if PDF is missing, retry with `doi.org/{doi}` or manually download. |
 | `pdf: "pending"` + warning | Zotero still downloading PDF | Wait 1-2 minutes, then verify with `get_paper_details` |

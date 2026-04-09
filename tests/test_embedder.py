@@ -1,9 +1,11 @@
 """Tests for embedding providers."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from zotpilot.embeddings import create_embedder
+from zotpilot.embeddings.gemini import GeminiEmbedder
 from zotpilot.embeddings.local import LocalEmbedder
-from zotpilot.embeddings.gemini import GeminiEmbedder, EmbeddingError
 
 
 class TestLocalEmbedder:
@@ -53,7 +55,7 @@ class TestCreateEmbedder:
         config.embedding_timeout = 120.0
         config.embedding_max_retries = 3
 
-        with patch("google.genai.Client") as mock_client:
+        with patch("google.genai.Client"):
             embedder = create_embedder(config)
             assert isinstance(embedder, GeminiEmbedder)
 

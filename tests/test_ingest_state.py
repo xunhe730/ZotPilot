@@ -185,22 +185,29 @@ class TestBatchState:
         # Index 0 is still pending (not updated)
         assert batch.pending_items[0].status == "pending"
 
-    def test_full_status_includes_instruction_when_final_with_saved(self):
-        """_instruction is included when batch is final with saved items."""
+    def test_full_status_includes_suggested_next_steps_when_final_with_saved(self):
+        """suggested_next_steps is returned when batch is final with saved items."""
+        from unittest.mock import patch
+
+        from zotpilot.tools.ingestion import _batch_store, get_ingest_status
         batch = self._make_batch(n=1)
         batch.update_item(0, status="saved", item_key="K1")
         batch.finalize()
-        fs = batch.full_status()
-        assert "_instruction" in fs
-        assert "post-ingest" in fs["_instruction"]
+        with patch.object(_batch_store, "get", return_value=batch):
+            fs = get_ingest_status(batch_id=batch.batch_id)
+        assert "_instruction" not in fs
+        # Post-Fix2: _instruction removed; progress is conveyed via suggested_next_steps.
+        assert "suggested_next_steps" in fs
+        assert isinstance(fs["suggested_next_steps"], list)
+        assert len(fs["suggested_next_steps"]) > 0
 
-    def test_full_status_includes_poll_instruction_when_running(self):
-        """_instruction is a poll hint when batch is still running with pending items."""
+    def test_full_status_includes_batch_id_when_running(self):
+        """batch_id is always present so callers can poll get_ingest_status."""
         batch = self._make_batch(n=2)
         batch.update_item(0, status="saved", item_key="K1")
         fs = batch.full_status()
-        assert "_instruction" in fs
-        assert "get_ingest_status" in fs["_instruction"]
+        assert "_instruction" not in fs
+        assert "batch_id" in fs
 
     def test_full_status_no_instruction_when_final_no_saved(self):
         """No _instruction when batch is final but nothing was saved (all-failed)."""

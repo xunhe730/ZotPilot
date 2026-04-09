@@ -1,11 +1,7 @@
 """Tests for ZotPilot doctor health checks."""
 import json
-import os
 import sqlite3
-from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from zotpilot.doctor import (
     CheckResult,

@@ -1,6 +1,7 @@
 """Tests for get_annotations tool."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from zotpilot.zotero_api_reader import ZoteroApiReader
 

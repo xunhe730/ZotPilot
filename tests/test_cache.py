@@ -1,6 +1,8 @@
 """Tests for VectorStore query embedding cache (P2-11)."""
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
+
 from zotpilot.vector_store import VectorStore
 
 

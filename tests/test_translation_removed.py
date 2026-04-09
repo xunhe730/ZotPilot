@@ -1,6 +1,7 @@
 """Regression tests: translation module fully removed (P2-16)."""
-import pytest
 import importlib
+
+import pytest
 
 
 class TestTranslationRemoved:
@@ -21,7 +22,7 @@ class TestTranslationRemoved:
     def test_search_papers_no_auto_translate(self):
         """Chinese query should NOT trigger translation — retriever.search called once."""
         from unittest.mock import MagicMock, patch
-        from zotpilot.models import RetrievalResult
+
 
         mock_retriever = MagicMock()
         mock_retriever.search.return_value = []
@@ -34,7 +35,7 @@ class TestTranslationRemoved:
              patch("zotpilot.tools.search._get_reranker", return_value=mock_reranker), \
              patch("zotpilot.tools.search._get_config", return_value=mock_config):
             from zotpilot.tools.search import search_papers
-            result = search_papers(query="深度学习在流体力学中的应用")
+            search_papers(query="深度学习在流体力学中的应用")
 
         # Retriever should be called exactly once (no bilingual duplicate)
         assert mock_retriever.search.call_count == 1

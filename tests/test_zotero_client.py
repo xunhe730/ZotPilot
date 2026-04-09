@@ -1,7 +1,8 @@
 """Tests for Zotero SQLite client."""
 import sqlite3
+
 import pytest
-from pathlib import Path
+
 from zotpilot.zotero_client import ZoteroClient
 
 
@@ -87,7 +88,8 @@ def zotero_db(tmp_path):
         INSERT INTO itemTags VALUES (1, 1);
 
         -- Collection
-        INSERT INTO collections (collectionID, collectionName, parentCollectionID, key) VALUES (1, 'AI Papers', NULL, 'COL001');
+        INSERT INTO collections (collectionID, collectionName, parentCollectionID, key)
+            VALUES (1, 'AI Papers', NULL, 'COL001');
         INSERT INTO collectionItems VALUES (1, 1);
 
         -- Fulltext

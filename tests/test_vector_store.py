@@ -1,9 +1,8 @@
 """Tests for ChromaDB vector store."""
+
 import pytest
-from pathlib import Path
-from unittest.mock import MagicMock
+
 from zotpilot.vector_store import VectorStore
-from zotpilot.models import Chunk
 
 
 @pytest.fixture
