@@ -53,6 +53,35 @@ class TestIngestItemState:
         # url is always included even if None
         assert "url" in d
 
+    def test_to_dict_includes_phase1_causal_fields_when_set(self):
+        item = IngestItemState(
+            index=3,
+            url="https://example.com/paper",
+            status="saved",
+            route_selected="connector_primary",
+            save_method_used="connector_primary",
+            item_discovery_status="known_item_key",
+            pdf_verification_status="pending",
+            reason_code="connector_save_pending_pdf",
+            verification_attempts=1,
+        )
+        d = item.to_dict()
+        assert d["route_selected"] == "connector_primary"
+        assert d["save_method_used"] == "connector_primary"
+        assert d["item_discovery_status"] == "known_item_key"
+        assert d["pdf_verification_status"] == "pending"
+        assert d["reason_code"] == "connector_save_pending_pdf"
+        assert d["verification_attempts"] == 1
+
+    def test_to_dict_includes_suspected_duplicate_keys_when_set(self):
+        item = IngestItemState(
+            index=4,
+            url="https://example.com/paper",
+            suspected_duplicate_keys=("K1", "K2"),
+        )
+        d = item.to_dict()
+        assert d["suspected_duplicate_keys"] == ["K1", "K2"]
+
     def test_to_dict_always_includes_index_url_status(self):
         item = IngestItemState(index=5, url=None)
         d = item.to_dict()
@@ -200,6 +229,20 @@ class TestBatchState:
         assert "suggested_next_steps" in fs
         assert isinstance(fs["suggested_next_steps"], list)
         assert len(fs["suggested_next_steps"]) > 0
+
+    def test_full_status_exposes_pending_pdf_items(self):
+        batch = self._make_batch(n=1)
+        batch.update_item(
+            0,
+            status="saved",
+            item_key="K1",
+            pdf_verification_status="pending",
+            reason_code="connector_save_pending_pdf",
+        )
+        batch.finalize()
+        fs = batch.full_status()
+        assert fs["saved_pdf_pending"] == 1
+        assert fs["pdf_pending_items"][0]["item_key"] == "K1"
 
     def test_full_status_includes_batch_id_when_running(self):
         """batch_id is always present so callers can poll get_ingest_status."""

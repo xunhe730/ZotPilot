@@ -11,6 +11,7 @@ env vars via -e flags on the command line. This briefly exposes keys in the
 process table. This is the only mechanism these CLIs provide. For higher
 security, register manually and use environment variables or secret managers.
 """
+import hashlib
 import json
 import os
 import platform
@@ -18,9 +19,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
+
+import tomllib
 
 # ---------------------------------------------------------------------------
 # Platform definitions
@@ -65,6 +69,62 @@ PLATFORMS = {
     },
 }
 
+SUPPORTED_PLATFORM_NAMES: tuple[str, ...] = ("claude-code", "codex")
+
+
+@dataclass(frozen=True)
+class PlatformRuntimeState:
+    platform: str
+    label: str
+    supported: bool
+    detected: bool
+    registered: bool
+    config_path: str | None = None
+    command: str | None = None
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = field(default_factory=dict)
+    skill_dirs: tuple[str, ...] = ()
+    skill_hash_ok: bool = False
+    registration_hash_ok: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimeState:
+    package_version: str
+    supported_targets: tuple[str, ...]
+    platforms: dict[str, PlatformRuntimeState]
+
+
+@dataclass(frozen=True)
+class DesiredRuntime:
+    command: str
+    args: tuple[str, ...]
+    env: dict[str, str]
+    targets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ChangeSet:
+    deploy_skill_platforms: tuple[str, ...]
+    register_platforms: tuple[str, ...]
+    drift_state: str
+    reasons: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class ApplyResult:
+    deployed: tuple[str, ...]
+    registered: tuple[str, ...]
+    restart_required: bool
+
+
+@dataclass(frozen=True)
+class ReconcileResult:
+    current: RuntimeState
+    desired: DesiredRuntime
+    changes: ChangeSet
+    applied: ApplyResult | None = None
+
 
 def _is_windows() -> bool:
     return platform.system() == "Windows"
@@ -72,6 +132,11 @@ def _is_windows() -> bool:
 
 def _home() -> Path:
     return Path.home()
+
+
+def _supported_targets(platforms: list[str] | None = None) -> list[str]:
+    requested = platforms or detect_platforms()
+    return [plat for plat in requested if plat in SUPPORTED_PLATFORM_NAMES]
 
 
 def _zotpilot_command(allow_fallback: bool = True) -> str:
@@ -169,6 +234,14 @@ def _mcp_config_path(plat: str) -> Path | None:
     return paths.get(plat)
 
 
+def _codex_config_path() -> Path:
+    return _home() / ".codex" / "config.toml"
+
+
+def _claude_config_path() -> Path:
+    return _home() / ".claude.json"
+
+
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
@@ -252,6 +325,71 @@ def detect_platforms() -> list[str]:
     return [p for p in PLATFORMS if p in found]
 
 
+def _inspect_codex_registration() -> tuple[bool, str | None, tuple[str, ...], dict[str, str], str | None]:
+    config_path = _codex_config_path()
+    if not config_path.exists():
+        return False, None, (), {}, str(config_path)
+    try:
+        data = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False, None, (), {}, str(config_path)
+    entry = data.get("mcp_servers", {}).get("zotpilot")
+    if not isinstance(entry, dict):
+        return False, None, (), {}, str(config_path)
+    command = entry.get("command")
+    args = tuple(str(arg) for arg in entry.get("args", []) or ())
+    env = {str(k): str(v) for k, v in (entry.get("env", {}) or {}).items()}
+    return True, command, args, env, str(config_path)
+
+
+def _inspect_claude_registration() -> tuple[bool, str | None, tuple[str, ...], dict[str, str], str | None]:
+    config_path = _claude_config_path()
+    if not config_path.exists():
+        return False, None, (), {}, str(config_path)
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, None, (), {}, str(config_path)
+    entry = data.get("mcpServers", {}).get("zotpilot")
+    if not isinstance(entry, dict):
+        return False, None, (), {}, str(config_path)
+    command = entry.get("command")
+    args = tuple(str(arg) for arg in entry.get("args", []) or ())
+    env = {str(k): str(v) for k, v in (entry.get("env", {}) or {}).items()}
+    return True, command, args, env, str(config_path)
+
+
+def _inspect_registration(plat: str) -> tuple[bool, str | None, tuple[str, ...], dict[str, str], str | None]:
+    if plat == "codex":
+        return _inspect_codex_registration()
+    if plat == "claude-code":
+        return _inspect_claude_registration()
+
+    config_path = _mcp_config_path(plat)
+    if not config_path:
+        return False, None, (), {}, None
+    expanded = config_path.expanduser()
+    if not expanded.exists():
+        return False, None, (), {}, str(expanded)
+    try:
+        text = expanded.read_text(encoding="utf-8")
+        if expanded.suffix == ".jsonc":
+            text = _strip_jsonc_comments(text)
+        data = json.loads(text) if text.strip() else {}
+    except (json.JSONDecodeError, OSError):
+        return False, None, (), {}, str(expanded)
+
+    mcp_key = "mcp" if "opencode" in str(expanded) else "mcpServers"
+    entry = data.get(mcp_key, {}).get("zotpilot")
+    if not isinstance(entry, dict):
+        return False, None, (), {}, str(expanded)
+    command = entry.get("command")
+    args = tuple(str(arg) for arg in entry.get("args", []) or ())
+    env_key = "environment" if "opencode" in str(expanded) else "env"
+    env = {str(k): str(v) for k, v in (entry.get(env_key, {}) or {}).items()}
+    return True, str(command) if command is not None else None, args, env, str(expanded)
+
+
 # ---------------------------------------------------------------------------
 # Build env dict from user-provided credentials
 # ---------------------------------------------------------------------------
@@ -272,6 +410,160 @@ def _build_env(
     if zotero_user_id:
         env["ZOTERO_USER_ID"] = zotero_user_id
     return env
+
+
+def _skill_state_for_platform(plat: str) -> tuple[tuple[str, ...], bool]:
+    info = PLATFORMS.get(plat, {})
+    skills_dir = info.get("skills_dir")
+    if not skills_dir:
+        return (), False
+    base = Path(skills_dir).expanduser()
+    skill_files = _skill_source_files()
+    if not skill_files:
+        return (), False
+    deployed: list[str] = []
+    all_ok = True
+    for source in skill_files:
+        target = base / _skill_name_for_file(source)
+        deployed.append(str(target))
+        marker = _read_version_marker(target)
+        expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        if not target.exists() or not (target / "SKILL.md").exists():
+            all_ok = False
+            continue
+        deployed_hashes = (marker or {}).get("skill_hashes", {})
+        if deployed_hashes.get(source.name) != expected_hash:
+            all_ok = False
+    return tuple(deployed), all_ok
+
+
+def inspect_current_state(
+    config_env: dict[str, str] | None = None,
+    targets: list[str] | None = None,
+) -> RuntimeState:
+    from . import __version__
+
+    target_names = tuple(_supported_targets(targets))
+    detected = set(detect_platforms())
+    desired_command = _zotpilot_command()
+    desired_args: tuple[str, ...] = ()
+    desired_env = config_env or {}
+
+    states: dict[str, PlatformRuntimeState] = {}
+    for plat, info in PLATFORMS.items():
+        registered, command, args, env, config_path = _inspect_registration(plat)
+        skill_dirs, skill_hash_ok = _skill_state_for_platform(plat)
+        supported = plat in SUPPORTED_PLATFORM_NAMES
+        registration_hash_ok = (
+            registered
+            and command == desired_command
+            and tuple(args) == desired_args
+            and all(env.get(k) == v for k, v in desired_env.items())
+        )
+        states[plat] = PlatformRuntimeState(
+            platform=plat,
+            label=str(info.get("label", plat)),
+            supported=supported,
+            detected=plat in detected,
+            registered=registered,
+            config_path=config_path,
+            command=command,
+            args=args,
+            env=env,
+            skill_dirs=skill_dirs,
+            skill_hash_ok=skill_hash_ok,
+            registration_hash_ok=registration_hash_ok,
+        )
+    return RuntimeState(
+        package_version=__version__,
+        supported_targets=target_names,
+        platforms=states,
+    )
+
+
+def plan_runtime_changes(desired: DesiredRuntime, current: RuntimeState) -> ChangeSet:
+    deploy: list[str] = []
+    register: list[str] = []
+    reasons: dict[str, list[str]] = {}
+
+    for plat in desired.targets:
+        state = current.platforms[plat]
+        platform_reasons: list[str] = []
+        if not state.skill_hash_ok:
+            deploy.append(plat)
+            platform_reasons.append("skills-out-of-sync")
+        if not state.registered:
+            register.append(plat)
+            platform_reasons.append("not-registered")
+        elif state.command != desired.command or tuple(state.args) != desired.args:
+            register.append(plat)
+            platform_reasons.append("command-drift")
+        elif any(state.env.get(k) != v for k, v in desired.env.items()):
+            register.append(plat)
+            platform_reasons.append("env-drift")
+        if platform_reasons:
+            reasons[plat] = platform_reasons
+
+    if not reasons:
+        drift_state = "clean"
+    elif len(register) < len(desired.targets) and register:
+        drift_state = "partially-registered"
+    else:
+        drift_state = "needs-sync"
+
+    return ChangeSet(
+        deploy_skill_platforms=tuple(dict.fromkeys(deploy)),
+        register_platforms=tuple(dict.fromkeys(register)),
+        drift_state=drift_state,
+        reasons=reasons,
+    )
+
+
+def apply_runtime_changes(
+    desired: DesiredRuntime,
+    changes: ChangeSet,
+) -> ApplyResult:
+    deployed: list[str] = []
+    registered: list[str] = []
+
+    if changes.deploy_skill_platforms:
+        deploy_results = deploy_skills(platforms=list(changes.deploy_skill_platforms))
+        deployed = [plat for plat, ok in deploy_results.items() if ok]
+
+    for plat in changes.register_platforms:
+        fn = _REGISTER_FNS.get(plat)
+        if fn is None:
+            continue
+        if fn(dict(desired.env)):
+            registered.append(plat)
+
+    return ApplyResult(
+        deployed=tuple(deployed),
+        registered=tuple(registered),
+        restart_required=bool(deployed or registered),
+    )
+
+
+def reconcile_runtime(
+    *,
+    platforms: list[str] | None = None,
+    gemini_key: str | None = None,
+    dashscope_key: str | None = None,
+    zotero_api_key: str | None = None,
+    zotero_user_id: str | None = None,
+    apply: bool = False,
+) -> ReconcileResult:
+    desired_env = _build_env(gemini_key, dashscope_key, zotero_api_key, zotero_user_id)
+    current = inspect_current_state(desired_env, platforms)
+    desired = DesiredRuntime(
+        command=_zotpilot_command(),
+        args=(),
+        env=desired_env,
+        targets=current.supported_targets,
+    )
+    changes = plan_runtime_changes(desired, current)
+    applied = apply_runtime_changes(desired, changes) if apply else None
+    return ReconcileResult(current=current, desired=desired, changes=changes, applied=applied)
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +693,10 @@ def _write_version_marker(target: Path, version: str, skill_files: list[Path]) -
         "version": version,
         "deployed_at": datetime.now(timezone.utc).isoformat(),
         "skills": [path.name for path in skill_files],
+        "skill_hashes": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in skill_files
+        },
     }
     marker.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -434,7 +730,7 @@ def _migrate_legacy_bundle(skills_dir: Path) -> None:
     # Single SKILL.md inside zotpilot/ → already flat layout, keep it
 
 
-def _should_skip_deploy(target: Path, version: str) -> tuple[bool, str]:
+def _should_skip_deploy(target: Path, version: str, skill_files: list[Path]) -> tuple[bool, str]:
     if target.is_symlink():
         # Stale symlink from editable install — remove and redeploy
         target.unlink()
@@ -445,6 +741,12 @@ def _should_skip_deploy(target: Path, version: str) -> tuple[bool, str]:
     target_version = str(marker.get("version", "")).strip()
     if not target_version:
         return False, "deploy"
+    expected_hashes = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in skill_files
+    }
+    if marker.get("skill_hashes") != expected_hashes:
+        return False, "refresh-content"
     if target_version == version:
         return True, "up-to-date"
     if target_version > version:
@@ -494,7 +796,7 @@ def deploy_skills(platforms: list[str] | None = None) -> dict[str, bool]:
         platform_ok = True
 
         for target, source_files in targets:
-            skip, reason = _should_skip_deploy(target, __version__)
+            skip, reason = _should_skip_deploy(target, __version__, source_files)
             if skip:
                 print(f"  {info['label']}: {target.name} {reason}")
                 platform_ok = platform_ok and (reason == "up-to-date")
@@ -723,10 +1025,7 @@ def register(
     zotero_api_key: str | None = None,
     zotero_user_id: str | None = None,
 ) -> dict[str, bool]:
-    """Register ZotPilot MCP server on specified (or auto-detected) platforms.
-
-    Returns dict of {platform: success}.
-    """
+    """Compatibility wrapper over runtime reconciliation."""
     # Auto-fill from config file if not passed as CLI args
     if not all([gemini_key, dashscope_key, zotero_api_key, zotero_user_id]):
         try:
@@ -741,47 +1040,39 @@ def register(
         except Exception:
             pass
 
-    env = _build_env(gemini_key, dashscope_key, zotero_api_key, zotero_user_id)
+    supported_targets = _supported_targets(platforms)
+    if not supported_targets:
+        if platforms:
+            unsupported = [plat for plat in platforms if plat not in SUPPORTED_PLATFORM_NAMES]
+            if unsupported:
+                print(
+                    "Requested platforms are unsupported in v0.5.0: "
+                    + ", ".join(unsupported),
+                    file=sys.stderr,
+                )
+        print("No supported AI agent platforms detected for v0.5.0.", file=sys.stderr)
+        print(f"Supported: {', '.join(SUPPORTED_PLATFORM_NAMES)}", file=sys.stderr)
+        return {}
 
-    if not platforms:
-        platforms = detect_platforms()
-        if not platforms:
-            print("No supported AI agent platforms detected.", file=sys.stderr)
-            print("Specify one with: --platform <name>", file=sys.stderr)
-            print(f"Supported: {', '.join(PLATFORMS.keys())}", file=sys.stderr)
-            return {}
-        print(f"Detected platforms: {', '.join(PLATFORMS[p]['label'] for p in platforms)}")
-
-    # Deploy skill files first — independent of MCP registration outcome.
-    # Skills and MCP are orthogonal: a user can still benefit from the skill
-    # prompts even if the MCP add command fails (e.g., CLI syntax drift).
-    print("Deploying skill files...")
-    try:
-        deploy_skills(platforms=[p for p in platforms if PLATFORMS.get(p, {}).get("skills_dir")])
-    except FileNotFoundError as exc:
-        print(f"  WARNING: skill deployment skipped — {exc}", file=sys.stderr)
-
-    # Register MCP server
-    print("Registering MCP server...")
-    results = {}
-    for plat in platforms:
-        if plat not in _REGISTER_FNS:
-            print(f"  Unknown platform: {plat}", file=sys.stderr)
-            results[plat] = False
-            continue
-
-        label = PLATFORMS[plat]["label"]
-        print(f"  Registering on {label}...", end=" ")
-        ok = _REGISTER_FNS[plat](env)
-        results[plat] = ok
-        if ok:
-            print("OK")
-            config_path = _mcp_config_path(plat)
-            if config_path:
-                print(f"    Config: {config_path}")
-        else:
-            print("FAILED")
-            _print_manual_fallback(plat, env)
+    print(f"Reconciling runtime for: {', '.join(PLATFORMS[p]['label'] for p in supported_targets)}")
+    result = reconcile_runtime(
+        platforms=supported_targets,
+        gemini_key=gemini_key,
+        dashscope_key=dashscope_key,
+        zotero_api_key=zotero_api_key,
+        zotero_user_id=zotero_user_id,
+        apply=True,
+    )
+    results = {
+        plat: (
+            plat not in result.changes.deploy_skill_platforms
+            or plat in result.applied.deployed
+        ) and (
+            plat not in result.changes.register_platforms
+            or plat in result.applied.registered
+        )
+        for plat in supported_targets
+    }
 
     # Summary
     succeeded = [p for p, ok in results.items() if ok]
@@ -833,32 +1124,13 @@ def check_registered() -> dict:
     Returns {platform_name: {"registered": bool, "config_path": str|None}}.
     Best-effort: config paths may change across platform versions.
     """
-    result = {}
-    for plat in PLATFORMS:
-        info = {"registered": False, "config_path": None}
-        binary = PLATFORMS[plat].get("binary")
-
-        # CLI-based check (some CLIs output to stderr)
-        if plat in ("claude-code", "codex", "gemini") and binary and shutil.which(binary):
-            r = subprocess.run(
-                [binary, "mcp", "list"], capture_output=True, text=True
-            )
-            info["registered"] = "zotpilot" in (r.stdout + r.stderr)
-        else:
-            # Config-file check
-            config_path = _mcp_config_path(plat)
-            if config_path:
-                expanded = config_path.expanduser()
-                info["config_path"] = str(expanded)
-                if expanded.exists():
-                    try:
-                        text = expanded.read_text(encoding="utf-8")
-                        if expanded.suffix == ".jsonc":
-                            text = _strip_jsonc_comments(text)
-                        data = json.loads(text) if text.strip() else {}
-                        mcp_key = "mcp" if "opencode" in str(expanded) else "mcpServers"
-                        info["registered"] = "zotpilot" in data.get(mcp_key, {})
-                    except (json.JSONDecodeError, OSError):
-                        pass
-        result[plat] = info
-    return result
+    state = inspect_current_state()
+    return {
+        plat: {
+            "registered": platform_state.registered,
+            "config_path": platform_state.config_path,
+            "supported": platform_state.supported,
+            "command": platform_state.command,
+        }
+        for plat, platform_state in state.platforms.items()
+    }

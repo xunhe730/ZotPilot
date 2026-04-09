@@ -105,3 +105,106 @@ def test_reindex_degraded_rejects_ineligible_items(monkeypatch, tmp_path: Path):
 
     with pytest.raises(Exception):
         rw.reindex_degraded(batch.batch_id, ["I1"], "manual_retry")
+
+
+def test_get_batch_status_refreshes_pending_pdf_from_legacy_engine(monkeypatch, tmp_path: Path):
+    from zotpilot.tools import research_workflow as rw
+    from zotpilot.workflow import BatchStore, Item, new_batch
+
+    rw._batch_store = BatchStore(tmp_path / "batches")
+    batch = new_batch(
+        library_id="1",
+        query="direct",
+        phase="post_ingest_verified",
+        items=(
+            Item(
+                identifier="10.1000/a",
+                doc_id="10.1000/a",
+                source_url="https://example.com/a",
+                status="saved",
+                zotero_item_key="I1",
+                pdf_verification_status="pending",
+                reason_code="connector_save_pending_pdf",
+            ),
+        ),
+    )
+    batch = batch.with_engine_batch_id("eng_1")
+    rw._batch_store.save(batch)
+
+    monkeypatch.setattr(
+        rw.ingestion,
+        "get_ingest_status_impl",
+        lambda batch_id: {
+            "batch_id": batch_id,
+            "is_final": True,
+            "results": [
+                {
+                    "index": 0,
+                    "status": "saved",
+                    "item_key": "I1",
+                    "has_pdf": True,
+                    "pdf_verification_status": "present",
+                    "save_method_used": "connector_primary",
+                    "route_selected": "connector_primary",
+                }
+            ],
+        },
+    )
+
+    status = rw.get_batch_status(batch.batch_id)
+    assert status["phase"] == "post_ingest_verified"
+    assert status["items"][0]["pdf_verification_status"] == "present"
+    assert status["items"][0]["pdf_present"] is True
+
+    persisted = rw._batch_store.load(batch.batch_id)
+    assert persisted is not None
+    assert persisted.phase == "post_ingest_verified"
+    assert persisted.items[0].pdf_verification_status == "present"
+    assert persisted.items[0].reason_code is None
+
+
+def test_get_batch_status_keeps_ingesting_until_legacy_batch_is_final(monkeypatch, tmp_path: Path):
+    from zotpilot.tools import research_workflow as rw
+    from zotpilot.workflow import BatchStore, Item, new_batch
+
+    rw._batch_store = BatchStore(tmp_path / "batches")
+    batch = new_batch(
+        library_id="1",
+        query="direct",
+        phase="ingesting",
+        items=(
+            Item(
+                identifier="10.1000/a",
+                doc_id="10.1000/a",
+                source_url="https://example.com/a",
+                status="pending",
+            ),
+        ),
+    )
+    batch = batch.with_engine_batch_id("eng_1")
+    rw._batch_store.save(batch)
+
+    monkeypatch.setattr(
+        rw.ingestion,
+        "get_ingest_status_impl",
+        lambda batch_id: {
+            "batch_id": batch_id,
+            "is_final": False,
+            "results": [
+                {
+                    "index": 0,
+                    "status": "saved",
+                    "item_key": "I1",
+                    "save_method_used": "connector_primary",
+                    "route_selected": "connector_primary",
+                }
+            ],
+        },
+    )
+
+    status = rw.get_batch_status(batch.batch_id)
+    assert status["phase"] == "ingesting"
+
+    persisted = rw._batch_store.load(batch.batch_id)
+    assert persisted is not None
+    assert persisted.phase == "ingesting"

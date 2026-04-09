@@ -239,6 +239,7 @@ class TestIngestPapers:
         assert result["failed"] == 0
         assert len(result["pending_items"]) == 1
         assert result["pending_items"][0]["ingest_method"] == "connector"
+        assert result["pending_items"][0]["route_selected"] == "connector_primary"
         assert result["pending_items"][0]["url"] == "https://publisher.example/article"
 
     def test_doi_only_falls_back_to_api_when_resolution_fails(self):
@@ -252,6 +253,7 @@ class TestIngestPapers:
         assert result["failed"] == 0
         assert len(result["pending_items"]) == 1
         assert result["pending_items"][0]["ingest_method"] == "api"
+        assert result["pending_items"][0]["route_selected"] == "api_primary"
         assert result["pending_items"][0]["url"] is None
 
     def test_arxiv_id_has_priority(self):
@@ -349,6 +351,39 @@ class TestIngestPapers:
         assert result["duplicates"] == 1
         writer_mock = get_writer_mock.return_value
         writer_mock.add_to_collection.assert_called_once_with("EXISTING1", "COL1")
+
+    def test_title_collision_surfaces_suspected_duplicate_without_blocking(self):
+        papers = [{"title": "Attention Is All You Need", "landing_page_url": "https://publisher.example/paper"}]
+        with (
+            patch("zotpilot.tools.ingestion._get_config", return_value=_make_config()),
+            patch(
+                "zotpilot.tools.ingestion._lookup_suspected_local_duplicates_by_title",
+                return_value=[{"item_key": "EXISTING1", "title": "Attention Is All You Need"}],
+            ),
+            patch("zotpilot.tools.ingestion._get_writer"),
+            patch("zotpilot.tools.ingestion.BridgeServer.is_running", return_value=True),
+            patch(
+                "zotpilot.tools.ingestion.ingestion_bridge.wait_for_extension",
+                return_value={"extension_connected": True},
+            ),
+            patch(
+                "zotpilot.tools.ingestion.save_urls",
+                return_value={
+                    "results": [
+                        {
+                            "success": True,
+                            "url": "https://publisher.example/paper",
+                            "item_key": "ITEM1",
+                            "title": "Paper",
+                        },
+                    ],
+                },
+            ),
+        ):
+            result = ingest_papers(papers)
+
+        assert result["duplicates"] == 0
+        assert result["pending_items"][0]["suspected_duplicate_keys"] == ["EXISTING1"]
 
     def test_preflight_uses_config_flag(self):
         papers = [{"landing_page_url": "https://publisher.example/paper"}]
@@ -474,6 +509,7 @@ class TestIngestPapers:
         status = get_ingest_status(batch_id)
         assert status["failed"] == 1
         assert status["results"][0]["error"] == "bridge save failed"
+        assert status["results"][0]["reason_code"] == "connector_save_failed"
 
     def test_missing_batch_result_marks_unmatched_url_failed(self):
         papers = [
@@ -572,6 +608,175 @@ class TestGetIngestStatus:
         assert result["is_final"] is True
         assert result["saved"] == 1
         assert result["results"][0]["item_key"] == "ITEM1"
+
+    def test_refreshes_pending_pdf_to_present(self):
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        items = [
+            IngestItemState(
+                index=0,
+                url="https://example.com",
+                title="T",
+                status="saved",
+                item_key="ITEM1",
+                pdf_verification_status="pending",
+                reason_code="connector_save_pending_pdf",
+                verification_attempts=1,
+                verification_deadline_at=time.monotonic() + 30,
+            )
+        ]
+        batch = BatchState(total=1, collection_used="INBOX1", pending_items=items)
+        batch.finalize()
+        _batch_store.put(batch)
+        writer = MagicMock()
+        writer.check_has_pdf.return_value = True
+        with patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            result = get_ingest_status(batch.batch_id)
+        assert result["results"][0]["pdf_verification_status"] == "present"
+        assert result["results"][0]["has_pdf"] is True
+        assert result["results"][0].get("reason_code") is None
+
+    def test_refreshes_pending_pdf_to_missing_after_timeout(self):
+        from zotpilot.tools.ingest_state import BatchState, IngestItemState
+
+        items = [
+            IngestItemState(
+                index=0,
+                url="https://example.com",
+                title="T",
+                status="saved",
+                item_key="ITEM1",
+                pdf_verification_status="pending",
+                reason_code="connector_save_pending_pdf",
+                verification_attempts=1,
+                verification_deadline_at=time.monotonic() - 1,
+            )
+        ]
+        batch = BatchState(total=1, collection_used="INBOX1", pending_items=items)
+        batch.finalize()
+        _batch_store.put(batch)
+        writer = MagicMock()
+        writer.check_has_pdf.return_value = False
+        with patch("zotpilot.tools.ingestion._get_writer", return_value=writer):
+            result = get_ingest_status(batch.batch_id)
+        assert result["results"][0]["pdf_verification_status"] == "missing"
+        assert result["results"][0]["has_pdf"] is False
+        assert result["results"][0]["reason_code"] == "verification_timeout"
+
+
+class TestSaveViaApiPhase1:
+    def test_api_primary_without_attach_reports_metadata_only_reason(self):
+        from zotpilot.tools.ingestion import _save_via_api
+
+        writer = MagicMock()
+        writer.create_item_from_metadata.return_value = {
+            "successful": {"0": {"key": "ITEM1", "data": {"key": "ITEM1"}}}
+        }
+        writer.try_attach_oa_pdf.return_value = "not_found"
+
+        resolver = MagicMock()
+        metadata = MagicMock()
+        metadata.abstract = "abstract"
+        metadata.doi = "10.1000/test"
+        metadata.oa_url = None
+        metadata.arxiv_id = None
+        metadata.title = "Paper"
+        resolver.resolve.return_value = metadata
+
+        batch = MagicMock()
+        with patch("zotpilot.state._get_resolver", return_value=resolver):
+            _save_via_api(
+                {
+                    "paper": {"doi": "10.1000/test"},
+                    "_index": 0,
+                    "ingest_method": "api",
+                },
+                resolved_collection_key=None,
+                tags=None,
+                batch=batch,
+                writer=writer,
+            )
+
+        batch.update_item.assert_called()
+        kwargs = batch.update_item.call_args.kwargs
+        assert kwargs["save_method_used"] == "api_primary"
+        assert kwargs["pdf_verification_status"] == "missing"
+        assert kwargs["reason_code"] == "oa_pdf_not_found"
+
+    def test_api_attach_failure_stays_pending_for_verification_window(self):
+        from zotpilot.tools.ingestion import _save_via_api
+
+        writer = MagicMock()
+        writer.create_item_from_metadata.return_value = {
+            "successful": {"0": {"key": "ITEM1", "data": {"key": "ITEM1"}}}
+        }
+        writer.try_attach_oa_pdf.return_value = "attach_failed"
+
+        resolver = MagicMock()
+        metadata = MagicMock()
+        metadata.abstract = "abstract"
+        metadata.doi = "10.1000/test"
+        metadata.oa_url = None
+        metadata.arxiv_id = None
+        metadata.title = "Paper"
+        resolver.resolve.return_value = metadata
+
+        batch = MagicMock()
+        with patch("zotpilot.state._get_resolver", return_value=resolver):
+            _save_via_api(
+                {
+                    "paper": {"doi": "10.1000/test"},
+                    "_index": 0,
+                    "ingest_method": "api",
+                },
+                resolved_collection_key=None,
+                tags=None,
+                batch=batch,
+                writer=writer,
+            )
+
+        kwargs = batch.update_item.call_args.kwargs
+        assert kwargs["save_method_used"] == "api_primary"
+        assert kwargs["pdf_verification_status"] == "pending"
+        assert kwargs["has_pdf"] is None
+        assert kwargs["reason_code"] == "pdf_attach_failed"
+
+    def test_connector_fallback_attach_failure_warning_matches_pending_state(self):
+        from zotpilot.tools.ingestion import _save_via_api
+
+        writer = MagicMock()
+        writer.create_item_from_metadata.return_value = {
+            "successful": {"0": {"key": "ITEM1", "data": {"key": "ITEM1"}}}
+        }
+        writer.try_attach_oa_pdf.return_value = "attach_failed"
+
+        resolver = MagicMock()
+        metadata = MagicMock()
+        metadata.abstract = "abstract"
+        metadata.doi = "10.1000/test"
+        metadata.oa_url = None
+        metadata.arxiv_id = None
+        metadata.title = "Paper"
+        resolver.resolve.return_value = metadata
+
+        batch = MagicMock()
+        with patch("zotpilot.state._get_resolver", return_value=resolver):
+            _save_via_api(
+                {
+                    "paper": {"doi": "10.1000/test"},
+                    "_index": 0,
+                    "ingest_method": "api",
+                    "_connector_error": "bridge save failed",
+                },
+                resolved_collection_key=None,
+                tags=None,
+                batch=batch,
+                writer=writer,
+            )
+
+        kwargs = batch.update_item.call_args.kwargs
+        assert kwargs["pdf_verification_status"] == "pending"
+        assert "pending" in kwargs["warning"].lower()
 
 
 class TestIngestPapersAsync:

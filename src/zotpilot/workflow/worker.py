@@ -109,11 +109,24 @@ def _translate_engine_item(item: Item, result: dict) -> Item:
     status = result.get("status")
     item_key = result.get("item_key")
     has_pdf = result.get("has_pdf")
+    pdf_verification_status = result.get("pdf_verification_status")
     error = result.get("error") or ""
+    common_updates = {
+        "route_selected": result.get("route_selected") or item.route_selected,
+        "save_method_used": result.get("save_method_used") or item.save_method_used,
+        "item_discovery_status": result.get("item_discovery_status") or item.item_discovery_status,
+        "pdf_verification_status": pdf_verification_status or item.pdf_verification_status,
+        "reason_code": result.get("reason_code") or item.reason_code,
+        "suspected_duplicate_keys": tuple(result.get("suspected_duplicate_keys") or item.suspected_duplicate_keys),
+    }
     if status in {"duplicate", "duplicate_in_batch"}:
-        return item.with_updates(status="duplicate", zotero_item_key=item_key or item.zotero_item_key)
+        return item.with_updates(
+            status="duplicate",
+            zotero_item_key=item_key or item.zotero_item_key,
+            **common_updates,
+        )
     if status == "saved":
-        if has_pdf is False:
+        if pdf_verification_status == "missing" or has_pdf is False:
             degrade_reasons = tuple(dict.fromkeys((*item.degradation_reasons, "no_pdf")))
             return item.with_updates(
                 status="degraded",
@@ -122,13 +135,15 @@ def _translate_engine_item(item: Item, result: dict) -> Item:
                 zotero_item_key=item_key or item.zotero_item_key,
                 routing_method=result.get("ingest_method") or item.routing_method,
                 degradation_reasons=degrade_reasons,
+                **common_updates,
             )
         return item.with_updates(
             status="saved",
-            pdf_present=True if has_pdf is True else item.pdf_present,
+            pdf_present=True if (pdf_verification_status == "present" or has_pdf is True) else item.pdf_present,
             metadata_complete=True,
             zotero_item_key=item_key or item.zotero_item_key,
             routing_method=result.get("ingest_method") or item.routing_method,
+            **common_updates,
         )
     fail_reasons: list[str] = []
     if "anti_bot" in error:
@@ -144,6 +159,7 @@ def _translate_engine_item(item: Item, result: dict) -> Item:
         zotero_item_key=item_key or item.zotero_item_key,
         routing_method=result.get("ingest_method") or item.routing_method,
         degradation_reasons=tuple(dict.fromkeys((*item.degradation_reasons, *fail_reasons))),
+        **common_updates,
     )
 
 
@@ -202,11 +218,20 @@ def _index_item(item: Item) -> Item:
         while has_more:
             result = index_fn(item_key=item.zotero_item_key, batch_size=0)
             has_more = result.get("has_more")
+        recovered_reasons = {
+            reason for reason in item.degradation_reasons if reason in REINDEX_ELIGIBLE_REASONS
+        }
+        remaining_reasons = tuple(
+            reason for reason in item.degradation_reasons if reason not in REINDEX_ELIGIBLE_REASONS
+        )
         return item.with_updates(
             indexed=True,
-            tagged=True,
-            classified=True,
-            status="saved" if item.status == "degraded" else item.status,
+            status=(
+                "saved"
+                if item.status == "degraded" and recovered_reasons and not remaining_reasons
+                else item.status
+            ),
+            degradation_reasons=remaining_reasons if recovered_reasons else item.degradation_reasons,
         )
     except Exception:
         logger.exception("index failed for %s", item.zotero_item_key)
@@ -216,6 +241,35 @@ def _index_item(item: Item) -> Item:
             indexed=False,
             degradation_reasons=reasons,
         )
+
+
+def _has_zotpilot_note(notes: list[dict]) -> bool:
+    for note in notes:
+        content = str(note.get("content") or "")
+        title = str(note.get("title") or "")
+        if "[ZotPilot]" in content or title.startswith("[ZotPilot]"):
+            return True
+    return False
+
+
+def _sync_item_post_process_truth(item: Item, *, batch: Batch) -> Item:
+    if not item.zotero_item_key:
+        return item
+
+    zotero = _get_zotero()
+    try:
+        notes = zotero.get_notes(item_key=item.zotero_item_key, limit=50)
+    except Exception:
+        logger.exception("sqlite note lookup failed for %s", item.zotero_item_key)
+        notes = []
+
+    noted = _has_zotpilot_note(notes)
+
+    return item.with_updates(
+        noted=noted,
+        tagged=item.tagged,
+        classified=item.classified,
+    )
 
 
 def _run_post_process_worker(store: BatchStore, batch_id: str) -> None:
@@ -233,7 +287,8 @@ def _run_post_process_worker(store: BatchStore, batch_id: str) -> None:
         processed = []
         for item in batch.items:
             if item.status in {"saved", "degraded"}:
-                processed.append(_index_item(item))
+                processed_item = _index_item(item)
+                processed.append(_sync_item_post_process_truth(processed_item, batch=batch))
             else:
                 processed.append(item)
         batch = batch.with_items(processed).transition_to("post_process_verified")

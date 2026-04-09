@@ -9,6 +9,7 @@ import os
 import tempfile
 
 os.environ["ZOTPILOT_SESSIONS_DIR"] = tempfile.mkdtemp(prefix="zotpilot-test-sessions-")
+os.environ["ZOTPILOT_BATCHES_DIR"] = tempfile.mkdtemp(prefix="zotpilot-test-batches-")
 
 from unittest.mock import MagicMock
 

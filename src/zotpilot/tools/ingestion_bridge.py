@@ -17,6 +17,7 @@ import httpx as _httpx
 
 DISCOVERY_BACKOFF_DELAYS = [2.0, 4.0, 8.0, 16.0, 32.0]
 ITEM_DISCOVERY_WINDOW_S = 120
+PDF_VERIFICATION_WINDOW_S = 15.0
 SAVE_RESULT_POLL_TIMEOUT_S = 150.0
 SAVE_RESULT_POLL_OVERALL_TIMEOUT_S = 600.0
 SAVE_RESULT_POLL_PER_URL_BUDGET_S = 75.0
@@ -1121,7 +1122,7 @@ def save_via_api(
 
         try:
             with writer_lock:
-                writer.try_attach_oa_pdf(
+                attach_status = writer.try_attach_oa_pdf(
                     item_key,
                     doi=metadata.doi,
                     oa_url=paper.get("oa_url") or metadata.oa_url,
@@ -1129,14 +1130,46 @@ def save_via_api(
                 )
         except Exception as attach_exc:
             logger.debug("PDF attach best-effort failed for %s: %s", item_key, attach_exc)
+            attach_status = "attach_failed"
 
         connector_error = candidate.get("_connector_error")
         warning = None
+
+        save_method_used = "connector_to_api_fallback" if connector_error else "api_primary"
+        item_discovery_status = "known_item_key"
+        reason_code = None
+        pdf_verification_status = None
+        has_pdf: bool | None = None
+        if attach_status == "attached":
+            pdf_verification_status = "present"
+            has_pdf = True
+        elif attach_status == "attach_failed":
+            pdf_verification_status = "pending"
+            has_pdf = None
+            reason_code = "pdf_attach_failed"
+        else:
+            pdf_verification_status = "missing"
+            has_pdf = False
+            if connector_error:
+                reason_code = "api_metadata_only"
+            else:
+                reason_code = "oa_pdf_not_found"
+
         if connector_error:
-            warning = (
-                f"Connector failed ({connector_error}); saved via API (metadata only, no PDF). "
-                "Check Chrome/Connector if you need PDF."
-            )
+            if pdf_verification_status == "present":
+                warning = (
+                    f"Connector failed ({connector_error}); saved via API and attached an OA PDF."
+                )
+            elif pdf_verification_status == "pending":
+                warning = (
+                    f"Connector failed ({connector_error}); saved via API, but PDF verification is still pending. "
+                    "Check Chrome/Connector if you need browser-backed capture."
+                )
+            else:
+                warning = (
+                    f"Connector failed ({connector_error}); saved via API (metadata only, no PDF). "
+                    "Check Chrome/Connector if you need PDF."
+                )
 
         batch.update_item(
             idx,
@@ -1146,6 +1179,11 @@ def save_via_api(
             routing_status="routed_by_api",
             ingest_method="api",
             warning=warning,
+            save_method_used=save_method_used,
+            item_discovery_status=item_discovery_status,
+            pdf_verification_status=pdf_verification_status,
+            has_pdf=has_pdf,
+            reason_code=reason_code,
         )
         if item_key:
             _cleanup_publisher_tags(item_key, landing_page_url or "", writer, logger)
@@ -1210,15 +1248,20 @@ def run_save_worker(
                     result_title = result.get("title") or (
                         candidate.get("paper", {}).get("title") if candidate else None
                     )
+                    item_discovery_status = "known_item_key" if item_key else None
                     if not item_key:
                         discovered = _discover_fn(url or "", result_title)
-                        if not discovered:
+                        if discovered:
+                            item_discovery_status = "discovered_local"
+                        else:
                             if _discover_web_fn is not None:
                                 discovered = _discover_web_fn(url or "", result_title)
+                                item_discovery_status = "discovered_web" if discovered else None
                             else:
                                 discovered = discover_item_via_web_api(
                                     url or "", result_title, get_writer_fn(), writer_lock
                                 )
+                                item_discovery_status = "discovered_web" if discovered else None
                         if discovered:
                             item_key = discovered
                         else:
@@ -1229,6 +1272,9 @@ def run_save_worker(
                                     "Connector reported success but item not found in Zotero. "
                                     "Save may have silently failed."
                                 ),
+                                save_method_used="connector_primary",
+                                item_discovery_status="not_found",
+                                reason_code="connector_item_not_found",
                             )
                             continue
                     batch.update_item(
@@ -1238,12 +1284,16 @@ def run_save_worker(
                         title=result_title,
                         warning=result.get("warning"),
                         routing_status=result.get("routing_status"),
+                        save_method_used="connector_primary",
+                        item_discovery_status=item_discovery_status or "known_item_key",
                     )
                 else:
                     batch.update_item(
                         idx,
                         status="failed",
                         error=result.get("error") or result.get("error_message") or "bridge save failed",
+                        save_method_used="connector_primary",
+                        reason_code="connector_save_failed",
                     )
 
             for url in chunk:
@@ -1254,7 +1304,13 @@ def run_save_worker(
                 if top_level_failed or url not in returned_urls:
                     for item in batch.pending_items:
                         if item.index == idx and item.status == "pending":
-                            batch.update_item(idx, status="failed", error="bridge save failed")
+                            batch.update_item(
+                                idx,
+                                status="failed",
+                                error="bridge save failed",
+                                save_method_used="connector_primary",
+                                reason_code="connector_save_failed",
+                            )
 
         # --- Phase 2: API fallback for failed connector items ---
         connector_api_retries: list[dict] = []
@@ -1282,6 +1338,7 @@ def run_save_worker(
                             "Check Chrome/Connector if you need PDF."
                         ),
                         error=None,
+                        save_method_used="connector_to_api_fallback",
                     )
                     break
 
@@ -1343,6 +1400,7 @@ def run_save_worker(
                         batch.update_item(
                             item.index, status="saved", item_key=item.item_key,
                             warning=None, routing_status="routed_by_reconciliation_local",
+                            item_discovery_status="discovered_local",
                         )
                     else:
                         if writer is None:
@@ -1352,6 +1410,7 @@ def run_save_worker(
                         batch.update_item(
                             item.index, status="saved", item_key=item.item_key,
                             warning=None, routing_status="routed_by_reconciliation_web",
+                            item_discovery_status="discovered_web",
                         )
                     if writer is None:
                         writer = get_writer_fn()
@@ -1381,14 +1440,61 @@ def run_save_worker(
                         try:
                             has_pdf = writer.check_has_pdf(item.item_key)
                             existing_warning = item.warning or ""
-                            new_warning = (
-                                "metadata_only: no PDF attachment — institutional access may be required"
-                                if not has_pdf else existing_warning or None
-                            )
-                            batch.update_item(
-                                item.index, status=item.status, has_pdf=has_pdf,
-                                warning=new_warning if new_warning else existing_warning,
-                            )
+                            if has_pdf:
+                                batch.update_item(
+                                    item.index,
+                                    status=item.status,
+                                    has_pdf=True,
+                                    pdf_verification_status="present",
+                                    reason_code=None,
+                                    verification_attempts=1,
+                                    warning=existing_warning or None,
+                                )
+                            else:
+                                if item.reason_code == "pdf_attach_failed":
+                                    deadline = item.verification_deadline_at or (
+                                        time.monotonic() + PDF_VERIFICATION_WINDOW_S
+                                    )
+                                    batch.update_item(
+                                        item.index,
+                                        status=item.status,
+                                        has_pdf=None,
+                                        pdf_verification_status="pending",
+                                        reason_code="pdf_attach_failed",
+                                        verification_attempts=1,
+                                        verification_deadline_at=deadline,
+                                        warning=existing_warning or None,
+                                    )
+                                    continue
+                                if item.save_method_used in {"api_primary", "connector_to_api_fallback"}:
+                                    batch.update_item(
+                                        item.index,
+                                        status=item.status,
+                                        has_pdf=False,
+                                        pdf_verification_status=item.pdf_verification_status or "missing",
+                                        reason_code=item.reason_code or "api_metadata_only",
+                                        verification_attempts=1,
+                                        warning=existing_warning or None,
+                                    )
+                                    continue
+                                deadline = time.monotonic() + PDF_VERIFICATION_WINDOW_S
+                                batch.update_item(
+                                    item.index,
+                                    status=item.status,
+                                    has_pdf=None,
+                                    pdf_verification_status="pending",
+                                    reason_code=(
+                                        item.reason_code
+                                        or (
+                                            "api_metadata_only"
+                                            if item.save_method_used in {"api_primary", "connector_to_api_fallback"}
+                                            else "connector_save_pending_pdf"
+                                        )
+                                    ),
+                                    verification_attempts=1,
+                                    verification_deadline_at=deadline,
+                                    warning=existing_warning or None,
+                                )
                         except Exception as exc:
                             logger.warning("check_has_pdf failed for %s: %s", item.item_key, exc)
 

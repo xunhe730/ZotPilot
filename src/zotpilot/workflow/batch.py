@@ -151,10 +151,17 @@ class Item:
     pdf_present: bool | None = None
     metadata_complete: bool | None = None
     indexed: bool = False
+    noted: bool = False
     tagged: bool = False
     classified: bool = False
     zotero_item_key: str | None = None
     routing_method: Literal["connector", "api"] | None = None
+    route_selected: str | None = None
+    save_method_used: str | None = None
+    item_discovery_status: str | None = None
+    pdf_verification_status: str | None = None
+    reason_code: str | None = None
+    suspected_duplicate_keys: tuple[str, ...] = ()
     degradation_reasons: tuple[str, ...] = ()
     retry_attempts: int = 0
 
@@ -179,10 +186,17 @@ class Item:
             "pdf_present": self.pdf_present,
             "metadata_complete": self.metadata_complete,
             "indexed": self.indexed,
+            "noted": self.noted,
             "tagged": self.tagged,
             "classified": self.classified,
             "zotero_item_key": self.zotero_item_key,
             "routing_method": self.routing_method,
+            "route_selected": self.route_selected,
+            "save_method_used": self.save_method_used,
+            "item_discovery_status": self.item_discovery_status,
+            "pdf_verification_status": self.pdf_verification_status,
+            "reason_code": self.reason_code,
+            "suspected_duplicate_keys": list(self.suspected_duplicate_keys),
             "degradation_reasons": list(self.degradation_reasons),
             "retry_attempts": self.retry_attempts,
         }
@@ -199,10 +213,17 @@ class Item:
             pdf_present=data.get("pdf_present"),
             metadata_complete=data.get("metadata_complete"),
             indexed=bool(data.get("indexed", False)),
+            noted=bool(data.get("noted", False)),
             tagged=bool(data.get("tagged", False)),
             classified=bool(data.get("classified", False)),
             zotero_item_key=data.get("zotero_item_key"),
             routing_method=data.get("routing_method"),
+            route_selected=data.get("route_selected"),
+            save_method_used=data.get("save_method_used"),
+            item_discovery_status=data.get("item_discovery_status"),
+            pdf_verification_status=data.get("pdf_verification_status"),
+            reason_code=data.get("reason_code"),
+            suspected_duplicate_keys=tuple(data.get("suspected_duplicate_keys") or ()),
             degradation_reasons=tuple(data.get("degradation_reasons") or ()),
             retry_attempts=int(data.get("retry_attempts", 0)),
         )

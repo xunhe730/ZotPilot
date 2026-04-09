@@ -31,6 +31,14 @@ class IngestItemState:
     routing_status: str | None = None
     ingest_method: str | None = None  # "connector" | "api" | None
     has_pdf: bool | None = None
+    route_selected: str | None = None
+    save_method_used: str | None = None
+    item_discovery_status: str | None = None
+    pdf_verification_status: str | None = None
+    reason_code: str | None = None
+    verification_attempts: int | None = None
+    verification_deadline_at: float | None = None
+    suspected_duplicate_keys: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
         """Return dict representation, omitting None-valued optional fields.
@@ -57,6 +65,22 @@ class IngestItemState:
             d["ingest_method"] = self.ingest_method
         if self.has_pdf is not None:
             d["has_pdf"] = self.has_pdf
+        if self.route_selected is not None:
+            d["route_selected"] = self.route_selected
+        if self.save_method_used is not None:
+            d["save_method_used"] = self.save_method_used
+        if self.item_discovery_status is not None:
+            d["item_discovery_status"] = self.item_discovery_status
+        if self.pdf_verification_status is not None:
+            d["pdf_verification_status"] = self.pdf_verification_status
+        if self.reason_code is not None:
+            d["reason_code"] = self.reason_code
+        if self.verification_attempts is not None:
+            d["verification_attempts"] = self.verification_attempts
+        if self.verification_deadline_at is not None:
+            d["verification_deadline_at"] = self.verification_deadline_at
+        if self.suspected_duplicate_keys:
+            d["suspected_duplicate_keys"] = list(self.suspected_duplicate_keys)
         return d
 
 
@@ -119,6 +143,14 @@ class BatchState:
         routing_status: str | None | _UnsetType = _UNSET,
         ingest_method: str | None | _UnsetType = _UNSET,
         has_pdf: bool | None | _UnsetType = _UNSET,
+        route_selected: str | None | _UnsetType = _UNSET,
+        save_method_used: str | None | _UnsetType = _UNSET,
+        item_discovery_status: str | None | _UnsetType = _UNSET,
+        pdf_verification_status: str | None | _UnsetType = _UNSET,
+        reason_code: str | None | _UnsetType = _UNSET,
+        verification_attempts: int | None | _UnsetType = _UNSET,
+        verification_deadline_at: float | None | _UnsetType = _UNSET,
+        suspected_duplicate_keys: tuple[str, ...] | list[str] | _UnsetType = _UNSET,
     ) -> None:
         """Thread-safe update of an item by index.
 
@@ -145,6 +177,24 @@ class BatchState:
                 item.ingest_method = cast("str | None", ingest_method)
             if has_pdf is not _UNSET:
                 item.has_pdf = cast("bool | None", has_pdf)
+            if route_selected is not _UNSET:
+                item.route_selected = cast("str | None", route_selected)
+            if save_method_used is not _UNSET:
+                item.save_method_used = cast("str | None", save_method_used)
+            if item_discovery_status is not _UNSET:
+                item.item_discovery_status = cast("str | None", item_discovery_status)
+            if pdf_verification_status is not _UNSET:
+                item.pdf_verification_status = cast("str | None", pdf_verification_status)
+            if reason_code is not _UNSET:
+                item.reason_code = cast("str | None", reason_code)
+            if verification_attempts is not _UNSET:
+                item.verification_attempts = cast("int | None", verification_attempts)
+            if verification_deadline_at is not _UNSET:
+                item.verification_deadline_at = cast("float | None", verification_deadline_at)
+            if suspected_duplicate_keys is not _UNSET:
+                item.suspected_duplicate_keys = tuple(
+                    cast("tuple[str, ...] | list[str]", suspected_duplicate_keys)
+                )
 
     def finalize(self) -> None:
         """Set is_final=True, determine state, set finalized_at."""
@@ -193,15 +243,31 @@ class BatchState:
         with self._lock:
             saved, failed, pending_count = self._counts()
             saved_with_pdf = sum(
-                1 for it in self.pending_items if it.status == "saved" and it.has_pdf is True
+                1
+                for it in self.pending_items
+                if it.status == "saved"
+                and (it.pdf_verification_status == "present" or it.has_pdf is True)
             )
             saved_metadata_only = sum(
-                1 for it in self.pending_items if it.status == "saved" and it.has_pdf is False
+                1
+                for it in self.pending_items
+                if it.status == "saved"
+                and (it.pdf_verification_status == "missing" or it.has_pdf is False)
+            )
+            saved_pdf_pending = sum(
+                1
+                for it in self.pending_items
+                if it.status == "saved" and it.pdf_verification_status == "pending"
             )
             pdf_missing_items = [
                 {"item_key": it.item_key, "title": it.title, "url": it.url}
                 for it in self.pending_items
-                if it.status == "saved" and it.has_pdf is False
+                if it.status == "saved" and (it.pdf_verification_status == "missing" or it.has_pdf is False)
+            ]
+            pdf_pending_items = [
+                {"item_key": it.item_key, "title": it.title, "url": it.url}
+                for it in self.pending_items
+                if it.status == "saved" and it.pdf_verification_status == "pending"
             ]
             status: dict = {
                 "batch_id": self.batch_id,
@@ -212,6 +278,7 @@ class BatchState:
                 "saved": saved,
                 "saved_with_pdf": saved_with_pdf,
                 "saved_metadata_only": saved_metadata_only,
+                "saved_pdf_pending": saved_pdf_pending,
                 "failed": failed,
                 "pending_count": pending_count,
                 "collection_used": self.collection_used,
@@ -219,6 +286,8 @@ class BatchState:
             }
             if pdf_missing_items:
                 status["pdf_missing_items"] = pdf_missing_items
+            if pdf_pending_items:
+                status["pdf_pending_items"] = pdf_pending_items
 
             # Emit metadata_only_choice as a structured BlockingDecision when finalized.
             # `pdf_missing_items` remains the canonical payload; this references by item_key only.
@@ -232,7 +301,9 @@ class BatchState:
                     item_keys=tuple(
                         it.item_key
                         for it in self.pending_items
-                        if it.status == "saved" and it.has_pdf is False and it.item_key
+                        if it.status == "saved"
+                        and (it.pdf_verification_status == "missing" or it.has_pdf is False)
+                        and it.item_key
                     ),
                     description=(
                         f"{saved_metadata_only} item(s) saved as metadata-only. "

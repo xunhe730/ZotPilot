@@ -115,7 +115,7 @@ zotpilot register --gemini-key <key>                  # Tier 2
 python3 scripts/run.py register --platform claude-code  # 或: zotpilot register --platform claude-code
 ```
 
-支持：Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf。
+v0.5.0 MVP 官方支持：Claude Code、Codex CLI。
 
 **3. 重启你的 AI agent。**
 
@@ -135,6 +135,7 @@ zotpilot config set zotero_api_key YOUR_KEY
 ```
 
 > ⚠️ Key 以明文存储在 `~/.config/zotpilot/config.json`（Windows: `%APPDATA%\zotpilot\config.json`）。
+> ZotPilot 会在 Unix 上把这个文件写成 `0600` 权限，但你仍然不应该把它同步到公开仓库或共享备份里。
 > 确保该目录不被 git 追踪。
 
 验证配置：
@@ -262,6 +263,19 @@ zotpilot register --gemini-key <gemini密钥> --zotero-api-key <zotero密钥> --
 zotpilot update
 ```
 自动探测你的安装方式（uv / pip / editable），同时更新 CLI 和所有平台的 skill 目录。
+更新后建议立即运行：
+
+```bash
+zotpilot status
+```
+
+确认三件事：
+- `Version` 是你期望的版本
+- `Registered` 包含你正在使用的客户端
+- `Skill dirs` 指向实际部署的客户端 skill 目录
+
+如果客户端仍然表现得像旧版本，先看 `zotpilot status` 的
+`Registered`、`Skill dirs`、`Drift` 三项，再完全重启 AI 客户端。
 
 | 标志 | 用途 |
 |------|------|
@@ -284,6 +298,14 @@ pip install --upgrade zotpilot
 cd <your-skill-dir>/zotpilot
 git pull
 ```
+
+源码用户在本地修改了 skill 或脚本后，需要重新部署运行态：
+
+```bash
+zotpilot sync
+```
+
+然后重启客户端。
 
 ---
 

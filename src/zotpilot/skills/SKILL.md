@@ -9,6 +9,9 @@ Choose one workflow and stay inside it:
 
 - `ztp-setup`: install, configure, register MCP, verify first index readiness
 - `ztp-research`: discover external papers, ingest them, index them, then organize results
+  It follows the batch-centric tool path: `search_academic_databases` →
+  `confirm_candidates` → `approve_ingest` → `get_batch_status` →
+  `approve_post_ingest` → `approve_post_process`.
 - `ztp-review`: synthesize what the local Zotero library already says about a topic
 - `ztp-profile`: analyze library structure, themes, tags, and organization opportunities
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from .config import Config, _default_config_dir
 
+logger = logging.getLogger(__name__)
+
 
 def _default_config_path() -> Path:
     """Return default config file path."""
@@ -175,12 +177,32 @@ def cmd_setup(args):
         "chroma_db_path": str(chroma_db_path),
         "embedding_provider": embedding_provider,
     }
+    if embedding_provider == "gemini" and gemini_api_key:
+        config_data["gemini_api_key"] = gemini_api_key
+    elif embedding_provider == "dashscope":
+        import os as _os
+
+        dashscope_key = _os.environ.get("DASHSCOPE_API_KEY")
+        if dashscope_key:
+            config_data["dashscope_api_key"] = dashscope_key
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config_data, f, indent=2)
 
+    from ._platforms import reconcile_runtime
+
+    imported = _import_runtime_env_to_config(
+        config_path=config_path,
+        platforms=None,
+    )
+    reconcile = reconcile_runtime(platforms=None, apply=True)
+
     if non_interactive:
         print(f"Config written to: {config_path}")
+        if imported:
+            print(f"Imported existing runtime config: {', '.join(sorted(imported))}")
+        if reconcile.applied and reconcile.applied.restart_required:
+            print("Runtime configured for Codex/Claude Code. Restart your AI agent.")
     else:
         print(f"  Config written to: {config_path}")
 
@@ -189,21 +211,14 @@ def cmd_setup(args):
             masked = gemini_api_key[:4] + "..." + gemini_api_key[-4:] if len(gemini_api_key) > 8 else "****"
             print("\n  NOTE: Set GEMINI_API_KEY as an environment variable:")
             print(f"    export GEMINI_API_KEY='{masked}'  # (masked for security)")
+        if imported:
+            print(f"\n  Imported existing runtime config: {', '.join(sorted(imported))}")
 
         print("\n" + "=" * 40)
         print("Setup complete!")
         print()
-        print("To start the MCP server, add to your client config:")
-        print()
-        print("  Claude Code (~/.claude/settings.json):")
-        print('    "mcpServers": {')
-        print('      "zotpilot": {')
-        print('        "command": "uv",')
-        print('        "args": ["tool", "run", "zotpilot"]')
-        print("      }")
-        print("    }")
-        print()
-        print("  Or run directly: zotpilot index")
+        print("Codex / Claude Code runtime has been synchronized.")
+        print("Restart your AI agent to load the new MCP config and skills.")
 
     return 0
 
@@ -309,6 +324,7 @@ def cmd_status(args):
     config = Config.load(args.config)
     errors = config.validate()
     blocking_errors, api_warnings = _split_validate_errors(errors)
+    deployment = _deployment_status(config)
 
     if output_json:
         result = {
@@ -326,7 +342,18 @@ def cmd_status(args):
             "chunk_count": 0,
             "errors": blocking_errors,
             "warnings": api_warnings,
+            "detected_platforms": deployment["detected_platforms"],
+            "registered_platforms": deployment["registered_platforms"],
+            "unsupported_platforms": deployment["unsupported_platforms"],
+            "registration": deployment["registration"],
+            "skill_dirs": deployment["skill_dirs"],
+            "drift_state": deployment["drift_state"],
+            "restart_required": deployment["restart_required"],
         }
+        if deployment.get("deployment_warning"):
+            result["warnings"].append(
+                f"Deployment status unavailable: {deployment['deployment_warning']}"
+            )
         try:
             from .embeddings import create_embedder
             from .vector_store import VectorStore
@@ -356,6 +383,30 @@ def cmd_status(args):
     print(f"  Embedding dims:     {config.embedding_dimensions}")
     print(f"  Reranking enabled:  {config.rerank_enabled}")
     print(f"  Vision enabled:     {config.vision_enabled}")
+    print("\n  Client integration:")
+    detected = deployment["detected_platforms"]
+    print(f"    Detected:   {', '.join(detected) if detected else 'none'}")
+    registered = deployment["registered_platforms"]
+    print(f"    Registered: {', '.join(registered) if registered else 'none'}")
+    unsupported = deployment["unsupported_platforms"]
+    if unsupported:
+        print(f"    Unsupported in v0.5: {', '.join(unsupported)}")
+    print(f"    Drift:      {deployment['drift_state']}")
+    print(f"    Restart:    {'yes' if deployment['restart_required'] else 'no'}")
+    if deployment["skill_dirs"]:
+        print("    Skill dirs:")
+        for skill_dir in deployment["skill_dirs"]:
+            flags = []
+            if skill_dir["is_symlink"]:
+                flags.append("symlink")
+            if skill_dir["is_broken_symlink"]:
+                flags.append("broken")
+            if skill_dir["is_duplicate"]:
+                flags.append("duplicate")
+            suffix = f" ({', '.join(flags)})" if flags else ""
+            print(f"      - {skill_dir['path']}{suffix}")
+    if deployment.get("deployment_warning"):
+        print(f"    Warning: {deployment['deployment_warning']}")
 
     if blocking_errors:
         print("\n  Config errors:")
@@ -470,6 +521,55 @@ def _config_set(key: str, value: str, config_path: Path) -> None:
         f.write("\n")
     if sys.platform != "win32":
         os.chmod(config_path, 0o600)
+
+
+_ENV_TO_CONFIG = {
+    "GEMINI_API_KEY": "gemini_api_key",
+    "DASHSCOPE_API_KEY": "dashscope_api_key",
+    "ZOTERO_API_KEY": "zotero_api_key",
+    "ZOTERO_USER_ID": "zotero_user_id",
+}
+
+
+def _read_raw_config(config_path: Path) -> dict:
+    if not config_path.exists():
+        return {}
+    with open(config_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_raw_config(config_path: Path, data: dict) -> None:
+    import os
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    if sys.platform != "win32":
+        os.chmod(config_path, 0o600)
+
+
+def _import_runtime_env_to_config(
+    *,
+    config_path: Path,
+    platforms: list[str] | None = None,
+) -> dict[str, str]:
+    from ._platforms import inspect_current_state
+
+    raw = _read_raw_config(config_path)
+    current = inspect_current_state(targets=platforms)
+    imported: dict[str, str] = {}
+    for platform in current.platforms.values():
+        if not platform.supported:
+            continue
+        for env_key, config_key in _ENV_TO_CONFIG.items():
+            value = platform.env.get(env_key)
+            if value and not raw.get(config_key):
+                raw[config_key] = value
+                imported[config_key] = value
+    if imported:
+        _write_raw_config(config_path, raw)
+    return imported
 
 
 def cmd_config(args):
@@ -726,6 +826,75 @@ def _get_skill_dirs() -> list[SkillDir]:
     return result
 
 
+def _deployment_status(config: Config | None = None) -> dict:
+    """Return platform detection, registration, skill dirs, and drift."""
+    try:
+        from ._platforms import reconcile_runtime
+
+        desired_keys = {}
+        if config is not None:
+            if config.gemini_api_key:
+                desired_keys["GEMINI_API_KEY"] = config.gemini_api_key
+            if config.dashscope_api_key:
+                desired_keys["DASHSCOPE_API_KEY"] = config.dashscope_api_key
+            if config.zotero_api_key:
+                desired_keys["ZOTERO_API_KEY"] = config.zotero_api_key
+            if config.zotero_user_id:
+                desired_keys["ZOTERO_USER_ID"] = config.zotero_user_id
+
+        reconcile = reconcile_runtime(
+            gemini_key=desired_keys.get("GEMINI_API_KEY"),
+            dashscope_key=desired_keys.get("DASHSCOPE_API_KEY"),
+            zotero_api_key=desired_keys.get("ZOTERO_API_KEY"),
+            zotero_user_id=desired_keys.get("ZOTERO_USER_ID"),
+            apply=False,
+        )
+        detected = [plat for plat, state in reconcile.current.platforms.items() if state.detected]
+        registered = [plat for plat, state in reconcile.current.platforms.items() if state.registered]
+        unsupported = [
+            plat for plat, state in reconcile.current.platforms.items()
+            if state.detected and not state.supported
+        ]
+        skill_dirs = [
+            {
+                "path": str(skill_dir.path),
+                "is_symlink": skill_dir.is_symlink,
+                "is_broken_symlink": skill_dir.is_broken_symlink,
+                "is_duplicate": skill_dir.is_duplicate,
+            }
+            for skill_dir in _get_skill_dirs()
+        ]
+        return {
+            "detected_platforms": detected,
+            "registered_platforms": registered,
+            "unsupported_platforms": unsupported,
+            "registration": {
+                plat: {
+                    "registered": state.registered,
+                    "config_path": state.config_path,
+                    "supported": state.supported,
+                    "command": state.command,
+                }
+                for plat, state in reconcile.current.platforms.items()
+            },
+            "skill_dirs": skill_dirs,
+            "drift_state": reconcile.changes.drift_state,
+            "restart_required": reconcile.changes.drift_state != "clean",
+        }
+    except Exception as exc:
+        logger.debug("deployment status inspection failed", exc_info=True)
+        return {
+            "detected_platforms": [],
+            "registered_platforms": [],
+            "unsupported_platforms": [],
+            "registration": {},
+            "skill_dirs": [],
+            "drift_state": "unknown",
+            "restart_required": False,
+            "deployment_warning": str(exc),
+        }
+
+
 def _is_windows_lock_error(stderr: str) -> bool:
     """Check if a failed upgrade looks like a Windows file-locking error.
 
@@ -836,31 +1005,42 @@ def cmd_update(args):
             print("  pip install --upgrade zotpilot")
             errors.append("installer unknown: cannot auto-update CLI")
 
-    # Step 4: Skill update (unless --cli-only)
+    # Step 4: Runtime reconcile (unless --cli-only)
     if not args.cli_only:
-        from ._platforms import PLATFORMS, deploy_skills, detect_platforms
+        from ._platforms import reconcile_runtime
+
+        config_path = _default_config_path()
+        imported = _import_runtime_env_to_config(
+            config_path=config_path,
+            platforms=None,
+        )
+        if imported:
+            print(f"Imported existing runtime config: {', '.join(sorted(imported))}")
 
         if installer == "editable":
-            print("Dev install detected — skill files read from the source repo")
-            print("Run 'git pull' in the repo to update skills")
-            warnings.append("editable install: run git pull manually")
-        elif args.dry_run:
-            print("[dry-run] Would deploy packaged skill files to detected platform skill directories")
+            print("Dev install detected — code update remains manual, but runtime will be synchronized")
+            warnings.append("editable install: code update skipped")
+
+        if args.dry_run:
+            try:
+                reconcile = reconcile_runtime(platforms=None, apply=False)
+                print(f"[dry-run] Drift: {reconcile.changes.drift_state}")
+                for plat, reasons in sorted(reconcile.changes.reasons.items()):
+                    print(f"[dry-run] {plat}: {', '.join(reasons)}")
+            except Exception as exc:
+                print(f"Runtime reconcile failed: {exc}", file=sys.stderr)
+                errors.append("runtime reconcile failed")
         else:
-            detected = detect_platforms()
-            targets = [p for p in detected if PLATFORMS.get(p, {}).get("skills_dir")]
-            if not targets:
-                print("Deploying skills... (no skill-supporting platforms detected)")
-            else:
-                labels = ", ".join(PLATFORMS[p]["label"] for p in targets)
-                print(f"Deploying skills to: {labels}")
-                try:
-                    deploy_results = deploy_skills(platforms=targets)
-                    failed = [plat for plat, ok in deploy_results.items() if not ok]
-                    warnings.extend(f"skill deploy failed: {plat}" for plat in failed)
-                except FileNotFoundError as exc:
-                    print(f"Skill deployment failed: {exc}", file=sys.stderr)
-                    errors.append("skill deployment failed")
+            try:
+                reconcile = reconcile_runtime(platforms=None, apply=True)
+                if reconcile.applied and reconcile.applied.restart_required:
+                    print(
+                        "Runtime synchronized for: "
+                        + ", ".join(reconcile.current.supported_targets)
+                    )
+            except Exception as exc:
+                print(f"Runtime reconcile failed: {exc}", file=sys.stderr)
+                errors.append("runtime reconcile failed")
 
     # Step 5: Post-update summary
     if not args.dry_run:
@@ -873,6 +1053,39 @@ def cmd_update(args):
         print("完成。请重启你的 AI agent 以加载新版本。")
 
     return 1 if errors else 0
+
+
+def cmd_sync(args):
+    """Developer-facing runtime synchronize command."""
+    from ._platforms import reconcile_runtime
+
+    config_path = _default_config_path()
+    imported = _import_runtime_env_to_config(
+        config_path=config_path,
+        platforms=None,
+    )
+    if imported:
+        print(f"Imported existing runtime config: {', '.join(sorted(imported))}")
+
+    try:
+        reconcile = reconcile_runtime(
+            platforms=None,
+            apply=not getattr(args, "dry_run", False),
+        )
+        if getattr(args, "dry_run", False):
+            print(f"[dry-run] Drift: {reconcile.changes.drift_state}")
+            for plat, reasons in sorted(reconcile.changes.reasons.items()):
+                print(f"[dry-run] {plat}: {', '.join(reasons)}")
+            return 0
+
+        if reconcile.applied and reconcile.applied.restart_required:
+            print("Runtime synchronized. Restart your AI agent to load the new config and skills.")
+        else:
+            print("Runtime already in sync.")
+        return 0
+    except Exception as exc:
+        print(f"Runtime synchronize failed: {exc}", file=sys.stderr)
+        return 1
 
 
 def cmd_bridge(args):
@@ -905,6 +1118,11 @@ def cmd_register(args):
     add command fails on that platform.
     """
     from ._platforms import register
+
+    _import_runtime_env_to_config(
+        config_path=_default_config_path(),
+        platforms=["claude-code", "codex"],
+    )
 
     results = register(
         platforms=args.platforms,
@@ -999,6 +1217,11 @@ def main(argv: list[str] | None = None) -> int:
     mode_grp.add_argument("--dry-run", action="store_true",
         help="Preview update actions without making changes (skips PyPI)")
     sub_update.set_defaults(func=cmd_update)
+
+    # sync
+    sub_sync = subparsers.add_parser("sync", help=argparse.SUPPRESS)
+    sub_sync.add_argument("--dry-run", action="store_true", help="Preview runtime sync changes")
+    sub_sync.set_defaults(func=cmd_sync)
 
     # bridge
     sub_bridge = subparsers.add_parser("bridge", help="Run HTTP bridge for ZotPilot Connector")

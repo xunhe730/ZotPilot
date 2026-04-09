@@ -352,14 +352,16 @@ class ZoteroWriter:
         if not urls:
             return "not_found"
 
+        had_attempt_error = False
         for url in urls:
             try:
                 if self._download_and_attach_pdf(item_key, url):
                     return "attached"
             except Exception as e:
                 logger.debug(f"PDF attach failed for {url}: {e}")
+                had_attempt_error = True
 
-        return "not_found"
+        return "attach_failed" if had_attempt_error else "not_found"
 
     def _get_unpaywall_pdf_url(self, doi: str) -> str | None:
         """Query Unpaywall for an OA PDF URL."""

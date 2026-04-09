@@ -158,7 +158,6 @@ class Config:
 
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Never persist API keys to disk — they should come from env vars.
         data = {
             "zotero_data_dir": str(self.zotero_data_dir),
             "chroma_db_path": str(self.chroma_db_path),
@@ -180,12 +179,17 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
+            "gemini_api_key": self.gemini_api_key,
+            "dashscope_api_key": self.dashscope_api_key,
+            "anthropic_api_key": self.anthropic_api_key,
             "vision_max_tables_per_run": self.vision_max_tables_per_run,
             "vision_max_cost_usd": self.vision_max_cost_usd,
             "max_pages": self.max_pages,
             "preflight_enabled": self.preflight_enabled,
+            "zotero_api_key": self.zotero_api_key,
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
+            "semantic_scholar_api_key": self.semantic_scholar_api_key,
         }
 
         # Write with restrictive permissions on Unix, normal write on Windows

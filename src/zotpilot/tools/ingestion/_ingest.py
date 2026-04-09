@@ -21,6 +21,7 @@ from ._shared import (
 
 _batch_store = BatchStore(max_batches=50, completed_ttl_s=1800.0)
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
+_PDF_VERIFICATION_WINDOW_S = 15.0
 
 
 def _clear_batch_store() -> None:
@@ -32,6 +33,69 @@ register_reset_callback(_clear_batch_store)
 
 def _update_session_after_ingest(batch) -> None:
     pass  # Session update removed in US-001
+
+
+def _refresh_pending_pdf_states(batch) -> None:
+    """Re-check pending PDF states without reopening the whole ingest worker.
+
+    This lets late Zotero attachment writes settle after the batch has already
+    finalized, which avoids reporting a false terminal `missing` too early.
+    """
+    from . import _get_writer as _pkg_get_writer  # type: ignore[attr-defined]
+    from . import time as _pkg_time  # type: ignore[attr-defined]
+
+    pending_items = [
+        item
+        for item in batch.pending_items
+        if item.status == "saved" and item.pdf_verification_status == "pending" and item.item_key
+    ]
+    if not pending_items:
+        return
+
+    try:
+        writer = _pkg_get_writer()
+    except Exception:
+        return
+
+    now = _pkg_time.monotonic()
+    for item in pending_items:
+        attempts = (item.verification_attempts or 0) + 1
+        deadline = item.verification_deadline_at
+        try:
+            has_pdf = writer.check_has_pdf(item.item_key)
+        except Exception:
+            has_pdf = False
+
+        if has_pdf:
+            batch.update_item(
+                item.index,
+                status="saved",
+                has_pdf=True,
+                pdf_verification_status="present",
+                reason_code=None,
+                verification_attempts=attempts,
+            )
+            continue
+
+        if deadline is not None and now >= deadline:
+            batch.update_item(
+                item.index,
+                status="saved",
+                has_pdf=False,
+                pdf_verification_status="missing",
+                reason_code="verification_timeout",
+                verification_attempts=attempts,
+            )
+            continue
+
+        batch.update_item(
+            item.index,
+            status="saved",
+            has_pdf=None,
+            pdf_verification_status="pending",
+            reason_code=item.reason_code or "connector_save_pending_pdf",
+            verification_attempts=attempts,
+        )
 
 
 # Inbox collection cache moved to _shared.py (US-002 iter-9 shrink)
@@ -131,6 +195,7 @@ def ingest_papers(
     from . import _get_writer as _pkg_get_writer  # type: ignore[attr-defined]
     from . import _is_pdf_or_doi_url as _pkg_is_pdf_or_doi_url  # type: ignore[attr-defined]
     from . import _lookup_local_item_key_by_doi as _pkg_lookup_doi  # type: ignore[attr-defined]
+    from . import _lookup_suspected_local_duplicates_by_title as _pkg_lookup_title_dupes  # type: ignore[attr-defined]
     from . import _resolve_dois_concurrent as _pkg_resolve_dois  # type: ignore[attr-defined]
     from . import _run_save_worker as _pkg_run_save_worker  # type: ignore[attr-defined]
     from . import _writer_lock as _pkg_writer_lock  # type: ignore[attr-defined]
@@ -175,6 +240,7 @@ def ingest_papers(
                 "status": "duplicate_in_batch",
                 "title": paper.get("title"),
                 "error": f"Duplicate of item {first_idx} in this batch",
+                "reason_code": "duplicate_batch_doi",
             })
             continue
         if normalized_doi:
@@ -198,6 +264,7 @@ def ingest_papers(
                         "item_key": existing_item_key,
                         "title": paper.get("title"),
                         "warning": f"collection routing failed: {exc}",
+                        "reason_code": "duplicate_library_doi",
                     })
                     continue
             results.append({
@@ -205,8 +272,15 @@ def ingest_papers(
                 "status": "duplicate",
                 "item_key": existing_item_key,
                 "title": paper.get("title"),
+                "reason_code": "duplicate_library_doi",
             })
             continue
+
+        suspected_duplicates = _pkg_lookup_title_dupes(paper.get("title"), normalized_doi)
+        if suspected_duplicates:
+            paper["_suspected_duplicate_keys"] = [
+                row["item_key"] for row in suspected_duplicates if row.get("item_key")
+            ]
 
     # DOI resolution pass
     dois_to_resolve: list[str] = []
@@ -249,7 +323,12 @@ def ingest_papers(
 
         if routing == "reject":
             failed += 1
-            results.append({"url": landing_page_url or None, "status": "failed", "error": "no usable identifier"})
+            results.append({
+                "url": landing_page_url or None,
+                "status": "failed",
+                "error": "no usable identifier",
+                "reason_code": "api_resolution_failed",
+            })
             continue
 
         if routing == "api":
@@ -343,6 +422,8 @@ def ingest_papers(
                     "url": blocked_url,
                     "status": "failed",
                     "error_code": blocked.get("error_code") or "anti_bot_detected",
+                    "route_selected": "connector_primary",
+                    "reason_code": "preflight_blocked",
                     "error": (
                         blocked.get("error")
                         or "Anti-bot protection detected. "
@@ -359,6 +440,8 @@ def ingest_papers(
                     "url": error_url,
                     "status": "failed",
                     "error_code": error.get("error_code") or "preflight_failed",
+                    "route_selected": "connector_primary",
+                    "reason_code": "preflight_blocked",
                     "error": error.get("error") or "preflight failed",
                 })
 
@@ -420,6 +503,8 @@ def ingest_papers(
             url=c["url"],
             title=c["paper"].get("title"),
             ingest_method=c.get("ingest_method"),
+            route_selected="connector_primary" if c.get("ingest_method") == "connector" else "api_primary",
+            suspected_duplicate_keys=tuple(c["paper"].get("_suspected_duplicate_keys") or ()),
         )
         for c in connector_candidates + api_candidates
     ]
@@ -472,6 +557,7 @@ def get_ingest_status(
                 "or the server was restarted. Check Zotero directly."
             ),
         }
+    _refresh_pending_pdf_states(batch)
     _update_session_after_ingest(batch)
     return batch.full_status()
 

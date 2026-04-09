@@ -14,7 +14,7 @@ import httpx as httpx  # noqa: PLC0414  re-exported for test patching
 
 from ...bridge import DEFAULT_PORT as DEFAULT_PORT  # noqa: F401  re-exported for test patching
 from ...bridge import BridgeServer as BridgeServer  # noqa: F401  re-exported for test patching
-from ...state import _get_config, _get_writer  # noqa: F401  re-exported for test patching
+from ...state import _get_config, _get_writer, _get_zotero  # noqa: F401  re-exported for test patching
 from .. import ingestion_bridge, ingestion_search  # noqa: F401  re-exported
 from ..ingest_state import BatchStore as BatchStore  # noqa: F401
 from ..ingest_state import IngestItemState as IngestItemState  # noqa: F401
@@ -51,6 +51,7 @@ from ._shared import (
     _discover_via_web_api,
     _is_pdf_or_doi_url,
     _lookup_local_item_key_by_doi,
+    _lookup_suspected_local_duplicates_by_title,
     _route_via_local_api,
     _writer_lock,
     classify_ingest_candidate,
@@ -62,6 +63,7 @@ __all__ = [
     # state accessors (for test patching via this namespace)
     "_get_config",
     "_get_writer",
+    "_get_zotero",
     "ingestion_bridge",
     "ingestion_search",
     "time",
@@ -77,6 +79,7 @@ __all__ = [
     "_discover_via_web_api",
     "_is_pdf_or_doi_url",
     "_lookup_local_item_key_by_doi",
+    "_lookup_suspected_local_duplicates_by_title",
     "_resolve_dois_concurrent",
     "_route_via_local_api",
     "_writer_lock",

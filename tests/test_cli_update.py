@@ -376,6 +376,35 @@ class TestDeploySkills:
         assert (skills_root / "ztp-setup" / "SKILL.md").exists()
         assert not (skills_root / "zotpilot" / "ztp-research.md").exists()
 
+    def test_redeploys_when_skill_content_changes_without_version_bump(self, tmp_path):
+        skills_root = tmp_path / "skills"
+        source = tmp_path / "source"
+        skills_root.mkdir()
+        source.mkdir()
+        skill_file = source / "ztp-research.md"
+        skill_file.write_text("---\nname: ztp-research\n---\nold\n")
+
+        fake_platforms = {
+            "codex": {
+                "tier": 1,
+                "binary": "codex",
+                "label": "Codex CLI",
+                "skills_dir": str(skills_root),
+            },
+        }
+        orig = self._patch_platforms(fake_platforms)
+        try:
+            with patch("zotpilot._platforms._skill_source_files", return_value=[skill_file]):
+                assert deploy_skills(platforms=["codex"]) == {"codex": True}
+                deployed = skills_root / "ztp-research" / "SKILL.md"
+                assert deployed.read_text() == "---\nname: ztp-research\n---\nold\n"
+
+                skill_file.write_text("---\nname: ztp-research\n---\nnew\n")
+                assert deploy_skills(platforms=["codex"]) == {"codex": True}
+                assert deployed.read_text() == "---\nname: ztp-research\n---\nnew\n"
+        finally:
+            self._restore_platforms(orig)
+
 
 # ---------------------------------------------------------------------------
 # TestCmdUpdate
@@ -473,7 +502,7 @@ class TestCmdUpdate:
         assert "not found" in out.lower() or "manually" in out.lower()
 
     def test_skill_only_editable_warns_instead_of_running_git(self, tmp_path, capsys):
-        """Editable installs no longer mutate skill repos during update."""
+        """Editable installs skip code upgrade but still reconcile runtime."""
         args = _make_args(skill_only=True)
         skill_dir = _make_skill_dir(tmp_path)
         sd = SkillDir(path=skill_dir, is_symlink=False, is_broken_symlink=False, is_duplicate=False)
@@ -482,27 +511,32 @@ class TestCmdUpdate:
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._get_skill_dirs", return_value=[sd]), \
              patch("zotpilot.cli._detect_cli_installer", return_value=("editable", None)), \
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime") as mock_reconcile, \
              patch("zotpilot.cli.subprocess.run") as mock_run:
+            mock_reconcile.return_value.applied = None
             result = cmd_update(args)
 
         assert result == 0
         out = capsys.readouterr().out
-        assert "git pull" in out
+        assert "code update remains manual" in out
+        mock_reconcile.assert_called_once()
         mock_run.assert_not_called()
 
-    def test_skill_only_noneditable_uses_deploy_skills(self, capsys):
-        """Non-editable installs deploy packaged skills during update."""
+    def test_skill_only_noneditable_uses_reconcile_runtime(self, capsys):
+        """Non-editable installs reconcile runtime during update."""
         args = _make_args(skill_only=True)
 
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
-             patch("zotpilot._platforms.detect_platforms", return_value=["claude-code"]), \
-             patch("zotpilot._platforms.deploy_skills", return_value={"claude-code": True}) as mock_deploy:
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime") as mock_reconcile:
+            mock_reconcile.return_value.applied = None
             result = cmd_update(args)
 
         assert result == 0
-        mock_deploy.assert_called_once_with(platforms=["claude-code"])
+        mock_reconcile.assert_called_once()
 
     def test_symlink_skill_dir_skipped(self, tmp_path, capsys):
         """skill dir is_symlink=True → git pull not called."""
@@ -578,25 +612,31 @@ class TestCmdUpdate:
         assert len(pull_calls) == 0
 
     def test_skill_update_dry_run_reports_packaged_deploy(self, capsys):
-        """Dry-run reports packaged skill deployment instead of git pull."""
+        """Dry-run reports runtime drift instead of mutating."""
         args = _make_args(skill_only=True, dry_run=True)
 
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
-             patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)):
+             patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime") as mock_reconcile:
+            mock_reconcile.return_value.changes.drift_state = "needs-sync"
+            mock_reconcile.return_value.changes.reasons = {"codex": ["skills-out-of-sync"]}
             cmd_update(args)
 
         out = capsys.readouterr().out
-        assert "Would deploy packaged skill files" in out
+        assert "Drift: needs-sync" in out
 
     def test_skill_update_deploy_failure_returns_1(self, capsys):
-        """Packaged skill deploy errors fail the update command."""
+        """Reconcile failures fail the update command."""
         args = _make_args(skill_only=True)
 
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
-             patch("zotpilot._platforms.deploy_skills", side_effect=FileNotFoundError("missing skills")):
-            result = cmd_update(args)
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime", side_effect=RuntimeError("boom")):
+            with patch("zotpilot.cli.subprocess.run"):
+                result = cmd_update(args)
 
         assert result == 1
 

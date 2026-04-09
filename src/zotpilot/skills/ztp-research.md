@@ -23,8 +23,8 @@ Requirements:
 Workflow:
 
 1. Clarify the topic, scope, year range, and inclusion criteria.
-2. Call `research_session(action="get")` to detect any active session.
-3. If none exists, call `research_session(action="create", query=...)`.
+2. If the user already has a ZotPilot batch id, resume with `get_batch_status(batch_id=...)`.
+3. Otherwise start a new batch with `search_academic_databases`.
 4. Use `search_academic_databases` for candidate discovery.
 
    ## §4 — Search SOP for fuzzy NL queries (REQUIRED)
@@ -75,9 +75,10 @@ Workflow:
    ### When to skip §4
    - Query already contains `author:`, DOI, quoted phrase, or boolean operators (`AND`/`OR`/`NOT`) → user/agent already specified intent precisely; single-call is fine.
 5. Use `advanced_search` against the local library to detect duplicates.
-6. Present ranked candidates and stop at checkpoint 1.
-7. After explicit approval, call `research_session(action="approve", checkpoint="candidate-review")`.
-8. Call `ingest_papers`, then poll `get_ingest_status` until terminal.
+6. Present ranked candidates and stop for user selection.
+7. After explicit approval, call `confirm_candidates(batch_id=..., selected_ids=[...])`.
+8. If preflight is clear, call `approve_ingest(batch_id=...)`. If preflight is blocked, call `resolve_preflight(batch_id=...)` only after the user completes browser verification.
+9. Poll `get_batch_status(batch_id=...)` until the batch reaches `post_ingest_verified`.
    - If the response contains `error_code: "connector_offline"`, **STOP
      immediately and surface the `error` and `remediation` fields verbatim
      to the user**. Do not silently fall back to any alternate path. Ask
@@ -94,81 +95,45 @@ Workflow:
    confirmation. Retry `ingest_papers` with IDENTICAL inputs. Do not fall back
    to `save_urls` or DOI links.
 
-9. After `ingest_papers` finalizes, read `blocking_decisions` from the response.
+10. After ingest verification, read `blocking_decisions` from the response.
    For each decision in the list, present it to the user **once** and wait for
    their choice before proceeding. The list is empty when no decisions need
    attention. The `pdf_missing_items` list is the canonical payload for any
    metadata-only items referenced by a decision.
-10. After explicit approval, call `research_session(action="approve", checkpoint="post-ingest-review")`.
-11. After checkpoint 2 (`post-ingest-review`) is approved (step 10), execute post-ingest
-    steps in the order returned by `suggested_next_steps`.
-    Call `index_library(session_id=<active session id>)` as the FIRST step — semantic
-    search depends on it. Do not call `index_library` before approval: the tool enforces
-    this via a code gate and will reject the call.
-
-    Why: pre-approval indexing writes unverified or partial-batch items into ChromaDB and
-    burns embedding API quota. The gate exists because on 2026-04-08 an agent called
-    `index_library` immediately after ingest without waiting for checkpoint 2.
-
-    Underlying tools: `index_library` (pass session_id), `create_note(idempotent=True)`,
-    `manage_collections`, `manage_tags`, `browse_library`. If `index_library` returns
-    `status="blocked"` with `user_consent_required: true`, present the linked decision to
-    the user and pass their consent through the field named in `resolution_parameter`.
-
-    **Classify/tag rules**: why: auto-creating taxonomy confuses the user's existing
-    organizational structure and is hard to undo. Classify and tag operations reuse
-    the user's **existing** collection and tag vocabulary. Before calling
-    `manage_collections`/`manage_tags`, call `list_collections` and `list_tags`
-    to load the current taxonomy, then assign each new paper to the
-    best-matching existing entries. Do not create new collections or tags
-    silently. Only when a paper genuinely does not fit any existing category
-    (or when the existing taxonomy is clearly inadequate for the imported set),
-    stop and ask the user for explicit approval to either create a new
-    collection/tag or restructure the existing taxonomy. Never auto-create a
-    "topic-of-this-research-session" collection.
-12. **Final verification** — why: tool "success" responses don't guarantee data
+11. After explicit approval, call `approve_post_ingest(batch_id=...)`.
+12. Poll `get_batch_status(batch_id=...)` until the batch reaches `post_process_verified`.
+13. Review the `final_report`. Treat `full_success_count`, `partial_count`, per-item `missing_steps`,
+    and `reindex_eligible` as the source of truth. Do not infer note/tag/classification completion from prose.
+14. If the user accepts the verified report, call `approve_post_process(batch_id=...)`.
+15. **Final verification** — why: tool "success" responses don't guarantee data
     integrity — verification catches silent failures before you report to the user.
-    Before reporting, run an end-to-end check on every imported item:
+    Before reporting, confirm the final batch state still matches the underlying tools:
 
     | Check | Tool | What to verify |
     |---|---|---|
     | PDF on disk | `browse_library` / `get_paper_details` | attachment present, not metadata-only |
     | Index coverage | `get_index_stats` / `search_topic` | new items reachable via semantic search |
-    | Note created | `get_notes` | `create_note` actually persisted (idempotent may skip) |
-    | Collection assignment | `browse_library` | each item lands in the expected **existing** collection |
-    | Tag coverage | `get_paper_details` | tags applied and all drawn from existing vocabulary |
+    | Final report truth | `get_batch_status` | `final_report.items[].missing_steps` still matches batch item flags |
+    | Degraded recovery | `reindex_degraded` | only for items listed in `reindex_eligible` |
 
     If any check fails, surface it in the report and ask the user how to proceed
     (retry, manual fix, or skip). Do not silently re-run write operations.
 
-13. End with a per-paper report grouped as:
-    - ✅ Full success (PDF + indexed + note + classified + tagged)
+16. End with a per-paper report grouped as:
+    - ✅ Full success (PDF + indexed + no missing post-process steps)
     - ⚠️ Metadata-only (no PDF — user decides whether to fetch manually)
-    - ⚠️ Partial (e.g. indexed but unclassified, or classification unmatched)
+    - ⚠️ Partial (follow `missing_steps` exactly; do not claim unfinished steps are done)
     - ❌ Failure / skipped
 
 Hard rules:
 
 - Do not replace `search_academic_databases` with generic web search.
-- Do not call `ingest_papers` before checkpoint 1 approval.
-- Do not run post-ingest writes before checkpoint 2 approval.
-- Keep post-ingest writes idempotent.
-
-**Why the approve gate matters**: `approve` is a state-machine transition that requires
-the agent to first surface checkpoint contents to the user. The flow:
-
-  reach checkpoint (auto)
-    → research_session(action="get") returns checkpoint payload
-    → agent shows that payload to the user in chat
-    → user replies with their decision
-    → research_session(action="approve") (only succeeds if get was called
-      after the checkpoint was reached and within the freshness window)
-
-The tool will reject approve calls that skip the get step or use a stale
-get. This is enforced by `last_get_at` + `checkpoint_reached_at` state, not
-by inspecting the agent's prose. On 2026-04-08, an agent that fabricated
-approval drove post-ingest writes on a partially-failed batch — the state
-machine exists so that failure mode cannot recur in a single turn.
+- Do not call `confirm_candidates` until the user has selected candidates.
+- Do not call `approve_ingest` until the user has approved the preflighted batch.
+- Do not call `approve_post_ingest` until the user has reviewed the ingest result.
+- Do not call `approve_post_process` until the user has reviewed the final verified report.
+- Do not invent legacy session tools; the batch id is the workflow handle.
+- Keep post-ingest writes truthful. If `missing_steps` is non-empty, report a partial outcome instead of claiming success.
 
 For incident history and detailed root causes, see
 `references/post-ingest-incidents.md` (load when handling post-ingest

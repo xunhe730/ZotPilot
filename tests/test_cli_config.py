@@ -187,3 +187,96 @@ class TestStatusJsonVersion:
         data = json.loads(out)
         assert "version" in data
         assert data["version"] == __version__
+
+    def test_status_json_includes_deployment_visibility(self, tmp_path, capsys):
+        """status --json also reports detected/registered clients and skill dirs."""
+        import argparse
+        from unittest.mock import patch
+
+        from zotpilot.cli import cmd_status
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps({
+            "zotero_data_dir": str(tmp_path),
+            "embedding_provider": "none",
+        }))
+
+        args = argparse.Namespace(json=True, config=str(cfg_path))
+        with (
+            patch("zotpilot.cli.Config.load") as mock_load,
+            patch(
+                "zotpilot.cli._deployment_status",
+                return_value={
+                    "detected_platforms": ["codex"],
+                    "registered_platforms": ["codex"],
+                    "unsupported_platforms": [],
+                    "registration": {
+                        "codex": {"registered": True, "config_path": None},
+                    },
+                    "skill_dirs": [
+                        {
+                            "path": "/tmp/skills/ztp-research",
+                            "is_symlink": False,
+                            "is_broken_symlink": False,
+                            "is_duplicate": False,
+                        }
+                    ],
+                    "drift_state": "clean",
+                    "restart_required": False,
+                },
+            ),
+        ):
+            mock_cfg = mock_load.return_value
+            mock_cfg.zotero_data_dir = tmp_path
+            mock_cfg.chroma_db_path = tmp_path / "chroma"
+            mock_cfg.embedding_provider = "none"
+            mock_cfg.gemini_api_key = None
+            mock_cfg.dashscope_api_key = None
+            mock_cfg.validate.return_value = []
+            cmd_status(args)
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["detected_platforms"] == ["codex"]
+        assert data["registered_platforms"] == ["codex"]
+        assert data["skill_dirs"][0]["path"] == "/tmp/skills/ztp-research"
+
+    def test_status_json_sets_restart_required_when_drift_present(self, tmp_path, capsys):
+        import argparse
+        from unittest.mock import patch
+
+        from zotpilot.cli import cmd_status
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps({
+            "zotero_data_dir": str(tmp_path),
+            "embedding_provider": "none",
+        }))
+
+        args = argparse.Namespace(json=True, config=str(cfg_path))
+        with (
+            patch("zotpilot.cli.Config.load") as mock_load,
+            patch(
+                "zotpilot.cli._deployment_status",
+                return_value={
+                    "detected_platforms": ["codex"],
+                    "registered_platforms": ["codex"],
+                    "unsupported_platforms": [],
+                    "registration": {"codex": {"registered": True, "config_path": None}},
+                    "skill_dirs": [],
+                    "drift_state": "needs-sync",
+                    "restart_required": True,
+                },
+            ),
+        ):
+            mock_cfg = mock_load.return_value
+            mock_cfg.zotero_data_dir = tmp_path
+            mock_cfg.chroma_db_path = tmp_path / "chroma"
+            mock_cfg.embedding_provider = "none"
+            mock_cfg.gemini_api_key = None
+            mock_cfg.dashscope_api_key = None
+            mock_cfg.validate.return_value = []
+            cmd_status(args)
+
+        data = json.loads(capsys.readouterr().out)
+        assert data["drift_state"] == "needs-sync"
+        assert data["restart_required"] is True

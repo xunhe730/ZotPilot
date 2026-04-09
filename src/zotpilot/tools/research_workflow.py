@@ -16,6 +16,7 @@ from ..workflow import (
     IllegalPhaseTransition,
     InvalidPhaseError,
     Item,
+    Phase,
     PreflightResult,
     new_batch,
 )
@@ -99,6 +100,7 @@ def _item_from_paper(paper: dict[str, Any], index: int) -> Item:
         source_url=str(source_url),
         title=paper.get("title"),
         paper_payload=dict(paper),
+        route_selected="connector_primary" if source_url else "api_primary",
     )
 
 
@@ -107,7 +109,12 @@ def _batch_summary(batch: Batch) -> dict[str, int]:
     degraded = sum(1 for item in batch.items if item.status == "degraded")
     failed = sum(1 for item in batch.items if item.status == "failed")
     duplicate = sum(1 for item in batch.items if item.status == "duplicate")
-    pdf_present_count = sum(1 for item in batch.items if item.pdf_present is True)
+    pdf_present_count = sum(
+        1
+        for item in batch.items
+        if item.pdf_verification_status == "present" or item.pdf_present is True
+    )
+    pdf_pending_count = sum(1 for item in batch.items if item.pdf_verification_status == "pending")
     return {
         "total": len(batch.items),
         "saved": saved,
@@ -115,6 +122,7 @@ def _batch_summary(batch: Batch) -> dict[str, int]:
         "failed": failed,
         "duplicate": duplicate,
         "pdf_present_count": pdf_present_count,
+        "pdf_pending_count": pdf_pending_count,
     }
 
 
@@ -221,7 +229,12 @@ def _build_preflight_result(batch: Batch, *, round_number: int) -> tuple[Batch, 
     return batch, report
 
 
-def _apply_legacy_ingest_result(batch: Batch, response: dict[str, Any]) -> Batch:
+def _apply_legacy_ingest_result(
+    batch: Batch,
+    response: dict[str, Any],
+    *,
+    phase: Phase | None = "post_ingest_verified",
+) -> Batch:
     results = response.get("results", []) or []
     mapped_items = list(batch.items)
     doc_id_by_engine = dict(batch.engine_index_map)
@@ -252,12 +265,21 @@ def _apply_legacy_ingest_result(batch: Batch, response: dict[str, Any]) -> Batch
                 degradation_reasons.append("no_pdf")
             else:
                 new_status = "saved"
+        refreshed_reason_code = row.get("reason_code") if "reason_code" in row else item.reason_code
+        if row.get("pdf_verification_status") == "present" or pdf_present is True:
+            refreshed_reason_code = None
         mapped = item.with_updates(
             status=new_status,  # type: ignore[arg-type]
             zotero_item_key=row.get("item_key"),
             pdf_present=pdf_present,
+            pdf_verification_status=row.get("pdf_verification_status"),
             metadata_complete=row.get("item_key") is not None,
             routing_method=row.get("ingest_method") or item.routing_method,
+            route_selected=row.get("route_selected") or item.route_selected,
+            save_method_used=row.get("save_method_used") or item.save_method_used,
+            item_discovery_status=row.get("item_discovery_status") or item.item_discovery_status,
+            reason_code=refreshed_reason_code,
+            suspected_duplicate_keys=tuple(row.get("suspected_duplicate_keys") or item.suspected_duplicate_keys),
             degradation_reasons=tuple(dict.fromkeys(degradation_reasons)),
         )
         mapped_items = [
@@ -273,7 +295,7 @@ def _apply_legacy_ingest_result(batch: Batch, response: dict[str, Any]) -> Batch
     }
     updated = replace(
         batch.with_items(tuple(mapped_items)),
-        phase="post_ingest_verified",
+        phase=phase or batch.phase,
         legacy_ingest_batch_id=batch.legacy_ingest_batch_id,
         engine_index_map=batch.engine_index_map,
         final_report=final_report,
@@ -282,8 +304,56 @@ def _apply_legacy_ingest_result(batch: Batch, response: dict[str, Any]) -> Batch
 
 
 def _build_post_process_report(batch: Batch) -> dict[str, Any]:
+    item_reports: list[dict[str, Any]] = []
+    full_success = 0
+    partial = 0
+    for item in batch.items:
+        missing_steps: list[str] = []
+        if item.status in {"saved", "degraded"}:
+            if not item.indexed:
+                missing_steps.append("index")
+            if not item.noted:
+                missing_steps.append("note")
+            if not item.classified:
+                missing_steps.append("classify")
+            if not item.tagged:
+                missing_steps.append("tag")
+        if (
+            item.status == "saved"
+            and not missing_steps
+            and (item.pdf_present is True or item.pdf_verification_status == "present")
+        ):
+            outcome = "full_success"
+            full_success += 1
+        elif item.status in {"saved", "degraded"}:
+            outcome = "partial"
+            partial += 1
+        elif item.status == "duplicate":
+            outcome = "skipped"
+        else:
+            outcome = "failure"
+        item_reports.append({
+            "doc_id": item.doc_id,
+            "item_key": item.zotero_item_key,
+            "title": item.title,
+            "status": item.status,
+            "pdf_present": item.pdf_present,
+            "indexed": item.indexed,
+            "noted": item.noted,
+            "classified": item.classified,
+            "tagged": item.tagged,
+            "outcome": outcome,
+            "missing_steps": missing_steps,
+        })
+
     return {
         **_batch_summary(batch),
+        "noted_count": sum(1 for item in batch.items if item.noted),
+        "classified_count": sum(1 for item in batch.items if item.classified),
+        "tagged_count": sum(1 for item in batch.items if item.tagged),
+        "full_success_count": full_success,
+        "partial_count": partial,
+        "items": item_reports,
         "reindex_eligible": batch.reindex_eligible_item_keys(),
     }
 
@@ -459,6 +529,23 @@ def get_batch_status(
         from ..state import ToolError
 
         raise ToolError(f"Batch {batch_id!r} not found")
+    if batch.legacy_ingest_batch_id and batch.phase not in {
+        "candidate",
+        "candidates_confirmed",
+        "preflighting",
+        "preflight_blocked",
+        "approved",
+        "post_process_verified",
+        "done",
+        "aborted",
+    }:
+        status = ingestion.get_ingest_status_impl(batch.legacy_ingest_batch_id)
+        target_phase = (
+            "post_ingest_verified"
+            if batch.phase == "ingesting" and status.get("is_final") is True
+            else batch.phase
+        )
+        batch = _apply_legacy_ingest_result(batch, status, phase=target_phase)
     return _serialize_batch(batch)
 
 

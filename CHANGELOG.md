@@ -14,6 +14,13 @@ zotpilot update --dry-run    # 预览操作，不执行
 
 ## [Unreleased]
 
+### Changed
+- Install/update runtime reconciliation now treats deployed skill content as part of version state; same-version skill edits will redeploy instead of being skipped as "up-to-date".
+- API keys are now persisted in the local ZotPilot config JSON (`~/.config/zotpilot/config.json` on Unix, `%APPDATA%\\zotpilot\\config.json` on Windows) as the v0.5.0 source of truth.
+
+### Security / UX Notes
+- Local config files containing API keys are written with restrictive permissions on Unix (`0600`). Users should still avoid syncing the config file into public repos or shared dotfile backups.
+
 ---
 
 ## [0.5.0] - 2026-04-07

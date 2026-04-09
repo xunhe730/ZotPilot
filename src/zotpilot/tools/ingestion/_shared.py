@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time  # noqa: F401  re-exported for research_workflow compatibility
 from typing import Literal
@@ -136,6 +137,55 @@ def _lookup_local_item_key_by_doi(normalized_doi: str | None) -> str | None:
         return None
     unique_keys = [hit["item_key"] for hit in hits if isinstance(hit, dict) and hit.get("item_key")]
     return unique_keys[0] if unique_keys else None
+
+
+def _normalize_title_for_collision(title: str | None) -> str:
+    if not title:
+        return ""
+    lowered = title.casefold()
+    lowered = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return " ".join(lowered.split())
+
+
+def _lookup_suspected_local_duplicates_by_title(
+    title: str | None,
+    normalized_doi: str | None,
+    *,
+    limit: int = 5,
+) -> list[dict]:
+    """Return conservative title collisions as non-blocking duplicate hints."""
+    normalized_title = _normalize_title_for_collision(title)
+    if not normalized_title or not title:
+        return []
+    try:
+        hits = _get_zotero().advanced_search(
+            [{"field": "title", "op": "contains", "value": title}],
+            limit=limit,
+        )
+    except Exception:
+        return []
+
+    matches: list[dict] = []
+    seen_keys: set[str] = set()
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        hit_key = hit.get("item_key")
+        if not hit_key or hit_key in seen_keys:
+            continue
+        if _normalize_title_for_collision(hit.get("title")) != normalized_title:
+            continue
+        hit_doi = ingestion_search.normalize_doi(hit.get("doi"))
+        if normalized_doi and hit_doi and hit_doi == normalized_doi:
+            continue
+        seen_keys.add(hit_key)
+        matches.append({
+            "item_key": hit_key,
+            "title": hit.get("title"),
+            "year": hit.get("year"),
+            "doi": hit_doi,
+        })
+    return matches
 
 
 def _coerce_json_list(value, field_name: str):
