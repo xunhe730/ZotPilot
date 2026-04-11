@@ -11,17 +11,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from zotpilot import __version__
-from zotpilot._platforms import deploy_skills
-from zotpilot.cli import (
+from zotpilot._platforms import (
     SkillDir,
     _detect_cli_installer,
     _get_current_version,
     _get_latest_pypi_version,
     _get_skill_dirs,
-    _is_zotpilot_skill_repo,
     _uv_bin_dir,
-    cmd_update,
+    deploy_skills,
 )
+from zotpilot.cli import _is_zotpilot_skill_repo, cmd_update
 
 
 def _make_args(**kwargs):
@@ -50,7 +49,7 @@ def _make_skill_dir(tmp_path: Path, name: str = "zotpilot") -> Path:
 class TestUvBinDir:
     def test_uv_bin_dir_failure_returns_none(self):
         """subprocess raises → None."""
-        with patch("zotpilot.cli.subprocess.run", side_effect=Exception("no uv")):
+        with patch("zotpilot._platforms.subprocess.run", side_effect=Exception("no uv")):
             assert _uv_bin_dir(["uv"]) is None
 
     def test_uv_bin_dir_nonzero_returns_none(self):
@@ -58,7 +57,7 @@ class TestUvBinDir:
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
-        with patch("zotpilot.cli.subprocess.run", return_value=mock_result):
+        with patch("zotpilot._platforms.subprocess.run", return_value=mock_result):
             assert _uv_bin_dir(["uv"]) is None
 
     def test_uv_bin_dir_empty_stdout_returns_none(self):
@@ -66,7 +65,7 @@ class TestUvBinDir:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "   "
-        with patch("zotpilot.cli.subprocess.run", return_value=mock_result):
+        with patch("zotpilot._platforms.subprocess.run", return_value=mock_result):
             assert _uv_bin_dir(["uv"]) is None
 
 
@@ -91,7 +90,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = None  # no direct_url.json
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=None):
+             patch("zotpilot._platforms._uv_bin_dir", return_value=None):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "pip"
         assert uv_cmd is None
@@ -116,7 +115,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = None
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=str(bin_dir / "uv")), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=bin_dir.resolve()), \
+             patch("zotpilot._platforms._uv_bin_dir", return_value=bin_dir.resolve()), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"
@@ -140,7 +139,7 @@ class TestDetectCliInstaller:
 
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", side_effect=fake_uv_bin_dir), \
+             patch("zotpilot._platforms._uv_bin_dir", side_effect=fake_uv_bin_dir), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"
@@ -152,7 +151,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = "not valid json {"
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=None):
+             patch("zotpilot._platforms._uv_bin_dir", return_value=None):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "unknown"
         assert uv_cmd is None
@@ -177,7 +176,7 @@ class TestDetectCliInstaller:
 
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value="/usr/local/bin/uv"), \
-             patch("zotpilot.cli._uv_bin_dir", side_effect=fake_uv_bin_dir), \
+             patch("zotpilot._platforms._uv_bin_dir", side_effect=fake_uv_bin_dir), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"

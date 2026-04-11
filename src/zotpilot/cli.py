@@ -1,17 +1,20 @@
 """CLI entry point for ZotPilot."""
 import argparse
-import dataclasses
-import importlib.metadata
 import json
 import logging
-import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from ._platforms import (
+    _deployment_status,
+    _desired_env_from_config,
+    _detect_cli_installer,
+    _get_current_version,
+    _get_latest_pypi_version,
+    _get_skill_dirs,  # noqa: F401 — re-exported for test patching compatibility
+)
 from .config import Config, _default_config_dir
 
 logger = logging.getLogger(__name__)
@@ -664,70 +667,10 @@ def cmd_config(args):
     return 0
 
 
-@dataclasses.dataclass
-class SkillDir:
-    path: Path
-    is_symlink: bool
-    is_broken_symlink: bool
-    is_duplicate: bool
 
 
-def _uv_bin_dir(uv_cmd: list[str]) -> "Path | None":
-    """Run `uv tool dir --bin` and return the path, or None on failure."""
-    try:
-        result = subprocess.run(
-            uv_cmd + ["tool", "dir", "--bin"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return Path(result.stdout.strip())
-        return None
-    except Exception:
-        return None
 
 
-def _detect_cli_installer() -> "tuple[str, list[str] | None]":
-    """Detect how zotpilot CLI was installed.
-
-    Returns (installer, uv_cmd) where installer is one of:
-    'editable', 'uv', 'pip', 'unknown'
-    """
-    # Step 1: Check for editable install via direct_url.json
-    try:
-        dist = importlib.metadata.distribution("zotpilot")
-        direct_url_text = dist.read_text("direct_url.json")
-        if direct_url_text:
-            data = json.loads(direct_url_text)
-            dir_info = data.get("dir_info", {})
-            if dir_info.get("editable"):
-                return ("editable", None)
-    except importlib.metadata.PackageNotFoundError:
-        return ("unknown", None)
-    except json.JSONDecodeError:
-        return ("unknown", None)  # malformed direct_url.json — conservative fallback
-    except (KeyError, TypeError):
-        pass  # malformed direct_url.json structure
-
-    # Step 2: uv detection via shutil.which("uv")
-    argv0 = Path(sys.argv[0]).resolve()
-    uv_path = shutil.which("uv")
-    if uv_path:
-        bin_dir = _uv_bin_dir(["uv"])
-        if bin_dir and argv0.is_relative_to(bin_dir):
-            return ("uv", ["uv"])
-        # uv binary found but bin_dir lookup failed — try python -m uv as fallback
-        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
-        if bin_dir and argv0.is_relative_to(bin_dir):
-            return ("uv", [sys.executable, "-m", "uv"])
-    else:
-        # Try via sys.executable -m uv
-        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
-        if bin_dir and argv0.is_relative_to(bin_dir):
-            return ("uv", [sys.executable, "-m", "uv"])
-
-    # Step 4 / default: metadata found but not editable and not uv → pip
-    return ("pip", None)
 
 
 def _is_zotpilot_skill_repo(path: Path) -> bool:
@@ -760,145 +703,14 @@ def _is_zotpilot_skill_repo(path: Path) -> bool:
         return False
 
 
-def _get_current_version() -> str:
-    """Return the currently installed zotpilot version."""
-    try:
-        return importlib.metadata.version("zotpilot")
-    except Exception:
-        try:
-            from . import __version__
-            return __version__
-        except Exception:
-            return "unknown"
 
 
-def _get_latest_pypi_version() -> "str | None":
-    """Fetch the latest zotpilot version from PyPI. Returns None on any error."""
-    try:
-        with urllib.request.urlopen("https://pypi.org/pypi/zotpilot/json", timeout=5) as resp:
-            data = json.loads(resp.read())
-            return data["info"]["version"]
-    except Exception:
-        return None
 
 
-def _get_skill_dirs() -> list[SkillDir]:
-    """Collect and deduplicate zotpilot skill directories across all platforms."""
-    from ._platforms import PLATFORMS
-
-    candidates: list[Path] = []
-    for info in PLATFORMS.values():
-        skills_dir = info.get("skills_dir")
-        if not skills_dir:
-            continue
-        path = Path(skills_dir).expanduser() / "zotpilot"
-        if path.is_symlink() or path.exists():
-            candidates.append(path)
-
-    # Dedup by realpath: group entries by resolved path
-    # Broken symlinks use path itself as key
-    seen: dict[Path, list[Path]] = {}
-    for p in candidates:
-        if p.is_symlink() and not p.exists():
-            key = p  # broken symlink — unique key
-        else:
-            key = p.resolve()
-        seen.setdefault(key, []).append(p)
-
-    result: list[SkillDir] = []
-    for key, paths in seen.items():
-        # Sort: non-symlinks first, then symlinks
-        paths_sorted = sorted(paths, key=lambda x: (x.is_symlink(), str(x)))
-        for i, p in enumerate(paths_sorted):
-            is_sym = p.is_symlink()
-            is_broken = is_sym and not p.exists()
-            if is_broken:
-                # broken symlinks are never canonical but not marked as duplicate
-                result.append(SkillDir(path=p, is_symlink=True, is_broken_symlink=True, is_duplicate=False))
-            else:
-                result.append(SkillDir(
-                    path=p,
-                    is_symlink=is_sym,
-                    is_broken_symlink=False,
-                    is_duplicate=(i > 0),
-                ))
-
-    return result
 
 
-def _deployment_status(config: Config | None = None) -> dict:
-    """Return platform detection, registration, skill dirs, and drift."""
-    try:
-        from ._platforms import reconcile_runtime
-
-        desired_keys = _desired_env_from_config(config)
-
-        reconcile = reconcile_runtime(
-            gemini_key=desired_keys.get("GEMINI_API_KEY"),
-            dashscope_key=desired_keys.get("DASHSCOPE_API_KEY"),
-            zotero_api_key=desired_keys.get("ZOTERO_API_KEY"),
-            zotero_user_id=desired_keys.get("ZOTERO_USER_ID"),
-            apply=False,
-        )
-        detected = [plat for plat, state in reconcile.current.platforms.items() if state.detected]
-        registered = [plat for plat, state in reconcile.current.platforms.items() if state.registered]
-        unsupported = [
-            plat for plat, state in reconcile.current.platforms.items()
-            if state.detected and not state.supported
-        ]
-        skill_dirs = [
-            {
-                "path": str(skill_dir.path),
-                "is_symlink": skill_dir.is_symlink,
-                "is_broken_symlink": skill_dir.is_broken_symlink,
-                "is_duplicate": skill_dir.is_duplicate,
-            }
-            for skill_dir in _get_skill_dirs()
-        ]
-        return {
-            "detected_platforms": detected,
-            "registered_platforms": registered,
-            "unsupported_platforms": unsupported,
-            "registration": {
-                plat: {
-                    "registered": state.registered,
-                    "config_path": state.config_path,
-                    "supported": state.supported,
-                    "command": state.command,
-                }
-                for plat, state in reconcile.current.platforms.items()
-            },
-            "skill_dirs": skill_dirs,
-            "drift_state": reconcile.changes.drift_state,
-            "restart_required": reconcile.changes.drift_state != "clean",
-        }
-    except Exception as exc:
-        logger.debug("deployment status inspection failed", exc_info=True)
-        return {
-            "detected_platforms": [],
-            "registered_platforms": [],
-            "unsupported_platforms": [],
-            "registration": {},
-            "skill_dirs": [],
-            "drift_state": "unknown",
-            "restart_required": False,
-            "deployment_warning": str(exc),
-        }
 
 
-def _desired_env_from_config(config: Config | None) -> dict[str, str]:
-    desired_keys: dict[str, str] = {}
-    if config is None:
-        return desired_keys
-    if config.gemini_api_key:
-        desired_keys["GEMINI_API_KEY"] = config.gemini_api_key
-    if config.dashscope_api_key:
-        desired_keys["DASHSCOPE_API_KEY"] = config.dashscope_api_key
-    if config.zotero_api_key:
-        desired_keys["ZOTERO_API_KEY"] = config.zotero_api_key
-    if config.zotero_user_id:
-        desired_keys["ZOTERO_USER_ID"] = config.zotero_user_id
-    return desired_keys
 
 
 def _is_windows_lock_error(stderr: str) -> bool:
@@ -1235,7 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_config.set_defaults(func=cmd_config)
 
     # update
-    sub_update = subparsers.add_parser("update", help="Upgrade CLI and skill files")
+    sub_update = subparsers.add_parser("upgrade", aliases=["update"], help="Upgrade CLI and skill files")
     grp = sub_update.add_mutually_exclusive_group()
     grp.add_argument("--cli-only", action="store_true", help="Only update CLI")
     grp.add_argument("--skill-only", action="store_true", help="Only update skill files")

@@ -11,18 +11,26 @@ env vars via -e flags on the command line. This briefly exposes keys in the
 process table. This is the only mechanism these CLIs provide. For higher
 security, register manually and use environment variables or secret managers.
 """
+import dataclasses
 import hashlib
+import importlib.metadata
 import json
+import logging
 import os
 import platform
 import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import resources
 from pathlib import Path
+
+from .config import Config
+
+logger = logging.getLogger(__name__)
 
 try:  # Python 3.11+
     import tomllib
@@ -52,27 +60,12 @@ PLATFORMS = {
         "label": "OpenCode",
         "skills_dir": "~/.config/opencode/skills",
     },
-    "gemini": {
-        "tier": 1,
-        "binary": "gemini",
-        "label": "Gemini CLI",
-        "skills_dir": "~/.gemini/skills",
-    },
-    "cursor": {
-        "tier": 1,
-        "binary": None,
-        "label": "Cursor",
-        "skills_dir": "~/.cursor/skills",
-    },
-    "windsurf": {
-        "tier": 1,
-        "binary": None,
-        "label": "Windsurf",
-        "skills_dir": "~/.codeium/windsurf/skills",
-    },
+
+
+
 }
 
-SUPPORTED_PLATFORM_NAMES: tuple[str, ...] = ("claude-code", "codex")
+SUPPORTED_PLATFORM_NAMES: tuple[str, ...] = ("claude-code", "codex", "opencode")
 
 
 @dataclass(frozen=True)
@@ -220,26 +213,12 @@ def _mcp_config_path(plat: str) -> Path | None:
     """Return the MCP config file path for platforms that use config files."""
     home = _home()
     if _is_windows():
-        appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
-        code_support = appdata / "Code"
         paths = {
             "opencode": home / ".config" / "opencode" / "opencode.json",
-            "gemini": home / ".gemini" / "settings.json",
-            "cursor": home / ".cursor" / "mcp.json",
-            "windsurf": appdata / "windsurf" / "mcp_config.json",
-            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",  # noqa: E501
-            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",  # noqa: E501
         }
     else:  # macOS / Linux
-        is_mac = platform.system() == "Darwin"
-        code_support = (home / "Library" / "Application Support" / "Code") if is_mac else (home / ".config" / "Code")
         paths = {
             "opencode": home / ".config" / "opencode" / "opencode.json",
-            "gemini": home / ".gemini" / "settings.json",
-            "cursor": home / ".cursor" / "mcp.json",
-            "windsurf": home / ".codeium" / "windsurf" / "mcp_config.json",
-            "cline": code_support / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json",  # noqa: E501
-            "roo": code_support / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "mcp_settings.json",  # noqa: E501
         }
     return paths.get(plat)
 
@@ -257,47 +236,21 @@ def _claude_config_path() -> Path:
 # ---------------------------------------------------------------------------
 
 def _detect_app_install(plat: str) -> bool:
-    """Check whether an editor-based client is actually installed.
-
-    Cannot rely on MCP config files alone — ``zotpilot register`` itself may
-    have created them as a side effect on a previous run.  Look for evidence
-    that the actual application exists.
-    """
+    """Check whether an editor-based client is actually installed."""
     home = _home()
-    system = platform.system()
-
-    if plat == "cursor":
-        if system == "Darwin":
-            return Path("/Applications/Cursor.app").exists()
-        if system == "Windows":
-            local_appdata = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-            return (local_appdata / "Programs" / "cursor" / "Cursor.exe").exists()
-        # Linux
-        return any(shutil.which(name) for name in ("cursor",))
-
-    if plat == "windsurf":
-        if system == "Darwin":
-            return Path("/Applications/Windsurf.app").exists()
-        if system == "Windows":
-            local_appdata = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-            return (local_appdata / "Programs" / "Windsurf" / "Windsurf.exe").exists()
-        return any(shutil.which(name) for name in ("windsurf",))
-
     if plat == "opencode":
-        # OpenCode without a binary on PATH may still be a real install
-        # via local node_modules.  Look for a package.json that mentions
-        # opencode under its config dir.
         cfg_dir = home / ".config" / "opencode"
         pkg = cfg_dir / "package.json"
         if pkg.exists():
             try:
+                import json
                 data = json.loads(pkg.read_text(encoding="utf-8"))
                 deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
                 if any("opencode" in name for name in deps):
                     return True
-            except (json.JSONDecodeError, OSError):
+            except (Exception):
                 pass
-        return False
+    return False
 
     return False
 
@@ -326,7 +279,7 @@ def detect_platforms() -> list[str]:
             found.add(name)
 
     # Step 2: Editor-based clients (and OpenCode local install fallback)
-    for name in ("cursor", "windsurf", "opencode"):
+    for name in ("opencode",):
         if name in found:
             continue
         if _detect_app_install(name):
@@ -1054,7 +1007,6 @@ def register(
     # Auto-fill from config file if not passed as CLI args
     if not all([gemini_key, dashscope_key, zotero_api_key, zotero_user_id]):
         try:
-            from .config import Config
             cfg = Config.load()
             gemini_key = gemini_key or cfg.gemini_api_key
             dashscope_key = dashscope_key or cfg.dashscope_api_key
@@ -1076,7 +1028,7 @@ def register(
                     file=sys.stderr,
                 )
         print("No supported AI agent platforms detected for v0.5.0.", file=sys.stderr)
-        print(f"Supported: {', '.join(SUPPORTED_PLATFORM_NAMES)}", file=sys.stderr)
+        print(f"Supported: {', '.join(SUPPORTED_PLATFORM_NAMES)}")
         return {}
 
     print(f"Reconciling runtime for: {', '.join(PLATFORMS[p]['label'] for p in supported_targets)}")
@@ -1159,3 +1111,203 @@ def check_registered() -> dict:
         }
         for plat, platform_state in state.platforms.items()
     }
+
+
+
+@dataclasses.dataclass
+class SkillDir:
+    path: Path
+    is_symlink: bool
+    is_broken_symlink: bool
+    is_duplicate: bool
+
+def _uv_bin_dir(uv_cmd: list[str]) -> "Path | None":
+    """Run `uv tool dir --bin` and return the path, or None on failure."""
+    try:
+        result = subprocess.run(
+            uv_cmd + ["tool", "dir", "--bin"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return Path(result.stdout.strip())
+        return None
+    except Exception:
+        return None
+
+def _detect_cli_installer() -> "tuple[str, list[str] | None]":
+    """Detect how zotpilot CLI was installed.
+
+    Returns (installer, uv_cmd) where installer is one of:
+    'editable', 'uv', 'pip', 'unknown'
+    """
+    # Step 1: Check for editable install via direct_url.json
+    try:
+        dist = importlib.metadata.distribution("zotpilot")
+        direct_url_text = dist.read_text("direct_url.json")
+        if direct_url_text:
+            data = json.loads(direct_url_text)
+            dir_info = data.get("dir_info", {})
+            if dir_info.get("editable"):
+                return ("editable", None)
+    except importlib.metadata.PackageNotFoundError:
+        return ("unknown", None)
+    except json.JSONDecodeError:
+        return ("unknown", None)  # malformed direct_url.json — conservative fallback
+    except (KeyError, TypeError):
+        pass  # malformed direct_url.json structure
+
+    # Step 2: uv detection via shutil.which("uv")
+    argv0 = Path(sys.argv[0]).resolve()
+    uv_path = shutil.which("uv")
+    if uv_path:
+        bin_dir = _uv_bin_dir(["uv"])
+        if bin_dir and argv0.is_relative_to(bin_dir):
+            return ("uv", ["uv"])
+        # uv binary found but bin_dir lookup failed — try python -m uv as fallback
+        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
+        if bin_dir and argv0.is_relative_to(bin_dir):
+            return ("uv", [sys.executable, "-m", "uv"])
+    else:
+        # Try via sys.executable -m uv
+        bin_dir = _uv_bin_dir([sys.executable, "-m", "uv"])
+        if bin_dir and argv0.is_relative_to(bin_dir):
+            return ("uv", [sys.executable, "-m", "uv"])
+
+    # Step 4 / default: metadata found but not editable and not uv → pip
+    return ("pip", None)
+
+def _get_current_version() -> str:
+    """Return the currently installed zotpilot version."""
+    try:
+        return importlib.metadata.version("zotpilot")
+    except Exception:
+        try:
+            from . import __version__
+            return __version__
+        except Exception:
+            return "unknown"
+
+def _get_latest_pypi_version() -> "str | None":
+    """Fetch the latest zotpilot version from PyPI. Returns None on any error."""
+    try:
+        with urllib.request.urlopen("https://pypi.org/pypi/zotpilot/json", timeout=5) as resp:
+            data = json.loads(resp.read())
+            return data["info"]["version"]
+    except Exception:
+        return None
+
+def _get_skill_dirs() -> list[SkillDir]:
+    """Collect and deduplicate zotpilot skill directories across all platforms."""
+
+    candidates: list[Path] = []
+    for info in PLATFORMS.values():
+        skills_dir = info.get("skills_dir")
+        if not skills_dir:
+            continue
+        path = Path(skills_dir).expanduser() / "zotpilot"
+        if path.is_symlink() or path.exists():
+            candidates.append(path)
+
+    # Dedup by realpath: group entries by resolved path
+    # Broken symlinks use path itself as key
+    seen: dict[Path, list[Path]] = {}
+    for p in candidates:
+        if p.is_symlink() and not p.exists():
+            key = p  # broken symlink — unique key
+        else:
+            key = p.resolve()
+        seen.setdefault(key, []).append(p)
+
+    result: list[SkillDir] = []
+    for key, paths in seen.items():
+        # Sort: non-symlinks first, then symlinks
+        paths_sorted = sorted(paths, key=lambda x: (x.is_symlink(), str(x)))
+        for i, p in enumerate(paths_sorted):
+            is_sym = p.is_symlink()
+            is_broken = is_sym and not p.exists()
+            if is_broken:
+                # broken symlinks are never canonical but not marked as duplicate
+                result.append(SkillDir(path=p, is_symlink=True, is_broken_symlink=True, is_duplicate=False))
+            else:
+                result.append(SkillDir(
+                    path=p,
+                    is_symlink=is_sym,
+                    is_broken_symlink=False,
+                    is_duplicate=(i > 0),
+                ))
+
+    return result
+
+def _deployment_status(config: Config | None = None) -> dict:
+    """Return platform detection, registration, skill dirs, and drift."""
+    try:
+
+        desired_keys = _desired_env_from_config(config)
+
+        reconcile = reconcile_runtime(
+            gemini_key=desired_keys.get("GEMINI_API_KEY"),
+            dashscope_key=desired_keys.get("DASHSCOPE_API_KEY"),
+            zotero_api_key=desired_keys.get("ZOTERO_API_KEY"),
+            zotero_user_id=desired_keys.get("ZOTERO_USER_ID"),
+            apply=False,
+        )
+        detected = [plat for plat, state in reconcile.current.platforms.items() if state.detected]
+        registered = [plat for plat, state in reconcile.current.platforms.items() if state.registered]
+        unsupported = [
+            plat for plat, state in reconcile.current.platforms.items()
+            if state.detected and not state.supported
+        ]
+        skill_dirs = [
+            {
+                "path": str(skill_dir.path),
+                "is_symlink": skill_dir.is_symlink,
+                "is_broken_symlink": skill_dir.is_broken_symlink,
+                "is_duplicate": skill_dir.is_duplicate,
+            }
+            for skill_dir in _get_skill_dirs()
+        ]
+        return {
+            "detected_platforms": detected,
+            "registered_platforms": registered,
+            "unsupported_platforms": unsupported,
+            "registration": {
+                plat: {
+                    "registered": state.registered,
+                    "config_path": state.config_path,
+                    "supported": state.supported,
+                    "command": state.command,
+                }
+                for plat, state in reconcile.current.platforms.items()
+            },
+            "skill_dirs": skill_dirs,
+            "drift_state": reconcile.changes.drift_state,
+            "restart_required": reconcile.changes.drift_state != "clean",
+        }
+    except Exception as exc:
+        logger.debug("deployment status inspection failed", exc_info=True)
+        return {
+            "detected_platforms": [],
+            "registered_platforms": [],
+            "unsupported_platforms": [],
+            "registration": {},
+            "skill_dirs": [],
+            "drift_state": "unknown",
+            "restart_required": False,
+            "deployment_warning": str(exc),
+        }
+
+def _desired_env_from_config(config: Config | None) -> dict[str, str]:
+    desired_keys: dict[str, str] = {}
+    if config is None:
+        return desired_keys
+    if config.gemini_api_key:
+        desired_keys["GEMINI_API_KEY"] = config.gemini_api_key
+    if config.dashscope_api_key:
+        desired_keys["DASHSCOPE_API_KEY"] = config.dashscope_api_key
+    if config.zotero_api_key:
+        desired_keys["ZOTERO_API_KEY"] = config.zotero_api_key
+    if config.zotero_user_id:
+        desired_keys["ZOTERO_USER_ID"] = config.zotero_user_id
+    return desired_keys
+
