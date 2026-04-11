@@ -1,29 +1,23 @@
 ---
 name: ztp-setup
-description: ZotPilot installation, configuration, registration, and first-index workflow
+description: ZotPilot installation, configuration, and registration
 ---
+# Setup Workflow
 
-# ztp-setup
+## Steps
+1. Check installation: `python scripts/run.py status --json` or `uv run zotpilot status`
+2. If not installed: `pip install zotpilot` or `uv tool install zotpilot`
+3. If installed but needing updates (Upgrade workflow): run `zotpilot upgrade`
+4. **Provider Selection**: Determine the user's preferred embedding platform.
+   - **gemini**: Requires Google API key. Paid, but provides high-quality embeddings.
+   - **dashscope**: Aliyun service. Preferred for Chinese users.
+   - **local**: No API key required, completely private, but indexing runs slowly.
+   - **none**: Disables vector indexing. Only metadata/SQL search remains available.
+5. **API Key Setup**: `zotpilot register --gemini-key KEY` (replace flag based on provider), or instruct user to set environment variables.
+6. Configure: `zotpilot setup --non-interactive --provider [selected_provider]`
+7. Register MCP: `zotpilot register`
+8. Initial Index: `zotpilot index --limit 20` (first-time quick index)
+9. Verify health: `zotpilot doctor`
 
-Use this workflow for fresh installs, reconfiguration, and upgrades.
-
-Requirements:
-
-- Set `ZOTPILOT_TOOL_PROFILE=extended`
-- Before restart, rely on CLI commands rather than MCP tools
-
-Workflow:
-
-1. Detect whether ZotPilot is already installed and which install mode is in use.
-2. Recommend an embedding provider: `gemini`, `dashscope`, `local`, or `none`.
-3. Run `zotpilot setup --non-interactive --provider <choice>` when configuration needs to be written.
-4. Run `zotpilot register` to register MCP and deploy packaged skill files.
-5. Tell the user to restart the client after registration or upgrade.
-6. After restart, use `get_index_stats` to verify readiness.
-7. If indexing is needed, run `index_library` until `has_more=false`.
-
-Rules:
-
-- Do not assume MCP tools are available before restart.
-- Prefer `zotpilot update` for upgrades.
-- If `embedding_provider=none`, explain that semantic search is disabled but metadata workflows still work.
+## Troubleshooting
+- If Zotero is not natively detected at standard paths during setup or registration, instruct the user to explicitly define it via the flag: `--zotero-dir /path/to/zotero/data`

@@ -24,35 +24,72 @@ description: >
    > - **N** → 请先启用机构网络，再告诉我继续
    - Skip this check entirely when all selected candidates are arXiv-only, DOAJ-listed, or already marked `is_oa: true` — those papers are reachable without institutional access.
    - Plan C's Connector save uses the user's **current network context**. Paywalled papers without institutional access will come back as `saved_metadata_only`; this reminder avoids that failure mode before it happens.
-7. **Ingest**: `ingest_by_identifiers(selected_identifiers)`
+7. **Ingest**: `ingest_by_identifiers(candidates=selected_search_results)`
+   - **Forward search result dicts directly.** `search_academic_databases` already returns structured candidates with `doi`, `arxiv_id`, `landing_page_url`, `is_oa_published`, and `title`. Pass the selected rows unchanged to `candidates=`. Do NOT reconstruct identifier strings from memory, and do NOT use the deprecated `identifiers=` parameter for search results.
+   - The `local_duplicate` annotation from search tells you which candidates are already in the library. Filter them out before calling ingest unless the user explicitly wants a metadata refresh.
+   - If the tool raises `INBOX collection unavailable`, `ZOTERO_API_KEY` / `ZOTERO_USER_ID` is missing — stop and ask the user to configure credentials before retrying.
 8. **Handle results**:
    - If `action_required` contains "anti_bot" → **STOP**, tell user to open browser, wait for confirmation, retry with IDENTICAL inputs
    - If `action_required` contains "connector_offline" → **STOP**, surface remediation to user
    - All saved → proceed to Phase 3
-9. **[USER_REQUIRED]** Show ingest results table (title / status / has_pdf / item_key)
+9. **[USER_REQUIRED]** Show ingest results table (title / status / has_pdf / item_key). Items are already in the `INBOX` collection at this point. **STOP here** and ask explicitly:
+   > 入库完成（已归档到 INBOX 集合）。是否继续进入 Phase 3 后处理（标签 + 分类 + 索引）？(Y/N)
+
+   Do NOT call **any** post-processing tool (`manage_tags`, `manage_collections`, `create_note`, `index_library`) until the user replies `Y`. If the user replies `N` or only asks for indexing, skip to step 15.
 
 ## Phase 3 — Post-processing
 
-After user approves ingest results, execute post-processing for each ingested paper:
+**Only enter this phase after the user replies Y to step 9.**
 
-10. **Tag cleanup**: For each saved item, clean auto-generated publisher tags
-    - `manage_tags(action="remove", item_keys=[...], tags=[auto-generated tags])`
-    - Auto-generated tags come from arXiv, publisher sites (e.g., "Computer Science - Computation and Language")
-11. **Tag assignment**: Apply user's existing tag vocabulary
-    - Use `browse_library(view="tags")` to discover existing tags
-    - Propose tags from existing vocabulary that match each paper's topic
-    - `manage_tags(action="add", item_keys=[...], tags=[proposed_tags])`
-    - **[USER_REQUIRED]** If proposing NEW tags not in existing vocabulary, list them and confirm
-12. **Collection assignment**: Classify into collections
-    - Use `browse_library(view="collections")` to discover existing collections
-    - Propose collection placement based on topic match
-    - `manage_collections(action="add", item_keys=[...], collection=...)`
-    - If no matching collection exists, propose creating one with `manage_collections(action="create")`
-    - **[USER_REQUIRED]** Confirm before creating new collections
-13. **Note creation** (optional, if user requested):
-    - `create_note(item_key, content)` — brief research note per paper
-14. **Index update**: `index_library(item_keys=[newly_ingested_keys])`
-15. **Verify**: `get_index_stats` + `search_topic` to confirm new papers are searchable
+Items are already in the `INBOX` collection (routed at save time in Phase 2). Phase 3's job is **topic tagging + moving into domain collections + indexing** — not Inbox management.
+
+Post-processing is a **plan-then-execute** flow: gather context, draft ONE unified batch plan covering all ingested papers, get ONE user confirmation, then batch-execute. Do NOT fire incremental `manage_tags` / `manage_collections` calls while drafting — every call triggers a permission prompt and the user ends up approving 10+ times for a 4-paper batch.
+
+10. **Gather context** for the classification plan (read-only, parallelizable):
+    - `browse_library(view="tags")` — snapshot the existing tag vocabulary
+    - `browse_library(view="collections")` — snapshot the existing collection tree
+    - `get_paper_details` on each new `item_key` to see which auto-generated publisher / arXiv tags need cleanup
+
+11. **Draft the unified batch plan.** A research batch is typically on a single topic, so plan tags in two layers:
+
+    - **Common tags** — 1-3 tags applied to EVERY paper in the batch, capturing the shared research theme (e.g. `视觉语言模型`, `多模态大模型`, `深度学习`). Prefer the existing vocabulary from step 10's snapshot. If no existing tag captures the theme, you may propose at most ONE new common tag — it MUST be listed as `NEW: <tag>` for explicit user confirmation in step 12.
+    - **Variant tags** — 0–1 per paper, distinguishing content type within the batch *when the distinction matters*: `综述` (survey), `经典` (seminal / foundational), `实验` (empirical study), `评测` (benchmark), `方法` (new-method proposal). Draw from existing vocabulary or propose new ones as `NEW: <tag>`. **Skip variant tags entirely when the batch is homogeneous** — common tags alone carry the meaning.
+    - **Cleanup** (`remove_tags`) — auto-generated publisher / arXiv tags to delete (e.g. `Computer Science - Computation and Language`).
+
+    Build ONE table covering **all** ingested papers:
+
+    | item_key | title | remove_tags | add_tags (common + variant) | target_collection(s) |
+    |---|---|---|---|---|
+    | ... | ... | (publisher auto-tags) | (e.g. `视觉语言模型`, `综述`) | (from existing tree, or explicit `create: <name>`) |
+
+    **Hard rules while drafting**:
+    - **Prefer existing vocabulary.** Verify each tag against the step-10 snapshot before adding it to the plan.
+    - **New tags are allowed on demand** — but every new tag must be listed as `NEW: <tag>` so the user confirms it explicitly in step 12. Treat new tags as vocabulary additions (they will apply to future papers too), not as throwaways.
+    - **Tag quality**: a valid tag is a meaningful research-domain term (topic / field / content-type / era). NEVER use cryptic or prefixed tags (`*方法`, `_tmp`, `#tag`), NEVER workflow / state tags (`已读`, `待读`, `重要`, `TODO`), NEVER single generic filler words (`方法`, `method`, `paper`, `research`).
+    - **Collections from the existing tree first.** Only propose `create: <name>` when no existing collection is a reasonable parent, and justify in a one-line note.
+    - **Never use `manage_tags(action="set")`** — destructive; use `add` / `remove` only.
+    - Do NOT propose notes unless the user explicitly requested research notes in the original query.
+
+12. **[USER_REQUIRED]** Present the plan as a single table and STOP. Ask:
+    > 以上后处理方案是否执行？(Y / 修改 / N)
+
+    - List any `NEW:` tags prominently above the table so the user sees vocabulary additions before confirming.
+    - `Y` → proceed to step 13
+    - `修改` → accept user edits, redraft, ask again
+    - `N` → skip steps 13-14, jump to step 15 (index + verify only)
+
+13. **Execute the approved plan** in as few calls as possible. Exploit batch structure — common tags apply to everyone, variant tags only to subsets:
+    - `manage_tags(action="remove", item_keys=[group], tags=[cleanup set])` per group sharing the same cleanup set
+    - **One** `manage_tags(action="add", item_keys=[all_new_keys], tags=[common_tags])` — a single call covers the whole batch with common tags
+    - Additional `manage_tags(action="add", item_keys=[subset], tags=[variant_tag])` per variant-tag subset (skip this bullet if no variant tags)
+    - `manage_collections(action="add", item_keys=[group], collection=<key>)` per target collection
+    - Only `create_note` entries the user explicitly asked for
+
+14. **Transient error handling**: if a batch call fails with an SSL / network error, retry the **same** batch call once. Do NOT fragment into per-paper calls unless the batch fails twice — fragmentation multiplies permission prompts.
+
+15. **Index update and verify**:
+    - `index_library(item_keys=[newly_ingested_keys])`
+    - `get_index_stats` + `search_topic` to confirm new papers are searchable
 
 ## Phase 4 — Final Report
 
@@ -146,8 +183,13 @@ If `unresolved_filters` is non-empty, correct the name and retry (e.g. `"TPAMI"`
 
 ## Hard Rules
 - Never skip Phase 1 step 5 (user must select candidates before ingest)
+- Never skip the Phase 2 step 9 gate — user must reply `Y` before any Phase 3 tool runs
 - If `action_required` is non-empty → STOP, surface to user, do NOT work around
 - Never substitute web search for `search_academic_databases`
-- Post-processing tags must prefer existing vocabulary over inventing new tags
+- **Never flatten structured search results.** Phase 1 selection returns full candidate dicts; Phase 2 ingest must receive them via `candidates=`, never via reconstructed `identifiers=[...]`. The `identifiers` parameter is deprecated and only exists for manual user input.
+- **Inbox routing happens at save time**, not as a Phase 3 move. `ingest_by_identifiers` puts new items in `INBOX` automatically. Do NOT call `manage_collections` to "move to Inbox" — that is redundant and wasteful.
+- **Phase 3 is plan-then-execute.** All tagging / classification must go through a single drafted batch plan (step 11) and a single user confirmation (step 12). Never fire incremental `manage_tags` / `manage_collections` calls before the plan is approved.
+- **Tag vocabulary discipline.** Prefer existing tags from the step-10 snapshot. Proposing new tags is allowed when clearly needed, but each must appear as `NEW: <tag>` in the plan for explicit user confirmation — treat as vocabulary additions. NEVER cryptic/prefixed tags (`*方法`, `_tmp`, `#tag`), NEVER workflow-state tags (`已读`, `待读`, `重要`, `TODO`), NEVER single generic filler words (`方法`, `method`, `paper`).
+- **Batch-structured tagging.** Identify common tags (shared research theme, applied to all papers) and variant tags (0-1 per paper for content-type distinction). Execute via one batched `manage_tags(action="add", item_keys=[all_new], tags=[common])` call, then small subset calls for variants.
 - Treat `manage_tags(action="set")` as destructive — use `add`/`remove` instead
 - Do not report "完成" if any paper has missing post-processing steps
