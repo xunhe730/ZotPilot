@@ -111,18 +111,21 @@ def _start_parent_monitor():
                 kernel32.WaitForSingleObject(handle, INFINITE)
                 kernel32.CloseHandle(handle)
         else:
-            # Unix: poll parent PID
+            # Unix: poll parent PID and detect reparenting to PID 1 (launchd/init)
+            # On macOS, when the parent dies the child is reparented to PID 1,
+            # so os.kill(1, 0) would succeed and we'd never detect parent death.
             while True:
                 time.sleep(1.0)
+                ppid = os.getppid()
+                if ppid == 1:
+                    # Reparented → original parent died
+                    break
                 try:
-                    os.kill(target_pid, 0)
+                    os.kill(ppid, 0)
                 except (OSError, PermissionError):
                     break
 
         os._exit(0)
-
-    thread = threading.Thread(target=monitor, daemon=True)
-    thread.start()
 
 
 # Start parent monitor before anything else

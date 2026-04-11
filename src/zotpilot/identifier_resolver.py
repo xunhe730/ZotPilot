@@ -94,7 +94,18 @@ class IdentifierResolver:
         )
 
     def _resolve_doi(self, doi: str) -> PaperMetadata:
-        """Fetch metadata from CrossRef by DOI."""
+        """Fetch metadata from CrossRef by DOI.
+
+        arXiv DOIs (10.48550/arXiv.NNNN.NNNNN) are routed to the arXiv API
+        since CrossRef does not index them.
+        """
+        # arXiv DOI fast-path: avoid CrossRef 404 for 10.48550/arXiv.*
+        doi_lower = doi.strip().lower()
+        arxiv_prefix = "10.48550/arxiv."
+        if doi_lower.startswith(arxiv_prefix):
+            arxiv_id = doi[len(arxiv_prefix):].strip()
+            return self._resolve_arxiv(arxiv_id)
+
         work = self._crossref.get_by_doi(doi)
         if work is None:
             raise ToolError(f"DOI not found in CrossRef: {doi!r}")
