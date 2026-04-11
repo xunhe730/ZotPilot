@@ -332,11 +332,11 @@ def batch_collections(
 def manage_collections(
     action: Annotated[
         Literal["add", "remove", "create"],
-        Field(description="'add' puts items into a collection; 'remove' removes them from a collection; 'create' creates a new collection"),
+        Field(description="'add' puts items into a collection; 'remove' removes them from a collection; 'create' creates a new collection"),  # noqa: E501
     ],
     item_keys: Annotated[
         str | list[str] | None,
-        Field(description="Single Zotero item key or list of item keys (max 100 for batch). Optional for action='create'."),
+        Field(description="Single Zotero item key or list of item keys (max 100 for batch). Optional for action='create'."),  # noqa: E501
     ] = None,
     collection_key: Annotated[
         str | None,
@@ -352,7 +352,7 @@ def manage_collections(
         ),
     ] = True,
     name: Annotated[
-        str | None, 
+        str | None,
         Field(description="Display name for the new collection (required only if action='create')")
     ] = None,
 ) -> dict:
@@ -374,7 +374,7 @@ def manage_collections(
         )
     if not item_keys:
         raise ToolError("manage_collections requires item_keys for add/remove.")
-        
+
     keys = _normalize_item_keys(item_keys)
     if len(keys) == 1:
         key = keys[0]

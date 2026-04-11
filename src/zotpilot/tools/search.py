@@ -53,7 +53,7 @@ def search_papers(
         Literal["minimal", "standard", "full"],
         Field(description="Response detail level"),
     ] = "minimal",
-    section_type: Annotated[Literal["text", "tables", "figures"] | None, Field(description="Filter by content type (tables or figures)")] = None,
+    section_type: Annotated[Literal["text", "tables", "figures"] | None, Field(description="Filter by content type (tables or figures)")] = None,  # noqa: E501
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
     start = time.perf_counter()

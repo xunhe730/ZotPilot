@@ -8,10 +8,8 @@ from ..state import (
     _clear_library_override,
     _get_zotero,
     _set_library_override,
-    mcp,
 )
 from ..workflow import BatchStore
-from .profiles import tool_tags
 
 _batch_store = BatchStore()
 

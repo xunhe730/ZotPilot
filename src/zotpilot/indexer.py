@@ -197,7 +197,7 @@ class Indexer:
                     "results": [], "indexed": 0, "failed": 0, "empty": 0,
                     "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
                 }
-                
+
         if item_keys:
             items = [i for i in items if i.item_key in item_keys]
             if not items:
