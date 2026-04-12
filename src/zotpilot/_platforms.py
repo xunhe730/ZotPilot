@@ -252,7 +252,6 @@ def _detect_app_install(plat: str) -> bool:
                 pass
     return False
 
-    return False
 
 
 def detect_platforms() -> list[str]:

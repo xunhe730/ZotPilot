@@ -69,3 +69,21 @@
 - Other tools are NOT affected — only `index_library` acquires this lock
 - Docstring updated to document concurrency behavior
 - 543 tests pass, ruff clean
+## T9: OpenAlex Rate Limiter and 429 Retry — COMPLETED
+- `OpenAlexClient.__init__` already sets `_rate_limit_delay` (1.0s anonymous, 0.1s with email) and `_last_request`
+- `_rate_limit()` enforces per-instance rate limiting via `time.sleep()` — does NOT affect other instances
+- Added `logger.debug()` for rate limit sleep events
+- Added 429 retry with exponential backoff in `_request()`: starts at 1s, doubles each retry, max 3 retries
+- 429 warnings logged per retry attempt; error logged when all retries exhausted
+- Non-429 responses pass through unchanged — existing error handling in callers preserved
+- 12 new tests in `tests/test_openalex_client.py`: rate limit delays, retry counts, backoff timing, logging, mailto preservation
+- All 545 tests pass, ruff clean
+## T10: LOW Cleanup (Dead Code, Naming) — COMPLETED
+- Moved `_FakeBatch` class from inside `_doi_api_fallback()` to module level (after `VALID_ACADEMIC_ITEM_TYPES`) in `connector.py`
+- Deleted unreachable `return False` at `_platforms.py:255` (duplicate of line 253)
+- Deleted `_check_post_ingest_gate_for_index` no-op function from `indexing.py:160-162` and its call site
+- Simplified `_should_clean_publisher_tags` — function always returned `True`, removed it and inlined the condition
+  - In `_cleanup_publisher_tags`: guard simplified from `if not item_key or not _should_clean_publisher_tags(url)` to `if not item_key`
+  - In `save_single_and_verify`: replaced conditional `_should_clean_publisher_tags(url)` check with unconditional call to `_cleanup_publisher_tags`
+- Confirmed `paddlepaddle>=3.0.0` in `pyproject.toml:39` is correct
+- All 545 tests pass, ruff clean on modified files

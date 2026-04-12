@@ -157,9 +157,6 @@ def _get_vision_costs_impl(last_n: int = 10) -> dict:
     }
 
 
-def _check_post_ingest_gate_for_index(session_id: str | None) -> None:
-    """No-op: session-based index gate removed with legacy session machinery."""
-    return
 
 
 @mcp.tool(tags=tool_tags("extended", "indexing"))
@@ -201,7 +198,7 @@ def index_library(
     if not _index_lock.acquire(blocking=False):
         raise ToolError("Indexing in progress, please wait.")
     try:
-        _check_post_ingest_gate_for_index(session_id)
+
         from dataclasses import replace as dc_replace
 
         from ..indexer import Indexer

@@ -78,6 +78,13 @@ VALID_ACADEMIC_ITEM_TYPES = frozenset({
     "book", "bookSection", "report",
 })
 
+
+class _FakeBatch:
+    """Minimal batch shim for single-item API fallback saves."""
+    def update_item(self, idx, **kw):
+        pass
+
+
 _ZOTERO_LOCAL_API_ITEMS_URL = "http://127.0.0.1:23119/api/users/0/items"
 
 
@@ -107,9 +114,6 @@ def extract_publisher_domain(url: str) -> str:
     return hostname or url
 
 
-def _should_clean_publisher_tags(url: str) -> bool:
-    """Check if publisher tags should be cleaned for this URL."""
-    return True
 
 
 def _cleanup_publisher_tags(item_key: str | None, url: str, writer, _logger) -> None:
@@ -119,7 +123,7 @@ def _cleanup_publisher_tags(item_key: str | None, url: str, writer, _logger) -> 
     404 due to sync lag. This is a cosmetic cleanup — failures are logged
     at debug level since the save itself succeeded.
     """
-    if not item_key or not _should_clean_publisher_tags(url):
+    if not item_key:
         return
     try:
         current_tags = []
@@ -1209,11 +1213,7 @@ def save_single_and_verify(
 
     # Step 5: Valid item — apply routing and check PDF
     real_title = validation["title"]
-    if _should_clean_publisher_tags(url):
-        try:
-            _cleanup_publisher_tags(item_key, url, get_writer(), _logger)
-        except Exception:
-            pass
+    _cleanup_publisher_tags(item_key, url, get_writer(), _logger)
 
     # Collection/tag routing via pyzotero Web API.
     # NOTE: Zotero Desktop local API (port 23119) rejects PATCH with
@@ -1325,9 +1325,6 @@ def _doi_api_fallback(
     if _logger is None:
         _logger = logger
 
-    class _FakeBatch:
-        def update_item(self, idx, **kw):
-            pass
 
     candidate = {
         "paper": {
