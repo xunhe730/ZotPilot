@@ -4,14 +4,10 @@ from typing import Annotated, Literal
 from pydantic import Field
 
 from ..state import (
-    ToolError,
     _clear_library_override,
     _get_zotero,
     _set_library_override,
 )
-from ..workflow import BatchStore
-
-_batch_store = BatchStore()
 
 
 def switch_library(
@@ -35,14 +31,6 @@ def switch_library(
         _clear_library_override()
         return {"switched": True, "library_type": "user", "message": "Reset to default user library"}
 
-    active_batch = _batch_store.get_active(
-        library_id=str(_get_zotero().library_id),
-        phases={"ingesting", "post_processing", "AwaitingTaxonomyAuthorization"},
-    )
-    if active_batch is not None:
-        raise ToolError(
-            f"Cannot switch library while batch {active_batch.batch_id} is active in phase {active_batch.phase}."
-        )
     _set_library_override(library_id, library_type)
     result = {
         "switched": True,

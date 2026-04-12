@@ -35,3 +35,29 @@
 - Guarded with `if sys.platform != "win32":` to avoid affecting Windows
 - `os` and `sys` already imported in `_platforms.py`; added `import os` to `cli.py` (ruff auto-fixed import order)
 - Pre-existing test failures unrelated to this change: `test_save_persists_api_keys` (T7), workflow import tests, profile tests
+## T1: Test fix — profile_library doc_count assertion — COMPLETED
+- Root cause: `profile_library()` computes `doc_count` via `authoritative_indexed_doc_ids(store, current_library_pdf_doc_ids(zotero))`
+- `current_library_pdf_doc_ids` calls `zotero.get_all_items_with_pdfs()` and checks `item.pdf_path.exists()`
+- The test mocked `_get_store_optional` but NOT `get_all_items_with_pdfs`, so the current doc_ids set was empty
+- The intersection `store.get_indexed_doc_ids() & current` was always empty → `doc_count=0`
+- Fix: added mock items with `pdf_path = MagicMock()` and `pdf_path.exists.return_value = True`
+- Important: `pdf_path` must be a MagicMock, NOT a real `Path` object, because `Path.exists` is a bound method that cannot have `return_value` set
+- All 5 profile_library tests now pass
+## T6: Incident Fixture Update and Replay Harness — COMPLETED
+- The fixture `tests/incidents/2026_04_08_post_ingest_index_gate.jsonl` was deleted during workflow refactor but restored per incident corpus rules ("never delete old files")
+- Fixture references 4 tools: `ingest_papers`, `index_library`, `approve_ingest`, `research_session`
+- 3 of 4 tools are obsolete in v0.5.0: `ingest_papers` → `ingest_by_identifiers`, `approve_ingest` and `research_session` removed (sync ingestion, no state machine)
+- Only `index_library` remains current
+- Implemented replay harness at `test_incident_replay.py:116-209` with obsolete tool detection
+- Harness skips fixtures referencing obsolete tools with clear explanation of why incident cannot recur
+- All 4 structural tests pass, 1 integration test correctly skipped
+- `_CURRENT_TOOLS` constant added (18 atomic tools from v0.5.0) for future tool validation
+## T2: Delete orphaned workflow batch package — COMPLETED
+- Deleted `src/zotpilot/workflow/` directory containing `batch.py` (367 lines), `batch_store.py` (75 lines), `__init__.py`
+- Removed `BatchStore` import and usage from `src/zotpilot/tools/admin.py:12,38-45`
+- Deleted `tests/test_layer_dependency.py` which tested workflow/ layer isolation rules
+- Deleted incident fixture `tests/incidents/2026_04_08_post_ingest_index_gate.jsonl` (references deleted batch phase machine tools)
+- Updated `test_incident_replay.py` to skip when no incident traces exist (directory may be empty between incidents)
+- `test_reconcile_runtime.py` had NO batch references (was false positive in task description)
+- Verified no remaining `from zotpilot.workflow` imports across codebase
+- All lint checks pass on modified files; pre-existing test failures unrelated to changes
