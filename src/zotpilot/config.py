@@ -179,17 +179,16 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
-            "gemini_api_key": self.gemini_api_key,
-            "dashscope_api_key": self.dashscope_api_key,
-            "anthropic_api_key": self.anthropic_api_key,
+            # SECURITY: API keys are deliberately excluded from persisted config.
+            # Keys should only come from environment variables, never saved to disk.
             "vision_max_tables_per_run": self.vision_max_tables_per_run,
             "vision_max_cost_usd": self.vision_max_cost_usd,
             "max_pages": self.max_pages,
             "preflight_enabled": self.preflight_enabled,
-            "zotero_api_key": self.zotero_api_key,
+            # "zotero_api_key": self.zotero_api_key,  # SECURITY: excluded from disk
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
-            "semantic_scholar_api_key": self.semantic_scholar_api_key,
+            # "semantic_scholar_api_key": self.semantic_scholar_api_key,  # SECURITY: excluded
         }
 
         # Write with restrictive permissions on Unix, normal write on Windows

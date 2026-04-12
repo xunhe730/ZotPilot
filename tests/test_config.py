@@ -99,8 +99,8 @@ class TestConfigLoadEnvVars:
 
 
 class TestConfigSave:
-    def test_save_persists_api_keys(self, tmp_path, monkeypatch):
-        """Config.save() writes API keys to local JSON as the source of truth."""
+    def test_save_does_not_persist_api_keys(self, tmp_path, monkeypatch):
+        """Config.save() deliberately excludes API keys from disk for security."""
         monkeypatch.setenv("GEMINI_API_KEY", "secret-gemini")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-anthropic")
         monkeypatch.setenv("ZOTERO_API_KEY", "secret-zotero")
@@ -110,9 +110,12 @@ class TestConfigSave:
         cfg.save(path=save_path)
 
         saved_data = json.loads(save_path.read_text())
-        assert saved_data["gemini_api_key"] == "secret-gemini"
-        assert saved_data["anthropic_api_key"] == "secret-anthropic"
-        assert saved_data["zotero_api_key"] == "secret-zotero"
+        # API keys must NOT appear in the saved file
+        assert "gemini_api_key" not in saved_data
+        assert "anthropic_api_key" not in saved_data
+        assert "zotero_api_key" not in saved_data
+        assert "dashscope_api_key" not in saved_data
+        assert "semantic_scholar_api_key" not in saved_data
 
     def test_save_file_permissions(self, tmp_path, monkeypatch):
         """Config.save() creates file with 0o600 permissions."""

@@ -22,6 +22,14 @@
 - T8: MCP config file permissions (0600)
 - T9: OpenAlex rate limiter
 - T10: LOW cleanup (dead code, comments, naming)
+
+## T7: Config.save() API Key Exclusion — COMPLETED
+- `Config.save()` at `config.py:182-192` was writing all 5 API keys to disk
+- Fixed by commenting out: `gemini_api_key`, `dashscope_api_key`, `anthropic_api_key`, `zotero_api_key`, `semantic_scholar_api_key`
+- Added SECURITY comment explaining the rationale
+- Renamed test `test_save_persists_api_keys` → `test_save_does_not_persist_api_keys` with inverted assertions
+- All 13 config tests pass
+- `Config.load()` backward compat preserved: it still reads keys from file if present (env vars still take priority)
 ## T8: MCP Config File Permissions (0600)
 - Applied `os.chmod(path, 0o600)` after config writes in `_platforms.py:954-958` and `cli.py:196-198`
 - Guarded with `if sys.platform != "win32":` to avoid affecting Windows
