@@ -9,7 +9,7 @@ from pydantic import BeforeValidator, Field
 
 from ..index_authority import authoritative_indexed_doc_ids, current_library_pdf_doc_ids
 from ..reranker import VALID_QUARTILES, VALID_SECTIONS
-from ..state import ToolError, _get_config, _get_reranker, _get_retriever, _get_store, _get_zotero, mcp
+from ..state import ToolError, _get_config, _get_reranker, _get_retriever, _get_store, _get_zotero, _index_lock, mcp
 from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
@@ -190,104 +190,112 @@ def index_library(
 ) -> dict:
     """Index Zotero PDFs into the vector store. Incremental by default; processes batch_size items per call. Repeat until has_more=false to index all.
 
+    Concurrency: Only one indexing operation can run at a time. Concurrent calls
+    will receive a ToolError: "Indexing in progress, please wait."
+
     Post-ingest gate: when called from a ztp-research workflow, pass session_id so the
     post-ingest-review checkpoint gate can fire. Indexing before checkpoint 2 approval writes
     unverified items into ChromaDB and burns embedding API quota (2026-04-08 incident).
     CLI / ad-hoc indexing: leave session_id=None to bypass the gate entirely.
     """  # noqa: E501
-    _check_post_ingest_gate_for_index(session_id)
-    from dataclasses import replace as dc_replace
+    if not _index_lock.acquire(blocking=False):
+        raise ToolError("Indexing in progress, please wait.")
+    try:
+        _check_post_ingest_gate_for_index(session_id)
+        from dataclasses import replace as dc_replace
 
-    from ..indexer import Indexer
+        from ..indexer import Indexer
 
-    # Direct Python callers can still bypass FastMCP/Pydantic dispatch, so
-    # keep the same string->list coercion here for consistency.
-    item_keys = _parse_json_string_list(item_keys)
+        # Direct Python callers can still bypass FastMCP/Pydantic dispatch, so
+        # keep the same string->list coercion here for consistency.
+        item_keys = _parse_json_string_list(item_keys)
 
-    _config = _get_config()
+        _config = _get_config()
 
-    errors = _config.validate()
-    if errors:
-        raise ToolError(f"Config errors: {'; '.join(errors)}")
+        errors = _config.validate()
+        if errors:
+            raise ToolError(f"Config errors: {'; '.join(errors)}")
 
-    config = _config
+        config = _config
 
-    # Batch mode defaults to no_vision to avoid many small vision API calls
-    if batch_size > 0 and not no_vision:
-        config = dc_replace(config, vision_enabled=False)
-    elif no_vision:
-        config = dc_replace(config, vision_enabled=False)
+        # Batch mode defaults to no_vision to avoid many small vision API calls
+        if batch_size > 0 and not no_vision:
+            config = dc_replace(config, vision_enabled=False)
+        elif no_vision:
+            config = dc_replace(config, vision_enabled=False)
 
-    effective_max_pages = max_pages if max_pages is not None else config.max_pages
+        effective_max_pages = max_pages if max_pages is not None else config.max_pages
 
-    indexer = Indexer(config)
-    result = indexer.index_all(
-        force_reindex=force_reindex,
-        limit=limit,
-        item_key=item_key,
-        item_keys=item_keys,
-        title_pattern=title_pattern,
-        max_pages=effective_max_pages,
-        batch_size=batch_size if batch_size > 0 else None,
-    )
-
-    # Clear query embedding cache so new documents are findable
-    _get_store().clear_query_cache()
-
-    # Serialize IndexResult objects
-    serialized_results = []
-    for r in result["results"]:
-        serialized_results.append({
-            "item_key": r.item_key,
-            "title": r.title,
-            "status": r.status,
-            "reason": r.reason,
-            "n_chunks": r.n_chunks,
-            "n_tables": r.n_tables,
-            "quality_grade": r.quality_grade,
-        })
-
-    skipped_no_pdf_all: list[dict] = result.get("skipped_no_pdf", [])
-    skipped_no_pdf_count = len(skipped_no_pdf_all)
-    skipped_no_pdf_items = skipped_no_pdf_all[:50]
-    has_more_skipped = skipped_no_pdf_count > 50
-
-    response = {
-        "results": serialized_results,
-        "indexed": result["indexed"],
-        "failed": result["failed"],
-        "empty": result["empty"],
-        "skipped": result["skipped"],
-        "already_indexed": result["already_indexed"],
-        "has_more": result.get("has_more", False),
-        "vision_enabled": config.vision_enabled,
-        "skipped_no_pdf_count": skipped_no_pdf_count,
-        "skipped_no_pdf_items": skipped_no_pdf_items,
-    }
-    if has_more_skipped:
-        response["skipped_no_pdf_has_more"] = True
-
-    if skipped_no_pdf_count > 0:
-        response["_notice_no_pdf"] = (
-            f"\u26a0\ufe0f {skipped_no_pdf_count} paper(s) skipped during indexing (no PDF attachment). "
-            "These are metadata-only entries. Log in via institutional VPN and re-ingest to add PDFs, "
-            "or treat as reference-only."
+        indexer = Indexer(config)
+        result = indexer.index_all(
+            force_reindex=force_reindex,
+            limit=limit,
+            item_key=item_key,
+            item_keys=item_keys,
+            title_pattern=title_pattern,
+            max_pages=effective_max_pages,
+            batch_size=batch_size if batch_size > 0 else None,
         )
 
-    if include_summary:
-        response.update({
-            "quality_distribution": result.get("quality_distribution"),
-            "extraction_stats": result.get("extraction_stats"),
-            "long_documents": result.get("long_documents", []),
-            "skipped_long": result.get("skipped_long", 0),
-            "total_to_index": result.get("total_to_index", 0),
-            "vision_pending_tables": result.get("vision_pending_tables", 0),
-            "vision_estimated_cost_usd": result.get("vision_estimated_cost_usd", 0.0),
-            "vision_budget_skipped": result.get("vision_budget_skipped", False),
-            "vision_skip_reason": result.get("vision_skip_reason"),
-        })
+        # Clear query embedding cache so new documents are findable
+        _get_store().clear_query_cache()
 
-    return response
+        # Serialize IndexResult objects
+        serialized_results = []
+        for r in result["results"]:
+            serialized_results.append({
+                "item_key": r.item_key,
+                "title": r.title,
+                "status": r.status,
+                "reason": r.reason,
+                "n_chunks": r.n_chunks,
+                "n_tables": r.n_tables,
+                "quality_grade": r.quality_grade,
+            })
+
+        skipped_no_pdf_all: list[dict] = result.get("skipped_no_pdf", [])
+        skipped_no_pdf_count = len(skipped_no_pdf_all)
+        skipped_no_pdf_items = skipped_no_pdf_all[:50]
+        has_more_skipped = skipped_no_pdf_count > 50
+
+        response = {
+            "results": serialized_results,
+            "indexed": result["indexed"],
+            "failed": result["failed"],
+            "empty": result["empty"],
+            "skipped": result["skipped"],
+            "already_indexed": result["already_indexed"],
+            "has_more": result.get("has_more", False),
+            "vision_enabled": config.vision_enabled,
+            "skipped_no_pdf_count": skipped_no_pdf_count,
+            "skipped_no_pdf_items": skipped_no_pdf_items,
+        }
+        if has_more_skipped:
+            response["skipped_no_pdf_has_more"] = True
+
+        if skipped_no_pdf_count > 0:
+            response["_notice_no_pdf"] = (
+                f"\u26a0\ufe0f {skipped_no_pdf_count} paper(s) skipped during indexing (no PDF attachment). "
+                "These are metadata-only entries. Log in via institutional VPN and re-ingest to add PDFs, "
+                "or treat as reference-only."
+            )
+
+        if include_summary:
+            response.update({
+                "quality_distribution": result.get("quality_distribution"),
+                "extraction_stats": result.get("extraction_stats"),
+                "long_documents": result.get("long_documents", []),
+                "skipped_long": result.get("skipped_long", 0),
+                "total_to_index": result.get("total_to_index", 0),
+                "vision_pending_tables": result.get("vision_pending_tables", 0),
+                "vision_estimated_cost_usd": result.get("vision_estimated_cost_usd", 0.0),
+                "vision_budget_skipped": result.get("vision_budget_skipped", False),
+                "vision_skip_reason": result.get("vision_skip_reason"),
+            })
+
+        return response
+    finally:
+        _index_lock.release()
 
 
 @mcp.tool(tags=tool_tags("core", "indexing"))

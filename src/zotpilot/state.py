@@ -171,6 +171,7 @@ mcp = FastMCP("zotpilot", instructions=_MCP_INSTRUCTIONS)
 
 # Lazy initialization with thread safety
 _init_lock = threading.Lock()
+_index_lock = threading.Lock()
 _retriever = None
 _store = None
 _reranker = None

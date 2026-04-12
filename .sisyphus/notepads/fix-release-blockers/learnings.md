@@ -61,3 +61,11 @@
 - `test_reconcile_runtime.py` had NO batch references (was false positive in task description)
 - Verified no remaining `from zotpilot.workflow` imports across codebase
 - All lint checks pass on modified files; pre-existing test failures unrelated to changes
+## T3: Concurrency Protection for index_library — COMPLETED
+- Added `_index_lock = threading.Lock()` to `state.py` alongside existing `_init_lock`
+- Updated `index_library` in `indexing.py` to use non-blocking lock acquisition: `lock.acquire(blocking=False)`
+- Concurrent calls receive `ToolError("Indexing in progress, please wait.")` instead of corrupting ChromaDB
+- Lock wrapped in `try/finally` to guarantee release even on exceptions
+- Other tools are NOT affected — only `index_library` acquires this lock
+- Docstring updated to document concurrency behavior
+- 543 tests pass, ruff clean
