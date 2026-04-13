@@ -10,7 +10,13 @@ from tqdm import tqdm
 
 from .config import Config
 from .embeddings import create_embedder
-from .index_authority import reconcile_orphaned_index_docs
+from .index_authority import (
+    IndexJournal,
+    mark_committed,
+    mark_in_progress,
+    reconcile_orphaned_index_docs,
+    record_table_failure,
+)
 from .journal_ranker import JournalRanker
 from .models import ZoteroItem
 from .pdf import extract_document
@@ -72,6 +78,7 @@ class Indexer:
         self.journal_ranker = JournalRanker()
         self._empty_docs_path = config.chroma_db_path / "empty_docs.json"
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
+        self.journal: IndexJournal | None = None
         if config.vision_enabled and config.anthropic_api_key:
             from .feature_extraction.vision_api import VisionAPI
             cost_log_path = config.chroma_db_path.parent / "vision_costs.json"
@@ -145,6 +152,7 @@ class Indexer:
         title_pattern: str | None = None,
         max_pages: int = 0,
         batch_size: int | None = None,
+        journal: IndexJournal | None = None,
     ) -> dict:
         """
         Index all PDFs in Zotero library.
@@ -156,6 +164,7 @@ class Indexer:
             title_pattern: If provided, only index items matching this regex pattern
             max_pages: Skip PDFs longer than N pages (0 = no limit)
             batch_size: Process at most N items per call (None/0 = all at once)
+            journal: Optional IndexJournal for commit tracking
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
@@ -249,6 +258,9 @@ class Indexer:
                 "Run with --force to re-index, otherwise results may be inconsistent."
             )
 
+        # Store journal reference for use in indexing pipeline
+        self.journal = journal
+
         results: list[IndexResult] = []
         to_index: list[ZoteroItem] = []
         reindex_reasons: dict[str, str] = {}
@@ -319,7 +331,7 @@ class Indexer:
             f"{n_skipped} skipped (empty/unchanged)"
         )
         if not to_index:
-            logger.info("Nothing to index — all papers are up to date")
+            logger.info("Nothing to index \u2014 all papers are up to date")
 
         quality_distribution: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
         aggregated_extraction_stats = {
@@ -452,7 +464,9 @@ class Indexer:
         for idx, (item_key, (item, extraction)) in enumerate(doc_extractions.items(), 1):
             t0 = time.perf_counter()
             try:
-                n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction(item, extraction)
+                n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction(
+                    item, extraction, self.journal
+                )
 
                 # Aggregate extraction stats
                 for key in ["total_pages", "text_pages", "ocr_pages", "empty_pages"]:
@@ -569,15 +583,26 @@ class Indexer:
             else:
                 resolve_pending_vision({item.item_key: extraction}, self._vision_api)
 
-        return self._index_extraction(item, extraction)
+        return self._index_extraction(item, extraction, self.journal)
 
-    def _index_extraction(self, item: ZoteroItem, extraction) -> tuple[int, int, str, dict, str]:
+    def _index_extraction(
+        self,
+        item: ZoteroItem,
+        extraction,
+        journal: IndexJournal | None = None,
+    ) -> tuple[int, int, str, dict, str]:
         """
         Index a pre-extracted document (vision already resolved).
 
         Returns:
             (n_chunks, n_tables, reason, extraction_stats, quality_grade)
         """
+        item_key = item.item_key
+
+        # Mark in_progress before any persistence
+        if journal is not None:
+            mark_in_progress(journal, item_key)
+
         if not extraction.pages:
             return 0, 0, "PDF has 0 pages (corrupt or unreadable)", extraction.stats, "F"
 
@@ -624,6 +649,10 @@ class Indexer:
         }
         self.store.add_chunks(item.item_key, doc_meta, chunks)
 
+        # Mark committed after text-chunk persistence
+        if journal is not None:
+            mark_committed(journal, item_key)
+
         # Build reference map for table/figure placement
         from .pdf.reference_matcher import match_references
         ref_map = match_references(extraction.full_markdown, chunks, extraction.tables, extraction.figures)
@@ -656,8 +685,13 @@ class Indexer:
         real_tables = [t for t in extraction.tables if not t.artifact_type]
         n_artifacts = len(extraction.tables) - len(real_tables)
         if real_tables:
-            self.store.add_tables(item.item_key, doc_meta, real_tables, ref_map=ref_map)
-            n_tables = len(real_tables)
+            try:
+                self.store.add_tables(item_key, doc_meta, real_tables, ref_map=ref_map)
+                n_tables = len(real_tables)
+            except Exception as e:
+                logger.warning(f"Table storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"table storage: {e}")
         if n_artifacts:
             logger.debug(f"  Skipped {n_artifacts} artifact table(s)")
         logger.debug(f"  Extracted {n_tables} tables")
@@ -666,11 +700,13 @@ class Indexer:
         n_figures = 0
         if extraction.figures:
             try:
-                self.store.add_figures(item.item_key, doc_meta, extraction.figures, ref_map=ref_map)
+                self.store.add_figures(item_key, doc_meta, extraction.figures, ref_map=ref_map)
                 n_figures = len(extraction.figures)
                 logger.debug(f"  Extracted {n_figures} figures")
             except Exception as e:
-                logger.warning(f"Figure storage failed for {item.item_key}: {e}")
+                logger.warning(f"Figure storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"figure storage: {e}")
 
         logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
         return len(chunks), n_tables, "", extraction.stats, quality_grade
