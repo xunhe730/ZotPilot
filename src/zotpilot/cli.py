@@ -580,14 +580,8 @@ def _read_raw_config(config_path: Path) -> dict:
 
 
 def _write_raw_config(config_path: Path, data: dict) -> None:
-    import os
-
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    if sys.platform != "win32":
-        os.chmod(config_path, 0o600)
+    # Deprecated: no-op after atomic writer migration. Kept for backward compatibility.
+    pass
 
 
 def _import_runtime_env_to_config(
@@ -595,22 +589,8 @@ def _import_runtime_env_to_config(
     config_path: Path,
     platforms: list[str] | None = None,
 ) -> dict[str, str]:
-    from ._platforms import inspect_current_state
-
-    raw = _read_raw_config(config_path)
-    current = inspect_current_state(targets=platforms)
-    imported: dict[str, str] = {}
-    for platform in current.platforms.values():
-        if not platform.supported:
-            continue
-        for env_key, config_key in _ENV_TO_CONFIG.items():
-            value = platform.env.get(env_key)
-            if value and not raw.get(config_key):
-                raw[config_key] = value
-                imported[config_key] = value
-    if imported:
-        _write_raw_config(config_path, raw)
-    return imported
+    # Deprecated: no-op after atomic writer migration. Kept for backward compatibility.
+    return {}
 
 
 def cmd_config(args):
@@ -979,11 +959,6 @@ def cmd_register(args):
     add command fails on that platform.
     """
     from ._platforms import register
-
-    _import_runtime_env_to_config(
-        config_path=_default_config_path(),
-        platforms=["claude-code", "codex"],
-    )
 
     results = register(
         platforms=args.platforms,
