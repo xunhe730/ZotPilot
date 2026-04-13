@@ -1270,6 +1270,7 @@ def _deployment_status(config: Config | None = None) -> dict:
             }
             for skill_dir in _get_skill_dirs()
         ]
+        divergence = compute_divergent_registration(reconcile.current)
         return {
             "detected_platforms": detected,
             "registered_platforms": registered,
@@ -1286,6 +1287,9 @@ def _deployment_status(config: Config | None = None) -> dict:
             "skill_dirs": skill_dirs,
             "drift_state": reconcile.changes.drift_state,
             "restart_required": reconcile.changes.drift_state != "clean",
+            "divergent_registration": divergence["divergent_registration"],
+            "divergent_registration_platforms": divergence["divergent_registration_platforms"],
+            "divergent_registration_fields": divergence["divergent_registration_fields"],
         }
     except Exception as exc:
         logger.debug("deployment status inspection failed", exc_info=True)
@@ -1298,7 +1302,10 @@ def _deployment_status(config: Config | None = None) -> dict:
             "drift_state": "unknown",
             "restart_required": False,
             "deployment_warning": str(exc),
-        }
+            "divergent_registration": False,
+            "divergent_registration_platforms": [],
+            "divergent_registration_fields": [],
+}
 
 def _desired_env_from_config(config: Config | None) -> dict[str, str]:
     desired_keys: dict[str, str] = {}
@@ -1314,3 +1321,70 @@ def _desired_env_from_config(config: Config | None) -> dict[str, str]:
         desired_keys["ZOTERO_USER_ID"] = config.zotero_user_id
     return desired_keys
 
+
+CREDENTIAL_ENV_KEYS: tuple[str, ...] = (
+    "GEMINI_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "ZOTERO_API_KEY",
+    "ZOTERO_USER_ID",
+)
+
+
+def compute_divergent_registration(state: RuntimeState) -> dict:
+    """Compute divergent registration across registered supported platforms.
+
+    Pure read-only comparison — does NOT mutate config or registrations.
+
+    Algorithm:
+    1. Sort registered supported platforms lexicographically
+    2. First entry = canonical baseline
+    3. Compare each platform's credential_env to baseline
+    4. If any key differs by presence or value → divergent_registration = true
+
+    Returns:
+        {
+            "divergent_registration": bool,
+            "divergent_registration_platforms": list[str],
+            "divergent_registration_fields": list[str],
+        }
+    """
+    # Collect registered supported platforms, sorted lexicographically
+    registered_supported = sorted(
+        plat for plat, ps in state.platforms.items()
+        if ps.registered and ps.supported
+    )
+
+    # Zero or one platform → no divergence possible
+    if len(registered_supported) <= 1:
+        return {
+            "divergent_registration": False,
+            "divergent_registration_platforms": list(registered_supported),
+            "divergent_registration_fields": [],
+        }
+
+    # Build normalized credential record per platform
+    def _credential_env(plat: str) -> dict[str, str]:
+        ps = state.platforms[plat]
+        return {key: ps.env.get(key, "") for key in CREDENTIAL_ENV_KEYS}
+
+    baseline_env = _credential_env(registered_supported[0])
+
+    # Compare each platform's credential_env to baseline
+    divergent_platforms: list[str] = []
+    divergent_fields: set[str] = set()
+
+    for plat in registered_supported:
+        plat_env = _credential_env(plat)
+        has_divergence = False
+        for key in CREDENTIAL_ENV_KEYS:
+            if plat_env.get(key, "") != baseline_env.get(key, ""):
+                divergent_fields.add(key)
+                has_divergence = True
+        if has_divergence:
+            divergent_platforms.append(plat)
+
+    return {
+        "divergent_registration": bool(divergent_fields),
+        "divergent_registration_platforms": registered_supported if divergent_fields else [],
+        "divergent_registration_fields": sorted(divergent_fields),
+    }

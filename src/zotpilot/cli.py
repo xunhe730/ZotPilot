@@ -450,13 +450,24 @@ def cmd_status(args):
 
 
 def cmd_doctor(args):
-    """Run environment health checks."""
     from .doctor import run_checks
 
     output_json = getattr(args, "json", False)
     full = getattr(args, "full", False)
 
     results = run_checks(config_path=args.config, full=full)
+
+    # Check for divergent registration
+    try:
+        config = Config.load(args.config)
+        deployment = _deployment_status(config)
+        divergent = deployment.get("divergent_registration", False)
+        divergent_platforms = deployment.get("divergent_registration_platforms", [])
+        divergent_fields = deployment.get("divergent_registration_fields", [])
+    except Exception:
+        divergent = False
+        divergent_platforms = []
+        divergent_fields = []
 
     if output_json:
         summary = {"pass": 0, "warn": 0, "fail": 0}
@@ -465,6 +476,9 @@ def cmd_doctor(args):
         data = {
             "checks": [{"name": r.name, "status": r.status, "message": r.message} for r in results],
             "summary": summary,
+            "divergent_registration": divergent,
+            "divergent_registration_platforms": divergent_platforms,
+            "divergent_registration_fields": divergent_fields,
         }
         print(json.dumps(data, indent=2))
     else:
@@ -475,14 +489,16 @@ def cmd_doctor(args):
             icon = status_icons[r.status]
             print(f"  [{icon}] {r.name}: {r.message}")
         print()
+        if divergent:
+            print(f"  [FAIL] divergent_registration: credentials differ across {', '.join(divergent_platforms)}")
+            print(f"    Fields: {', '.join(divergent_fields)}")
         counts = {"pass": 0, "warn": 0, "fail": 0}
         for r in results:
             counts[r.status] += 1
         print(f"  Summary: {counts['pass']} passed, {counts['warn']} warnings, {counts['fail']} failures")
 
     has_fail = any(r.status == "fail" for r in results)
-    return 1 if has_fail else 0
-
+    return 1 if (has_fail or divergent) else 0
 
 def _mask_secret(v: str) -> str:
     return v[:4] + "****" if len(v) > 4 else "****"
