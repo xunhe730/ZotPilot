@@ -176,6 +176,48 @@ class TestGetPaperDetails:
         with pytest.raises(ToolError, match="Item not found"):
             get_paper_details(doc_id="NONEXISTENT")
 
+    @patch("zotpilot.tools.library.authoritative_indexed_doc_ids")
+    @patch("zotpilot.tools.library._get_store_optional")
+    @patch("zotpilot.tools.library._get_zotero")
+    def test_get_paper_details_uses_authoritative_indexed_set(
+        self,
+        mock_get_zotero,
+        mock_get_store_opt,
+        mock_authoritative,
+    ):
+        from zotpilot.tools.library import get_paper_details
+
+        item = MagicMock()
+        item.item_key = "DOC1"
+        item.title = "Paper"
+        item.authors = "Author"
+        item.year = 2024
+        item.publication = "Venue"
+        item.doi = "10.1/test"
+        item.tags = ""
+        item.collections = ""
+        item.citation_key = "key"
+        item.date_added = "2026-01-01"
+        item.pdf_path = MagicMock()
+        item.pdf_path.exists.return_value = True
+
+        mock_zotero = MagicMock()
+        mock_zotero.get_item.return_value = item
+        mock_zotero.get_item_abstract.return_value = "Abstract"
+        mock_zotero.get_all_items_with_pdfs.return_value = [item]
+        mock_get_zotero.return_value = mock_zotero
+
+        store = MagicMock()
+        store.get_document_meta.return_value = {"quality_grade": "A"}
+        mock_get_store_opt.return_value = store
+        mock_authoritative.return_value = set()
+
+        result = get_paper_details(doc_id="DOC1")
+
+        assert result["indexed"] is False
+        assert result["quality_grade"] == ""
+        store.get_document_meta.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # write_ops.py tools

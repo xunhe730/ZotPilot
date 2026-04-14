@@ -107,8 +107,9 @@ def get_paper_details(
     try:
         store = _get_store_optional()
         if store is not None and doc_id in current_doc_ids:
-            meta = store.get_document_meta(doc_id)
-            indexed = meta is not None
+            indexed_ids = authoritative_indexed_doc_ids(store, current_doc_ids)
+            indexed = doc_id in indexed_ids
+            meta = store.get_document_meta(doc_id) if indexed else None
             quality_grade = meta.get("quality_grade", "") if meta else ""
         else:
             indexed = False

@@ -28,6 +28,7 @@ from ..state import (
     _get_reranker,
     _get_retriever,
     _get_store,
+    _get_store_optional,
     _get_zotero,
     mcp,
 )
@@ -69,6 +70,12 @@ def search_papers(
     section_type: Annotated[Literal["text", "tables", "figures"] | None, Field(description="Filter by content type (tables or figures)")] = None,  # noqa: E501
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
 
     if section_type == "tables":
@@ -162,6 +169,12 @@ def search_topic(
     ] = "minimal",
 ) -> list[dict]:
     """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -363,6 +376,12 @@ def search_tables(
     ] = "minimal",
 ) -> list[dict]:
     """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
 
     # Validate journal_weights if provided
@@ -452,6 +471,12 @@ def search_figures(
     ] = "minimal",
 ) -> list[dict]:
     """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
     top_k = max(1, min(top_k, 30))
     store = _get_store()

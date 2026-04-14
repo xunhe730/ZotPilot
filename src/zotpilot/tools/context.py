@@ -41,15 +41,15 @@ def get_passage_context(
         raise ToolError(f"No chunks found for doc_id={doc_id}")
 
     # Get section and journal_quartile from center chunk
-    center_chunk = next((c for c in chunks if c.metadata["chunk_index"] == chunk_index), chunks[0])
+    center_chunk = next((c for c in chunks if c.metadata.get("chunk_index", -1) == chunk_index), chunks[0])
 
     passages = [
         {
-            "chunk_index": c.metadata["chunk_index"],
-            "page": c.metadata["page_num"],
+            "chunk_index": c.metadata.get("chunk_index", -1),
+            "page": c.metadata.get("page_num", 0),
             "section": c.metadata.get("section", "unknown"),
             "section_confidence": c.metadata.get("section_confidence", 1.0),
-            "is_center": c.metadata["chunk_index"] == chunk_index,
+            "is_center": c.metadata.get("chunk_index", -1) == chunk_index,
             **({} if include_merged else {"text": c.text}),
         }
         for c in chunks
@@ -132,7 +132,7 @@ def _get_table_reference_context(
         text_results["ids"], text_results["documents"], text_results["metadatas"]
     ):
         if ref_pattern.search(text):
-            matching_chunk_idx = meta["chunk_index"]
+            matching_chunk_idx = meta.get("chunk_index", -1)
             break
 
     if matching_chunk_idx is None:
@@ -152,7 +152,7 @@ def _get_table_reference_context(
     # Found reference - get context around it
     context_chunks = store.get_adjacent_chunks(doc_id, matching_chunk_idx, window=window)
     center_chunk = next(
-        (c for c in context_chunks if c.metadata["chunk_index"] == matching_chunk_idx),
+        (c for c in context_chunks if c.metadata.get("chunk_index", -1) == matching_chunk_idx),
         context_chunks[0] if context_chunks else None
     )
 
@@ -161,11 +161,11 @@ def _get_table_reference_context(
 
     passages = [
         {
-            "chunk_index": c.metadata["chunk_index"],
-            "page": c.metadata["page_num"],
+            "chunk_index": c.metadata.get("chunk_index", -1),
+            "page": c.metadata.get("page_num", 0),
             "section": c.metadata.get("section", "unknown"),
             "section_confidence": c.metadata.get("section_confidence", 1.0),
-            "is_center": c.metadata["chunk_index"] == matching_chunk_idx,
+            "is_center": c.metadata.get("chunk_index", -1) == matching_chunk_idx,
             **({} if include_merged else {"text": c.text}),
         }
         for c in context_chunks

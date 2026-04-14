@@ -15,8 +15,10 @@ every 10s. MCP tools POST to /enqueue and poll GET /result/<id> for the outcome.
 Uses ThreadingHTTPServer to avoid deadlock when the MCP tool is polling
 /result while the extension tries to POST /result concurrently.
 """
+
 import json
 import logging
+import secrets
 import subprocess
 import sys
 import threading
@@ -34,7 +36,7 @@ DEFAULT_PORT = 2619
 _HEARTBEAT_TIMEOUT_S = 30
 
 # Result TTL and max entries (Task 1.4: prevent unbounded growth)
-_RESULT_TTL_S = 300   # 5 minutes
+_RESULT_TTL_S = 300  # 5 minutes
 _RESULT_MAX_ENTRIES = 100
 
 
@@ -47,14 +49,42 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _set_cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-ZotPilot-Token")
 
     def do_OPTIONS(self):
         self.send_response(204)
         self._set_cors()
+        self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
 
+    def _check_auth(self) -> bool:
+        """Verify X-ZotPilot-Token header. Returns True if auth passes, False if 401 sent."""
+        token = self.headers.get("X-ZotPilot-Token", "")
+        expected = self.server.bridge.auth_token  # type: ignore[attr-defined]
+        if not expected or token != expected:
+            body = json.dumps({"error": "unauthorized"}).encode()
+            self.send_response(401)
+            self._set_cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+        return True
+
     def do_GET(self):
+        if self.path == "/status":
+            body = json.dumps(self.server.bridge.get_status()).encode()
+            self.send_response(200)
+            self._set_cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        # All other GET endpoints require auth token
+        if not self._check_auth():
+            return
+
         if self.path == "/pending":
             cmd = self.server.bridge._dequeue()
             if cmd:
@@ -69,7 +99,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 self._set_cors()
                 self.end_headers()
         elif self.path.startswith("/result/"):
-            request_id = self.path[len("/result/"):]
+            request_id = self.path[len("/result/") :]
             result = self.server.bridge.get_result(request_id)
             if result:
                 body = json.dumps(result).encode()
@@ -82,29 +112,28 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 self.send_response(204)
                 self._set_cors()
                 self.end_headers()
-        elif self.path == "/status":
-            body = json.dumps(self.server.bridge.get_status()).encode()
-            self.send_response(200)
-            self._set_cors()
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        # POST endpoints require auth (heartbeat is extension-side, also needs token)
+        if not self._check_auth():
+            return
+
         if self.path == "/enqueue":
             # Task 1.4: reject immediately if extension is not connected
             if not self.server.bridge.extension_connected:
-                body = json.dumps({
-                    "error_code": "extension_not_connected",
-                    "error_message": (
-                        "ZotPilot Connector has not sent a heartbeat in the last "
-                        f"{_HEARTBEAT_TIMEOUT_S}s. Ensure the extension is installed "
-                        "and Chrome is open."
-                    ),
-                }).encode()
+                body = json.dumps(
+                    {
+                        "error_code": "extension_not_connected",
+                        "error_message": (
+                            "ZotPilot Connector has not sent a heartbeat in the last "
+                            f"{_HEARTBEAT_TIMEOUT_S}s. Ensure the extension is installed "
+                            "and Chrome is open."
+                        ),
+                    }
+                ).encode()
                 self.send_response(503)
                 self._set_cors()
                 self.send_header("Content-Type", "application/json")
@@ -116,16 +145,30 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length)
             try:
                 command = json.loads(body)
-                request_id = self.server.bridge.enqueue(command)
-                resp = json.dumps({"request_id": request_id}).encode()
-                self.send_response(200)
+            except json.JSONDecodeError:
+                self.send_response(400)
+                self._set_cors()
+                self.end_headers()
+                return
+
+            # Command schema validation
+            validation_error = self.server.bridge._validate_command(command)
+            if validation_error:
+                resp = json.dumps({"error": "invalid_command", "reason": validation_error}).encode()
+                self.send_response(400)
                 self._set_cors()
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(resp)
-            except json.JSONDecodeError:
-                self.send_response(400)
-                self.end_headers()
+                return
+
+            request_id = self.server.bridge.enqueue(command)
+            resp = json.dumps({"request_id": request_id}).encode()
+            self.send_response(200)
+            self._set_cors()
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(resp)
         elif self.path == "/result":
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
@@ -137,6 +180,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             except json.JSONDecodeError:
                 self.send_response(400)
+                self._set_cors()
                 self.end_headers()
         elif self.path == "/heartbeat":
             # Task 1.4: extension liveness signal
@@ -167,9 +211,27 @@ class BridgeServer:
         self._thread: threading.Thread | None = None
         self.port = port
 
+        # Security: generate random auth token on startup
+        self._auth_token: str = secrets.token_hex(32)
+
         # Task 1.4: heartbeat tracking
         self._last_heartbeat_time: float = 0.0
         self._extension_info: dict[str, Any] = {}
+
+    @property
+    def auth_token(self) -> str:
+        """Return the current auth token for /status response."""
+        return self._auth_token
+
+    def _validate_command(self, command: dict) -> str | None:
+        """Validate command schema. Returns error reason string or None if valid."""
+        action = command.get("action")
+        if action not in ("save", "preflight"):
+            return f"invalid action '{action}'; must be 'save' or 'preflight'"
+        url = command.get("url", "")
+        if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
+            return f"invalid url '{url}'; must start with http:// or https://"
+        return None
 
     # ------------------------------------------------------------------
     # Extension connectivity (Task 1.4)
@@ -198,6 +260,7 @@ class BridgeServer:
             "bridge": "running",
             "port": self.port,
             "extension_connected": connected,
+            "auth_token": self._auth_token,
         }
         if last_seen_s is not None:
             status["extension_last_seen_s"] = last_seen_s
@@ -238,14 +301,13 @@ class BridgeServer:
         now = time.monotonic()
         with self._lock:
             # Evict entries older than TTL
-            stale = [rid for rid, e in self._results.items()
-                     if now - e["ts"] > _RESULT_TTL_S]
+            stale = [rid for rid, e in self._results.items() if now - e["ts"] > _RESULT_TTL_S]
             for rid in stale:
                 del self._results[rid]
             # Cap at max entries (evict oldest first)
             if len(self._results) >= _RESULT_MAX_ENTRIES:
                 oldest = sorted(self._results.items(), key=lambda kv: kv[1]["ts"])
-                for rid, _ in oldest[:len(self._results) - _RESULT_MAX_ENTRIES + 1]:
+                for rid, _ in oldest[: len(self._results) - _RESULT_MAX_ENTRIES + 1]:
                     del self._results[rid]
             self._results[request_id] = {"data": result, "ts": now}
 
@@ -272,6 +334,7 @@ class BridgeServer:
     def is_running(port: int = DEFAULT_PORT) -> bool:
         """Check if a bridge is already running on the given port."""
         import urllib.request
+
         try:
             resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=2)
             return bool(resp.status == 200)

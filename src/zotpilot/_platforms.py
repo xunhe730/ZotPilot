@@ -32,6 +32,13 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
+
+def _mask_secret(secret: str) -> str:
+    """Mask a secret key for safe display in logs and output."""
+    if len(secret) <= 8:
+        return "****"
+    return secret[:2] + "****" + secret[-2:]
+
 try:  # Python 3.11+
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - older runtime envs
@@ -1066,13 +1073,13 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
     """Print manual registration instructions when auto-registration fails."""
     zp = _zotpilot_command()
     if plat == "claude-code":
-        env_flags = " ".join(f"-e {k}={v}" for k, v in env.items())
+        env_flags = " ".join(f"-e {k}={_mask_secret(v)}" for k, v in env.items())
         print(f"    Manual: claude mcp add --scope user zotpilot {zp} {env_flags}")
     elif plat == "codex":
-        env_flags = " ".join(f"--env {k}={v}" for k, v in env.items())
+        env_flags = " ".join(f"--env {k}={_mask_secret(v)}" for k, v in env.items())
         print(f"    Manual: codex mcp add zotpilot {env_flags} -- {zp}")
     elif plat == "gemini":
-        env_flags = " ".join(f"-e {k}={v}" for k, v in env.items())
+        env_flags = " ".join(f"-e {k}={_mask_secret(v)}" for k, v in env.items())
         print(f"    Manual: gemini mcp add -s user {env_flags} zotpilot {zp}")
     else:
         config_path = _mcp_config_path(plat)
@@ -1081,7 +1088,7 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
             mcp_key = "mcp"
             entry: dict = {"type": "local", "command": [zp]}
             if env:
-                entry["environment"] = env
+                entry["environment"] = {k: _mask_secret(v) for k, v in env.items()}
             print(f"    Manual: Add to {config_path}:")
             print(f'    {{"{mcp_key}": {{"zotpilot": {json.dumps(entry)}}},')
             print('     "experimental": {"mcp_timeout": 600000}}')
@@ -1089,7 +1096,7 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
             mcp_key = "mcpServers"
             entry = {"type": "stdio", "command": zp, "args": []}
             if env:
-                entry["env"] = env
+                entry["env"] = {k: _mask_secret(v) for k, v in env.items()}
             print(f"    Manual: Add to {config_path}:")
             print(f'    {{"{mcp_key}": {{"zotpilot": {json.dumps(entry)}}}}}')
 

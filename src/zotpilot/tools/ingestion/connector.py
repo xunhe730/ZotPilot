@@ -1083,6 +1083,14 @@ def save_single_and_verify(
     if enqueue_error:
         error_code = enqueue_error.get("error_code", "")
         if error_code == "extension_not_connected":
+            # Connector offline — try DOI API fallback if we have a DOI
+            if doi:
+                _logger.info("Connector offline for %s, trying DOI API fallback", url)
+                return _doi_api_fallback(
+                    doi, title, arxiv_id=arxiv_id,
+                    collection_key=collection_key, tags=tags,
+                    get_writer=get_writer, writer_lock=writer_lock, _logger=_logger,
+                )
             return {"status": "failed", "method": "connector",
                     "error": "connector_offline", "item_key": None, "has_pdf": False,
                     "title": title or "", "action_required": None, "warning": None}
@@ -1123,12 +1131,16 @@ def save_single_and_verify(
         if looks_like_error_page_title(result_title, save_result.get("item_key")):
             ik = save_result.get("item_key")
             if ik:
-                delete_item_safe(ik, get_writer=get_writer, _logger=_logger)
+                deleted = delete_item_safe(ik, get_writer=get_writer, _logger=_logger)
+                if not deleted:
+                    _logger.warning("Failed to delete anti-bot item %s — manual cleanup may be needed", ik)
+            delete_warning = None if ik else None
             return {"status": "blocked", "method": "connector",
                     "error": "anti_bot_detected", "item_key": None, "has_pdf": False,
                     "title": title or "",
                     "action_required": "用户需在浏览器中完成验证，然后重试",
-                    "warning": None}
+                    "warning": delete_warning}
+        # Cold-start retry: Connector-side already retried _waitForReady once
         # Cold-start retry: Connector-side already retried _waitForReady once
         # (5s delay + 15s wait). If still no_translator, one more attempt with a
         # fresh tab — DNS/TLS cache is now warm and JS hydration should be faster.
@@ -1187,7 +1199,9 @@ def save_single_and_verify(
                 url, item_key,
             )
             # Best-effort delete; don't block long — Zotero may auto-cleanup
-            delete_item_safe(item_key, get_writer=get_writer, _logger=_logger)
+            deleted = delete_item_safe(item_key, get_writer=get_writer, _logger=_logger)
+            if not deleted:
+                _logger.warning("Failed to delete invalid webpage item %s — manual cleanup may be needed", item_key)
             return save_single_and_verify(
                 url, doi, title, arxiv_id=arxiv_id,
                 collection_key=collection_key, tags=tags,
@@ -1199,17 +1213,24 @@ def save_single_and_verify(
             "Connector item %s invalid: %s — deleting and falling back to API",
             item_key, reason,
         )
-        delete_item_safe(item_key, get_writer=get_writer, _logger=_logger)
+        deleted = delete_item_safe(item_key, get_writer=get_writer, _logger=_logger)
+        delete_warn = None
+        if not deleted:
+            delete_warn = f"Failed to delete invalid item {item_key}. Manual cleanup may be needed."
+            _logger.warning(delete_warn)
         if doi:
             return _doi_api_fallback(
                 doi, title, arxiv_id=arxiv_id,
                 collection_key=collection_key, tags=tags,
                 get_writer=get_writer, writer_lock=writer_lock, _logger=_logger,
             )
+        warning_text = f"Connector created invalid item ({validation['reason']}), deleted."
+        if delete_warn:
+            warning_text += " " + delete_warn
         return {"status": "failed", "method": "connector",
                 "error": f"invalid_item:{validation['reason']}", "item_key": None,
                 "has_pdf": False, "title": title or "", "action_required": None,
-                "warning": f"Connector created invalid item ({validation['reason']}), deleted."}
+                "warning": warning_text}
 
     # Step 5: Valid item — apply routing and check PDF
     real_title = validation["title"]

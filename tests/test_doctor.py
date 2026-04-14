@@ -199,6 +199,8 @@ class TestCheckZoteroWebApi:
         result = _check_zotero_web_api(self._make_config("key123", None))
         assert result.status == "warn"
         assert "ZOTERO_USER_ID" in result.message
+        assert "--zotero-api-key" in result.message
+        assert "config set zotero_api_key" not in result.message
 
 
 class TestCheckWriteConnectivity:

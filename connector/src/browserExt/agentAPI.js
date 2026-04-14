@@ -59,6 +59,9 @@ Zotero.AgentAPI = new function() {
 	let _heartbeatTimer = null; // Independent heartbeat timer — not tied to poll loop
 	let _busy = false;
 
+	// Security: auth token fetched from /status, attached to all bridge requests
+	let _authToken = null;
+
 	// Map<tabId, {resolve, item_key, item_title, progressRows, pdf_*}> — pending save completions
 	let _pendingSaves = new Map();
 
@@ -84,12 +87,69 @@ Zotero.AgentAPI = new function() {
 	// Map<tabId, resolve> — pending translator-ready waiters (event-driven, replaces polling)
 	let _translatorWaiters = new Map();
 
+	/**
+	 * Fetch auth token from /status endpoint. Retries on failure.
+	 */
+	async function _fetchAuthToken() {
+		try {
+			let response = await fetch(BRIDGE_URL + "/status", {
+				method: "GET",
+				headers: { "Accept": "application/json" },
+			});
+			if (response.ok) {
+				let data = await response.json();
+				if (data.auth_token) {
+					_authToken = data.auth_token;
+					Zotero.debug("[ZotPilot] auth token acquired");
+					return true;
+				}
+			}
+		} catch (e) {
+			Zotero.debug("[ZotPilot] failed to fetch auth token: " + e.message);
+		}
+		return false;
+	}
+
+	/**
+	 * Build headers object with auth token for bridge requests.
+	 */
+	function _authHeaders(extraHeaders = {}) {
+		if (_authToken) {
+			extraHeaders["X-ZotPilot-Token"] = _authToken;
+		}
+		return extraHeaders;
+	}
+
+	/**
+	 * Handle 401 response by refreshing token. Returns true if token was refreshed.
+	 */
+	async function _handleUnauthorized() {
+		Zotero.debug("[ZotPilot] received 401, refreshing auth token");
+		_authToken = null;
+		return await _fetchAuthToken();
+	}
+
 	this.init = async function() {
 		// Task 1.1: milestone — init start
 		console.log("[ZotPilot] AgentAPI.init() called at " + Date.now() + ", awaiting Zotero.initDeferred...");
 		await Zotero.initDeferred.promise;
 		// Task 1.1: milestone — initDeferred resolved
 		console.log("[ZotPilot] Zotero.initDeferred resolved at " + Date.now());
+
+		// Fetch auth token before starting poll loop
+		let tokenAcquired = await _fetchAuthToken();
+		if (!tokenAcquired) {
+			console.error("[ZotPilot] Failed to acquire auth token from bridge. Retrying in 5s...");
+			// Start a retry loop for token acquisition
+			let retryInterval = setInterval(async () => {
+				if (await _fetchAuthToken()) {
+					clearInterval(retryInterval);
+					console.log("[ZotPilot] Auth token acquired after retry");
+				}
+			}, 5000);
+			// Don't start polling until we have a token, but don't block init either
+			// The poll loop will handle missing token gracefully
+		}
 
 		// Hook onTranslators to signal event-driven translator readiness.
 		// When Zotero detects translators for a tab, notify any waiting _handleSave.
@@ -206,7 +266,7 @@ Zotero.AgentAPI = new function() {
 			_sendHeartbeat().catch(() => {});
 		}, HEARTBEAT_INTERVAL_MS);
 		// Task 1.1: milestone — polling started
-		console.log("[ZotPilot] AgentAPI polling started at " + Date.now());
+		console.log("[ZotPilot] AgentAPI.polling started at " + Date.now());
 		Zotero.debug("AgentAPI: initialized, polling " + BRIDGE_URL);
 	};
 
@@ -236,12 +296,29 @@ Zotero.AgentAPI = new function() {
 		try {
 			let response = await fetch(BRIDGE_URL + "/pending", {
 				method: "GET",
-				headers: { "Accept": "application/json" },
+				headers: _authHeaders({ "Accept": "application/json" }),
 			});
 			console.log("[ZotPilot] poll /pending → " + response.status);
-			if (response.status === 200) {
+			if (response.status === 401) {
+				await _handleUnauthorized();
+			} else if (response.status === 200) {
 				let command = await response.json();
 				console.log("[ZotPilot] received command:", JSON.stringify(command));
+
+				// Command validation: action must be "save" or "preflight"
+				if (command.action !== "save" && command.action !== "preflight") {
+					console.error("[ZotPilot] rejecting command with invalid action:", command.action);
+					_schedulePoll();
+					return;
+				}
+
+				// Command validation: url must start with http:// or https://
+				if (!command.url || (!command.url.startsWith("http://") && !command.url.startsWith("https://"))) {
+					console.error("[ZotPilot] rejecting command with invalid url:", command.url);
+					_schedulePoll();
+					return;
+				}
+
 				if (command && command.url) {
 					if (command.action === "preflight") {
 						await _handlePreflight(command);
@@ -274,7 +351,7 @@ Zotero.AgentAPI = new function() {
 
 		await fetch(BRIDGE_URL + "/heartbeat", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: _authHeaders({ "Content-Type": "application/json" }),
 			body: JSON.stringify({
 				extension_version: browser.runtime.getManifest().version,
 				zotero_connected: zoteroConnected,
@@ -288,6 +365,14 @@ Zotero.AgentAPI = new function() {
 			.replace(/\s+/g, " ")
 			.replace(/[^\p{L}\p{N}\s]/gu, "")
 			.trim();
+	}
+	function _titlesOverlap(expected, saved) {
+		if (!expected || !saved) return true; // skip if unknown
+		let expWords = expected.toLowerCase().split(/\s+/).filter(Boolean);
+		let savWords = saved.toLowerCase().split(/\s+/).filter(Boolean);
+		if (!expWords.length) return true;
+		let overlap = expWords.filter(w => savWords.includes(w)).length;
+		return overlap / expWords.length >= 0.3;
 	}
 
 	function _extractRecentItem(rawItem) {
@@ -436,10 +521,18 @@ Zotero.AgentAPI = new function() {
 		}
 
 		if (newItems.length > 1) {
-			Zotero.debug("[ZotPilot] item_key discovery ambiguous; multiple recent candidates remain");
+			// Filter out items whose title doesn't overlap with the expected title
+			let filtered = newItems.filter((item) => _titlesOverlap(entry.item_title, item.title));
+			if (filtered.length === 1) {
+				Zotero.debug("[ZotPilot] item_key discovery: title-filtered to 1 candidate");
+				return filtered[0].key;
+			}
+			if (filtered.length > 1) {
+				Zotero.debug("[ZotPilot] item_key discovery ambiguous after title filter (" + filtered.length + " candidates)");
+			}
+			Zotero.debug("[ZotPilot] item_key discovery: all new items have wrong titles — marking wrong_paper");
+			return null; // all new items look like wrong papers
 		}
-		return null;
-	}
 
 	/**
 	 * Handle a save command.
@@ -476,7 +569,7 @@ Zotero.AgentAPI = new function() {
 			// B1: If translator wait timed out with no match, retry once after a delay.
 			// Background tabs in Chrome MV3 throttle JS execution, causing SPA pages
 			// (IEEE Xplore, Springer) to delay React hydration and citation_* meta tag
-			// injection.  The Zotero translator relies on these meta tags — without them
+			// injection.  The Zotero translators rely on these meta tags — without them
 			// it sees only an empty shell.  A 5s delay lets the browser catch up on
 			// deferred JS work; the second _waitForReady attempt usually succeeds because
 			// DNS/TLS are now cached and the page content has hydrated.
@@ -843,7 +936,7 @@ Zotero.AgentAPI = new function() {
 		try {
 			await fetch(BRIDGE_URL + "/result", {
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
+				headers: _authHeaders({ "Content-Type": "application/json" }),
 				body: JSON.stringify(result),
 			});
 		} catch (e) {

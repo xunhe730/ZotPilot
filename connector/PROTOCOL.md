@@ -1,6 +1,6 @@
 # ZotPilot Connector Bridge Protocol
 
-> **Version:** 1.0.0
+> **Version:** 2.0.0
 > **Scope:** HTTP bridge between ZotPilot MCP server and ZotPilot Connector extension
 
 The bridge exposes HTTP endpoints on `http://127.0.0.1:2619`. Any HTTP-capable client (MCP tool, curl, Python script) can integrate without Chrome-specific APIs.
@@ -10,13 +10,15 @@ The bridge exposes HTTP endpoints on `http://127.0.0.1:2619`. Any HTTP-capable c
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-2. [Endpoints](#2-endpoints)
-3. [Data Types](#3-data-types)
-4. [Error Taxonomy](#4-error-taxonomy)
-5. [Polling Contract](#5-polling-contract)
-6. [Sequence Diagrams](#6-sequence-diagrams)
-7. [Manual Testing with curl](#7-manual-testing-with-curl)
-8. [Versioning](#8-versioning)
+2. [Authentication](#2-authentication)
+3. [Command Validation](#3-command-validation)
+4. [Endpoints](#4-endpoints)
+5. [Data Types](#5-data-types)
+6. [Error Taxonomy](#6-error-taxonomy)
+7. [Polling Contract](#7-polling-contract)
+8. [Sequence Diagrams](#8-sequence-diagrams)
+9. [Manual Testing with curl](#9-manual-testing-with-curl)
+10. [Versioning](#10-versioning)
 
 ---
 
@@ -42,13 +44,66 @@ The bridge exposes HTTP endpoints on `http://127.0.0.1:2619`. Any HTTP-capable c
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `bridge.py` | Python | HTTP server, command queue, result storage, heartbeat tracking |
-| `agentAPI.js` | JavaScript | Extension-side poller, save orchestration, completion detection |
+| `bridge.py` | Python | HTTP server, command queue, result storage, heartbeat tracking, auth token management |
+| `agentAPI.js` | JavaScript | Extension-side poller, save orchestration, completion detection, token handling |
 | MCP tool `save_urls` | Python | Client-facing API (via ZotPilot MCP server) |
 
 ---
 
-## 2. Endpoints
+## 2. Authentication
+
+### Token-based Authentication (v2.0+)
+
+The bridge uses a random auth token generated on startup to prevent CSRF-style attacks from malicious websites.
+
+**Token lifecycle:**
+
+1. Bridge generates a 64-character hex token (`secrets.token_hex(32)`) on startup.
+2. Extension fetches `GET /status` on init and extracts `auth_token` from the response.
+3. All subsequent requests include the header `X-ZotPilot-Token: <token>`.
+4. Missing or invalid token → `401 {"error": "unauthorized"}`.
+5. If extension receives 401, it re-fetches `/status` to get a fresh token.
+
+**Security model:**
+
+- `GET /status` is public (no token required) — this is how the extension obtains the token.
+- `OPTIONS` preflight requests remain open (`Access-Control-Allow-Origin: *`) for CORS compatibility.
+- All other endpoints (`/pending`, `/enqueue`, `/result`, `/heartbeat`) require the `X-ZotPilot-Token` header.
+- Token is process-scoped: it changes on every bridge restart.
+
+**Client integration (non-extension):**
+
+```python
+import requests
+
+# Step 1: fetch token from /status
+status = requests.get("http://127.0.0.1:2619/status").json()
+token = status["auth_token"]
+
+# Step 2: use token in subsequent requests
+headers = {"X-ZotPilot-Token": token, "Content-Type": "application/json"}
+resp = requests.post("http://127.0.0.1:2619/enqueue", headers=headers, json={
+    "action": "save",
+    "url": "https://arxiv.org/abs/2401.00001"
+})
+```
+
+---
+
+## 3. Command Validation
+
+All commands submitted via `POST /enqueue` are validated before being queued:
+
+| Field | Validation | Error on failure |
+|-------|-----------|------------------|
+| `action` | Must be `"save"` or `"preflight"` | `400 {"error": "invalid_command", "reason": "..."}` |
+| `url` | Must start with `http://` or `https://` | `400 {"error": "invalid_command", "reason": "..."}` |
+
+The extension also validates commands received from `/pending` before executing them (defense-in-depth).
+
+---
+
+## 4. Endpoints
 
 ### `GET /pending`
 
@@ -58,6 +113,7 @@ Extension polls this endpoint every 2 seconds. Returns the next pending save com
 ```
 GET /pending
 Accept: application/json
+X-ZotPilot-Token: <token>
 ```
 
 **Response (200 — command available)**
@@ -74,7 +130,7 @@ Accept: application/json
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `request_id` | string | always | Opaque identifier for this save; must be echoed in the result |
-| `action` | string | always | Currently always `"save"` |
+| `action` | string | always | `"save"` or `"preflight"` |
 | `url` | string | always | URL to open and save |
 | `collection_key` | string \| null | no | Zotero collection key to place the item in |
 | `tags` | string[] | no | Tags to apply to the item |
@@ -94,6 +150,7 @@ Enqueue a save command. Used by MCP tools and other clients.
 ```
 POST /enqueue
 Content-Type: application/json
+X-ZotPilot-Token: <token>
 ```
 
 ```json
@@ -105,11 +162,27 @@ Content-Type: application/json
 }
 ```
 
-All fields are passed through to the extension. The bridge is a transparent proxy.
-
 **Response (200)**
 ```json
 { "request_id": "abc123def456" }
+```
+
+**Response (400 — invalid command)**
+```json
+{
+  "error": "invalid_command",
+  "reason": "invalid action 'delete'; must be 'save' or 'preflight'"
+}
+```
+
+**Response (400 — malformed JSON)**
+```
+No body
+```
+
+**Response (401 — unauthorized)**
+```json
+{ "error": "unauthorized" }
 ```
 
 **Response (503 — extension not connected)**
@@ -118,11 +191,6 @@ All fields are passed through to the extension. The bridge is a transparent prox
   "error_code": "extension_not_connected",
   "error_message": "ZotPilot Connector has not sent a heartbeat in the last 30s. Ensure the extension is installed and Chrome is open."
 }
-```
-
-**Response (400 — malformed JSON)**
-```
-No body
 ```
 
 ---
@@ -135,6 +203,7 @@ Extension posts save results here after completion.
 ```
 POST /result
 Content-Type: application/json
+X-ZotPilot-Token: <token>
 ```
 
 ```json
@@ -154,13 +223,13 @@ Content-Type: application/json
 |-------|------|----------|-------------|
 | `request_id` | string | always | Echoed from the command |
 | `success` | boolean \| `"unconfirmed"` | always | `true` = confirmed saved; `"unconfirmed"` = timeout, outcome unknown |
-| `error_code` | string | if `success` is falsy | Canonical error code (see §4) |
+| `error_code` | string | if `success` is falsy | Canonical error code (see §6) |
 | `error_message` | string | if `success` is falsy | Human-readable error |
 | `url` | string | always | Echoed from the command |
 | `title` | string | always | Page/tab title at time of result (the saved item's title) |
-| `item_key` | string \| null | no | Zotero item key. The extension first uses any key surfaced in `progressWindow.itemProgress`, and otherwise performs a best-effort post-save lookup via the local Zotero API. Ambiguous saves may still return `null`. |
-| `collection_key` | string \| null | no | Echoed from command. The extension does **not** directly route items to collections — it echoes this field back so the bridge can apply collection placement via the Zotero API. Omitted on error-path responses (e.g. `save_trigger_failed`). |
-| `tags` | string[] | no | Echoed from command. The extension does **not** directly apply tags — it echoes this field back so the bridge can apply tags via the Zotero API. Omitted on error-path responses (e.g. `save_trigger_failed`). |
+| `item_key` | string \| null | no | Zotero item key (best-effort) |
+| `collection_key` | string \| null | no | Echoed from command |
+| `tags` | string[] | no | Echoed from command |
 | `_detected_via` | string | always | Telemetry: `"sendMessage"` \| `"receiveMessage"` \| `"timeout"` |
 
 ---
@@ -190,12 +259,13 @@ No body
 
 ### `POST /heartbeat`
 
-Extension sends this every 10 seconds (every 5th poll). Bridge tracks connectivity state.
+Extension sends this every 10 seconds. Bridge tracks connectivity state.
 
 **Request**
 ```
 POST /heartbeat
 Content-Type: application/json
+X-ZotPilot-Token: <token>
 ```
 
 ```json
@@ -216,7 +286,12 @@ Content-Type: application/json
 
 ### `GET /status`
 
-Health check and connectivity status.
+Health check and connectivity status. **This is the only endpoint that does not require authentication.**
+
+**Request**
+```
+GET /status
+```
 
 **Response (200)**
 ```json
@@ -224,6 +299,7 @@ Health check and connectivity status.
   "bridge": "running",
   "port": 2619,
   "extension_connected": true,
+  "auth_token": "a1b2c3d4e5f6...",
   "extension_last_seen_s": 3.2,
   "extension_version": "0.0.2",
   "zotero_running": true
@@ -235,23 +311,24 @@ Health check and connectivity status.
 | `bridge` | string | Always `"running"` if server is up |
 | `port` | integer | Actual port the server is listening on |
 | `extension_connected` | boolean | `true` if a heartbeat was received in the last 30s |
+| `auth_token` | string | Current auth token for authenticated requests |
 | `extension_last_seen_s` | float | Seconds since last heartbeat (omitted if never connected) |
 | `extension_version` | string | From last heartbeat (omitted if never connected) |
 | `zotero_running` | boolean | From last heartbeat (omitted if never connected) |
 
 ---
 
-## 3. Data Types
+## 5. Data Types
 
 ### SaveCommand
 
 ```typescript
 interface SaveCommand {
   request_id:    string;
-  action:         "save";
-  url:            string;
+  action:        "save" | "preflight";
+  url:           string;      // must start with http:// or https://
   collection_key: string | null;
-  tags:           string[];
+  tags:          string[];
 }
 ```
 
@@ -265,17 +342,17 @@ interface SaveResult {
   error_message?: string;     // present when success === false
   url:          string;
   title:        string;
-  item_key?:    string | null;   // best-effort; may be null when post-save discovery is ambiguous
-  collection_key?: string | null; // echo-only: extension echoes back for bridge to apply via Zotero API; omitted on error-path responses
-  tags?:        string[];         // echo-only: extension echoes back for bridge to apply via Zotero API; omitted on error-path responses
-  warning?:     string;          // present when routing partially/fully failed
+  item_key?:    string | null;
+  collection_key?: string | null;
+  tags?:        string[];
+  warning?:     string;
   _detected_via?: "sendMessage" | "receiveMessage" | "timeout";
 }
 ```
 
 ---
 
-## 4. Error Taxonomy
+## 6. Error Taxonomy
 
 All error responses use `{ error_code, error_message }` split schema:
 
@@ -284,11 +361,13 @@ All error responses use `{ error_code, error_message }` split schema:
 
 | `error_code` | Meaning | `success` value | Retryable? | Likely cause |
 |---|---|---|---|---|
+| `unauthorized` | Missing or invalid auth token | — | Yes | Token not provided, bridge restarted |
+| `invalid_command` | Command failed schema validation | — | No | Invalid `action` or `url` |
 | `extension_not_connected` | Bridge has not received a heartbeat in >30s | `false` | Yes | Chrome closed, extension disabled |
 | `zotero_not_running` | Extension cannot reach Zotero desktop | `false` | Yes | Zotero desktop not running |
 | `save_trigger_failed` | `onZoteroButtonElementClick` threw synchronously | `false` | Maybe | Page incompatible with Connector |
 | `page_load_failed` | Tab failed to load the URL | `false` | Yes | Invalid URL, network error |
-| `completion_unconfirmed` | Save triggered but no `progressWindow.done` received within 60s. Save **may** have succeeded — check Zotero. | `"unconfirmed"` | Maybe | Check Zotero directly |
+| `completion_unconfirmed` | Save triggered but no `progressWindow.done` received within 60s | `"unconfirmed"` | Maybe | Check Zotero directly |
 | `collection_not_found` | Collection key does not exist | warning only | No | Fix the collection key |
 | `api_key_missing` | `ZOTERO_API_KEY` needed for routing | warning only | No | Configure key |
 | `bridge_enqueue_failed` | Failed to POST to bridge | `false` | Yes | Bridge not running |
@@ -301,7 +380,7 @@ All error responses use `{ error_code, error_message }` split schema:
 
 ---
 
-## 5. Polling Contract
+## 7. Polling Contract
 
 ### Extension → Bridge
 
@@ -315,9 +394,17 @@ If the extension misses 3 consecutive heartbeat cycles (>30s), the bridge marks 
 
 After `POST /enqueue`, the client polls `GET /result/<request_id>` every **2 seconds**, up to a **90-second overall timeout**.
 
+### Token Refresh
+
+If any request receives a `401 {"error": "unauthorized"}` response:
+
+1. Extension clears its cached token.
+2. Extension re-fetches `GET /status` to obtain a new token.
+3. Extension retries the original request with the new token.
+
 ---
 
-## 6. Sequence Diagrams
+## 8. Sequence Diagrams
 
 ### Happy path
 
@@ -339,6 +426,30 @@ Client          Bridge            Extension         Zotero
   │<──GET result──│                   │                │
   │──200 {ok}────>                   │                │
   │               │                   │                │
+```
+
+### Authentication flow
+
+```
+Extension       Bridge
+  │               │
+  │──GET /status──>
+  │<──200 {auth_token: "..."}
+  │               │
+  │──GET /pending─── (X-ZotPilot-Token: "...")
+  │<──200 {command}
+  │               │
+  │──POST /result── (X-ZotPilot-Token: "...")
+  │<──200
+  │               │
+  │──GET /pending─── (X-ZotPilot-Token: "stale")
+  │<──401 {error: "unauthorized"}
+  │               │
+  │──GET /status──> (re-fetch token)
+  │<──200 {auth_token: "..."}
+  │               │
+  │──GET /pending─── (X-ZotPilot-Token: "new")
+  │<──200 {command}
 ```
 
 ### Completion detection (dual monkey-patch)
@@ -376,23 +487,26 @@ Client          Bridge
 
 ---
 
-## 7. Manual Testing with curl
+## 9. Manual Testing with curl
 
 Assumes the bridge is running on port 2619.
 
-### 1. Check bridge health
+### 1. Check bridge health and get auth token
 
 ```bash
 curl http://127.0.0.1:2619/status
 ```
 
-Expected: `{"bridge": "running", "port": 2619, ...}`
+Expected: `{"bridge": "running", "port": 2619, "auth_token": "...", ...}`
 
-### 2. Enqueue a save (from any HTTP client)
+### 2. Enqueue a save (with auth token)
 
 ```bash
+TOKEN=$(curl -s http://127.0.0.1:2619/status | python3 -c "import sys,json; print(json.load(sys.stdin)['auth_token'])")
+
 curl -X POST http://127.0.0.1:2619/enqueue \
   -H "Content-Type: application/json" \
+  -H "X-ZotPilot-Token: $TOKEN" \
   -d '{
     "action": "save",
     "url": "https://arxiv.org/abs/2401.00001",
@@ -403,18 +517,7 @@ curl -X POST http://127.0.0.1:2619/enqueue \
 
 Expected: `{"request_id": "..."}`
 
-### 3. Extension processes — poll for result
-
-```bash
-# Replace REQUEST_ID with the id from step 2
-curl http://127.0.0.1:2619/result/REQUEST_ID
-```
-
-Expected (after ~5-15s): `{"request_id": "REQUEST_ID", "success": true, ...}`
-
-### 4. Simulate disconnect (extension not running)
-
-Close Chrome, wait 35s, then:
+### 3. Test unauthorized access (no token)
 
 ```bash
 curl -X POST http://127.0.0.1:2619/enqueue \
@@ -422,14 +525,53 @@ curl -X POST http://127.0.0.1:2619/enqueue \
   -d '{"action": "save", "url": "https://example.com"}'
 ```
 
+Expected: `HTTP 401 {"error": "unauthorized"}`
+
+### 4. Test invalid command
+
+```bash
+curl -X POST http://127.0.0.1:2619/enqueue \
+  -H "Content-Type: application/json" \
+  -H "X-ZotPilot-Token: $TOKEN" \
+  -d '{"action": "delete", "url": "https://example.com"}'
+```
+
+Expected: `HTTP 400 {"error": "invalid_command", "reason": "..."}`
+
+### 5. Extension processes — poll for result
+
+```bash
+# Replace REQUEST_ID with the id from step 2
+curl http://127.0.0.1:2619/result/REQUEST_ID \
+  -H "X-ZotPilot-Token: $TOKEN"
+```
+
+Expected (after ~5-15s): `{"request_id": "REQUEST_ID", "success": true, ...}`
+
+### 6. Simulate disconnect (extension not running)
+
+Close Chrome, wait 35s, then:
+
+```bash
+curl -X POST http://127.0.0.1:2619/enqueue \
+  -H "Content-Type: application/json" \
+  -H "X-ZotPilot-Token: $TOKEN" \
+  -d '{"action": "save", "url": "https://example.com"}'
+```
+
 Expected: `HTTP 503 {"error_code": "extension_not_connected", ...}`
 
 ---
 
-## 8. Versioning
+## 10. Versioning
 
 The protocol is backward-compatible. New optional fields may be added to requests and responses at any time.
 
 Breaking changes (removing or renaming fields) will increment the major version and be documented in CHANGELOG.
 
-Current protocol version: **1.0.0** (matches `extension_version: 0.0.2` in heartbeats)
+| Version | Changes |
+|---------|---------|
+| **2.0.0** | Added token-based authentication (`X-ZotPilot-Token` header), command schema validation (action/url), `auth_token` in `/status` response |
+| **1.0.0** | Initial protocol version |
+
+Current protocol version: **2.0.0**

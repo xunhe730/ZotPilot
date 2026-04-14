@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pymupdf
-import pymupdf.layout  # noqa: F401 — activates layout engine, MUST be before pymupdf4llm
+
+try:
+    import pymupdf.layout  # noqa: F401
+except ImportError:
+    _HAS_LAYOUT = False
+else:
+    _HAS_LAYOUT = True
 import pymupdf4llm
 
 from ..feature_extraction.captions import find_all_captions

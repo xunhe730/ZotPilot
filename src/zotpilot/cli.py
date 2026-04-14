@@ -509,6 +509,12 @@ _SENSITIVE_FIELDS = {
     "zotero_api_key",
 }
 
+_SENSITIVE_REGISTER_FLAGS = {
+    "gemini_api_key": "--gemini-key",
+    "dashscope_api_key": "--dashscope-key",
+    "zotero_api_key": "--zotero-api-key",
+}
+
 _SCALAR_TYPES = {
     "chunk_size": int, "chunk_overlap": int, "embedding_timeout": float,
     "embedding_max_retries": int, "rerank_alpha": float, "rerank_enabled": bool,
@@ -617,8 +623,23 @@ def cmd_config(args):
             print(f"Warning: zotero_user_id should be a numeric ID, not a username (got '{value}').\n"
                   f"Find your numeric ID at https://www.zotero.org/settings/keys")
         if key in _SENSITIVE_FIELDS:
+            register_hint = _SENSITIVE_REGISTER_FLAGS.get(key)
+            if key == "zotero_api_key":
+                runtime_hint = (
+                    "Prefer environment variables for local shell use. "
+                    "If you need client runtime injection, use "
+                    "`zotpilot register --zotero-api-key <value>` and ensure "
+                    "`ZOTERO_USER_ID` or `zotero_user_id` is also configured."
+                )
+            elif register_hint:
+                runtime_hint = (
+                    f"Prefer environment variables for local shell use. "
+                    f"If you need client runtime injection, use `zotpilot register {register_hint} <value>`."
+                )
+            else:
+                runtime_hint = "Prefer environment variables for local shell use."
             print(f"Error: Field '{key}' is runtime-only and is no longer persisted in config.json. "
-                  f"Use environment variables or `zotpilot register --{key}` for runtime injection.",
+                  f"{runtime_hint}",
                   file=sys.stderr)
             return 1
         try:
@@ -1077,7 +1098,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.command:
-        # Default: run MCP server
+        # Default: run MCP server — signal state.py to start parent monitor
+        os.environ["ZOTPILOT_SERVER"] = "1"
         from .server import main as server_main
         server_main()
         return 0

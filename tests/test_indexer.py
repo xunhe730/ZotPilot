@@ -187,6 +187,143 @@ class TestSkipTracking:
 
         assert result.get("skipped_no_pdf", []) == []
 
+    def test_empty_journal_still_respects_legacy_store_indexed_docs(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal
+
+        item = self._make_item("K1", "Paper A", has_pdf=True)
+        indexer = self._make_indexer([item])
+        self._patch_indexer(indexer)
+
+        # Legacy store has chunks for K1, but journal is newly created and empty.
+        indexer.store.db_path = tmp_path / "chroma"
+        indexer.store.get_indexed_doc_ids.return_value = {"K1"}
+        indexer._needs_reindex = MagicMock(return_value=(False, "current"))
+        journal = IndexJournal(tmp_path / "index_journal.json")
+        journal._save()
+
+        with patch("zotpilot.indexer.extract_document") as mock_extract, \
+             patch.object(indexer, "_index_extraction") as mock_index_extraction:
+            result = indexer.index_all(batch_size=None, journal=journal)
+
+        assert result["already_indexed"] == 1
+        mock_extract.assert_not_called()
+        mock_index_extraction.assert_not_called()
+
+    def test_changed_doc_demoted_before_extraction_failure(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal, is_doc_committed, mark_committed
+
+        item = self._make_item("K1", "Paper A", has_pdf=True)
+        indexer = self._make_indexer([item])
+        self._patch_indexer(indexer)
+
+        journal = IndexJournal(tmp_path / "index_journal.json")
+        mark_committed(journal, "K1")
+        indexer.store.db_path = tmp_path / "chroma"
+        indexer.store.get_indexed_doc_ids.return_value = {"K1"}
+        indexer.store.get_document_meta.return_value = {"pdf_hash": "old-hash"}
+        indexer._pdf_hash = MagicMock(return_value="new-hash")
+
+        def _boom(*args, **kwargs):
+            indexer.store.delete_document.assert_called_once_with("K1")
+            raise RuntimeError("boom")
+
+        with patch("zotpilot.indexer.extract_document", side_effect=_boom):
+            result = indexer.index_all(batch_size=None, journal=journal)
+
+        assert result["failed"] == 1
+        assert not is_doc_committed(journal, "K1")
+        assert "K1" in journal.in_progress
+
+    def test_changed_doc_skipped_by_max_pages_keeps_existing_index(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal, is_doc_committed, mark_committed
+
+        item = self._make_item("K1", "Paper A", has_pdf=True)
+        indexer = self._make_indexer([item])
+        self._patch_indexer(indexer)
+        indexer.store.db_path = tmp_path / "chroma"
+        indexer.store.get_indexed_doc_ids.return_value = {"K1"}
+        indexer.store.get_document_meta.return_value = {"pdf_hash": "old-hash"}
+        indexer._pdf_hash = MagicMock(return_value="new-hash")
+        indexer.store.delete_document = MagicMock()
+
+        journal = IndexJournal(tmp_path / "index_journal.json")
+        mark_committed(journal, "K1")
+
+        fake_doc = MagicMock()
+        fake_doc.__len__.return_value = 100
+        fake_doc.close = MagicMock()
+
+        with patch("fitz.open", return_value=fake_doc), \
+             patch("zotpilot.indexer.extract_document") as mock_extract:
+            result = indexer.index_all(batch_size=None, journal=journal, max_pages=40)
+
+        assert result["skipped"] == 1
+        assert is_doc_committed(journal, "K1")
+        indexer.store.delete_document.assert_not_called()
+        mock_extract.assert_not_called()
+
+    def test_changed_doc_deferred_by_batch_size_keeps_existing_index(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal, is_doc_committed, mark_committed
+
+        item1 = self._make_item("K1", "Paper A", has_pdf=True)
+        item2 = self._make_item("K2", "Paper B", has_pdf=True)
+        indexer = self._make_indexer([item1, item2])
+        self._patch_indexer(indexer)
+        indexer.store.db_path = tmp_path / "chroma"
+        indexer.store.get_indexed_doc_ids.return_value = {"K1", "K2"}
+        indexer._pdf_hash = MagicMock(side_effect=["new-hash-1", "new-hash-2"])
+        indexer.store.get_document_meta = MagicMock(
+            side_effect=[{"pdf_hash": "old-hash-1"}, {"pdf_hash": "old-hash-2"}]
+        )
+        indexer.store.delete_document = MagicMock()
+
+        journal = IndexJournal(tmp_path / "index_journal.json")
+        mark_committed(journal, "K1")
+        mark_committed(journal, "K2")
+
+        mock_extraction = MagicMock()
+        mock_extraction.pages = [MagicMock()]
+        mock_extraction.stats = {"total_pages": 1, "text_pages": 1, "ocr_pages": 0, "empty_pages": 0}
+        mock_extraction.quality_grade = "A"
+        mock_extraction.pending_vision = None
+
+        with patch("zotpilot.indexer.extract_document", return_value=mock_extraction), \
+             patch.object(indexer, "_index_extraction", return_value=(1, 0, "", {}, "A")):
+            result = indexer.index_all(batch_size=1, journal=journal)
+
+        assert result["indexed"] == 1
+        assert result["has_more"] is True
+        assert is_doc_committed(journal, "K2")
+        indexer.store.delete_document.assert_called_once_with("K1")
+
+    def test_stale_in_progress_doc_is_prioritized_for_healing(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal, mark_in_progress
+
+        item1 = self._make_item("K1", "Paper A", has_pdf=True)
+        item2 = self._make_item("K2", "Paper B", has_pdf=True)
+        indexer = self._make_indexer([item1, item2])
+        self._patch_indexer(indexer)
+        indexer.store.db_path = tmp_path / "chroma"
+        indexer.store.get_indexed_doc_ids.return_value = {"K1", "K2"}
+        indexer.store.get_document_meta = MagicMock(side_effect=[None])
+        indexer.store.delete_document = MagicMock()
+
+        journal = IndexJournal(tmp_path / "index_journal.json")
+        mark_in_progress(journal, "K2")
+
+        mock_extraction = MagicMock()
+        mock_extraction.pages = [MagicMock()]
+        mock_extraction.stats = {"total_pages": 1, "text_pages": 1, "ocr_pages": 0, "empty_pages": 0}
+        mock_extraction.quality_grade = "A"
+        mock_extraction.pending_vision = None
+
+        with patch("zotpilot.indexer.extract_document", return_value=mock_extraction), \
+             patch.object(indexer, "_index_extraction", return_value=(1, 0, "", {}, "A")):
+            result = indexer.index_all(batch_size=1, journal=journal)
+
+        assert result["indexed"] == 1
+        indexer.store.delete_document.assert_called_once_with("K2")
+
 
 class TestVisionBudgetGuards:
     def test_skips_batch_vision_when_table_cap_is_exceeded(self):

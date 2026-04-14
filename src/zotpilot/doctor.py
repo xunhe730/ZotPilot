@@ -139,7 +139,8 @@ def _check_zotero_web_api(config) -> CheckResult:
         "zotero_web_api",
         "warn",
         f"Missing: {', '.join(missing)} (write operations will not work). "
-        f"Run: zotpilot config set zotero_api_key <key>",
+        "Use environment variables for local shell use, and if needed run "
+        "`zotpilot register --zotero-api-key <key>` with `ZOTERO_USER_ID`/`zotero_user_id` also configured.",
     )
 
 

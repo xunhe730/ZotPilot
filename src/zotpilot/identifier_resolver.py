@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
 _ARXIV_OLD_RE = re.compile(r"^[a-z-]+/\d{7}(v\d+)?$")
-_DOI_RE = re.compile(r"^10\.\d{4,}/\S+")
+_DOI_RE = re.compile(r"^10\.\d{4,}/[^\s\)\"\',;\.\?]+$")
 _S2_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 
 

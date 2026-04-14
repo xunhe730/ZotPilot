@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 try:
     from fastmcp.exceptions import ToolError
 except ImportError:
+
     class ToolError(Exception):
         """Error raised by MCP tools to signal failure to client."""
+
         pass
 
 
@@ -45,21 +47,21 @@ def _get_ancestor_pid():
     between the actual parent (Claude Code) and this process. We need to
     find the real parent by walking up the process tree.
     """
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         return os.getppid()
 
     import ctypes
     from ctypes import wintypes
 
-    ntdll = ctypes.WinDLL('ntdll')
+    ntdll = ctypes.WinDLL("ntdll")
 
     class PROCESS_BASIC_INFORMATION(ctypes.Structure):
         _fields_ = [
-            ('Reserved1', ctypes.c_void_p),
-            ('PebBaseAddress', ctypes.c_void_p),
-            ('Reserved2', ctypes.c_void_p * 2),
-            ('UniqueProcessId', wintypes.HANDLE),
-            ('InheritedFromUniqueProcessId', wintypes.HANDLE),
+            ("Reserved1", ctypes.c_void_p),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("Reserved2", ctypes.c_void_p * 2),
+            ("UniqueProcessId", wintypes.HANDLE),
+            ("InheritedFromUniqueProcessId", wintypes.HANDLE),
         ]
 
     kernel32 = ctypes.windll.kernel32
@@ -98,8 +100,9 @@ def _start_parent_monitor():
     target_pid = _get_ancestor_pid()
 
     def monitor():
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
 
             SYNCHRONIZE = 0x00100000
@@ -129,7 +132,9 @@ def _start_parent_monitor():
 
 
 # Start parent monitor before anything else
-_start_parent_monitor()
+# Start parent monitor only when running as MCP server
+if os.environ.get("ZOTPILOT_SERVER"):
+    _start_parent_monitor()
 
 _MCP_INSTRUCTIONS = """\
 ZotPilot — AI-powered Zotero research assistant. Tool selection guide:
@@ -232,10 +237,10 @@ def _get_zotero():
                 if _config is None:
                     _config = Config.load()
                 from .zotero_client import ZoteroClient
-                if _library_override and _library_override["library_type"] == "group":
-                    lib_id = ZoteroClient.resolve_group_library_id(
-                        _config.zotero_data_dir, int(_library_override["library_id"])
-                    )
+
+                override = _get_library_override()
+                if override and override["library_type"] == "group":
+                    lib_id = ZoteroClient.resolve_group_library_id(_config.zotero_data_dir, int(override["library_id"]))
                     _zotero = ZoteroClient(_config.zotero_data_dir, library_id=lib_id)
                 else:
                     _zotero = ZoteroClient(_config.zotero_data_dir)
@@ -253,6 +258,7 @@ def _get_resolver():
         with _init_lock:
             if _resolver is None:
                 from .identifier_resolver import IdentifierResolver
+
                 _resolver = IdentifierResolver()
     return _resolver
 
@@ -270,10 +276,12 @@ def _get_writer():
                 if not _config.zotero_user_id:
                     raise ToolError("ZOTERO_USER_ID not set -- write operations unavailable")
                 from .zotero_writer import ZoteroWriter
+
                 # Apply library override if set
-                if _library_override:
-                    lib_id = _library_override["library_id"]
-                    lib_type = _library_override["library_type"]
+                override = _get_library_override()
+                if override:
+                    lib_id = override["library_id"]
+                    lib_type = override["library_type"]
                 else:
                     lib_id = _config.zotero_user_id
                     lib_type = _config.zotero_library_type
@@ -301,10 +309,12 @@ def _get_api_reader():
                 if not _config.zotero_user_id:
                     raise ToolError("ZOTERO_USER_ID not set -- annotation reading unavailable")
                 from .zotero_api_reader import ZoteroApiReader
+
                 # Apply library override if set
-                if _library_override:
-                    lib_id = _library_override["library_id"]
-                    lib_type = _library_override["library_type"]
+                override = _get_library_override()
+                if override:
+                    lib_id = override["library_id"]
+                    lib_type = override["library_type"]
                 else:
                     lib_id = _config.zotero_user_id
                     lib_type = _config.zotero_library_type
@@ -328,6 +338,12 @@ def _get_config():
 
 # Library override for switch_library
 _library_override: dict | None = None
+
+
+def _get_library_override() -> dict | None:
+    """Thread-safe read of _library_override."""
+    with _init_lock:
+        return _library_override
 
 
 def _reset_singletons():
@@ -357,12 +373,14 @@ def register_reset_callback(fn: Callable[[], None]) -> None:
 def _set_library_override(library_id: str, library_type: str):
     """Set library override and reset singletons."""
     global _library_override
-    _library_override = {"library_id": library_id, "library_type": library_type}
+    with _init_lock:
+        _library_override = {"library_id": library_id, "library_type": library_type}
     _reset_singletons()
 
 
 def _clear_library_override():
     """Clear library override and reset singletons."""
     global _library_override
-    _library_override = None
+    with _init_lock:
+        _library_override = None
     _reset_singletons()

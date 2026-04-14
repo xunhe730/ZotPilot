@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,8 +35,9 @@ def _run_config(args: list[str], config_path: Path, monkeypatch, capsys):
     parsed = parser.parse_args(["config"] + args)
     parsed.config = str(config_path)
     parsed.config_subcmd = parsed.subcommand
-    cmd_config(parsed)
-    return capsys.readouterr()
+    returncode = cmd_config(parsed)
+    captured = capsys.readouterr()
+    return SimpleNamespace(out=captured.out, err=captured.err, returncode=returncode)
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +355,7 @@ class TestConfigSetHardErrorMessageContract:
         cfg_path = tmp_path / "config.json"
         monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
         out = _run_config(["set", "gemini_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        assert out.returncode == 1
         combined = (out.out + out.err).lower()
         assert "runtime" in combined or "environment" in combined or "env" in combined
 
@@ -371,6 +374,47 @@ class TestConfigSetHardErrorMessageContract:
         out = _run_config(["set", "gemini_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
         combined = (out.out + out.err).lower()
         assert "register" in combined
+        assert "--gemini-key" in combined
+        assert "--gemini_api_key" not in combined
+
+    def test_error_message_mentions_dashscope_register_flag(self, tmp_path, monkeypatch, capsys):
+        cfg_path = tmp_path / "config.json"
+        monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
+        out = _run_config(["set", "dashscope_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        combined = (out.out + out.err).lower()
+        assert "--dashscope-key" in combined
+        assert "--dashscope_api_key" not in combined
+
+    def test_error_message_mentions_zotero_register_flag(self, tmp_path, monkeypatch, capsys):
+        cfg_path = tmp_path / "config.json"
+        monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
+        out = _run_config(["set", "zotero_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        assert out.returncode == 1
+        combined = (out.out + out.err).lower()
+        assert "--zotero-api-key" in combined
+        assert "--zotero_api_key" not in combined
+        assert "zotero_user_id" in combined or "user_id" in combined
+
+    def test_anthropic_error_message_does_not_advertise_register_flag(self, tmp_path, monkeypatch, capsys):
+        cfg_path = tmp_path / "config.json"
+        monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
+        out = _run_config(["set", "anthropic_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        combined = (out.out + out.err).lower()
+        assert "register" not in combined
+
+    def test_hard_error_does_not_create_config_file(self, tmp_path, monkeypatch, capsys):
+        cfg_path = tmp_path / "config.json"
+        monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
+        _run_config(["set", "gemini_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        assert not cfg_path.exists()
+
+    def test_hard_error_does_not_modify_existing_config_file(self, tmp_path, monkeypatch, capsys):
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps({"chunk_size": 256}))
+        before = cfg_path.read_text()
+        monkeypatch.setattr("zotpilot.cli._default_config_path", lambda: cfg_path)
+        _run_config(["set", "dashscope_api_key", "sk-test"], cfg_path, monkeypatch, capsys)
+        assert cfg_path.read_text() == before
 
 
 class TestConfigSetNonSensitiveFieldsStillWork:

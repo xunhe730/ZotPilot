@@ -50,6 +50,67 @@ def test_authoritative_indexed_doc_ids_excludes_orphans():
     assert orphaned_index_doc_ids(store, {"DOC1", "DOC3"}) == {"DOC2"}
 
 
+def test_authoritative_indexed_doc_ids_prefers_journal_for_touched_docs_and_keeps_legacy_raw(tmp_path):
+    from zotpilot.index_authority import IndexJournal, mark_committed
+
+    store = MagicMock()
+    store.db_path = tmp_path / "chroma"
+    store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2", "DOC3"}
+
+    journal = IndexJournal(tmp_path / "index_journal.json")
+    mark_committed(journal, "DOC1")
+
+    assert authoritative_indexed_doc_ids(store, {"DOC1", "DOC2"}) == {"DOC1", "DOC2"}
+
+
+def test_authoritative_indexed_doc_ids_filters_out_non_current_committed_docs(tmp_path):
+    from zotpilot.index_authority import IndexJournal, mark_committed
+
+    store = MagicMock()
+    store.db_path = tmp_path / "chroma"
+    store.get_indexed_doc_ids.return_value = {"DOC1", "DOC9"}
+
+    journal = IndexJournal(tmp_path / "index_journal.json")
+    mark_committed(journal, "DOC1")
+    mark_committed(journal, "DOC9")
+
+    assert authoritative_indexed_doc_ids(store, {"DOC1", "DOC2"}) == {"DOC1"}
+
+
+def test_authoritative_indexed_doc_ids_with_empty_store_does_not_return_all_current_docs():
+    store = MagicMock()
+    store.get_indexed_doc_ids.return_value = set()
+
+    assert authoritative_indexed_doc_ids(store, {"DOC1", "DOC2"}) == set()
+
+
+def test_authoritative_indexed_doc_ids_merges_legacy_raw_docs_with_committed_journal(tmp_path):
+    from zotpilot.index_authority import IndexJournal, mark_committed, mark_in_progress
+
+    store = MagicMock()
+    store.db_path = tmp_path / "chroma"
+    store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2", "DOC3"}
+
+    journal = IndexJournal(tmp_path / "index_journal.json")
+    mark_committed(journal, "DOC1")
+    mark_in_progress(journal, "DOC3")
+
+    assert authoritative_indexed_doc_ids(store, {"DOC1", "DOC2", "DOC3"}) == {"DOC1", "DOC2"}
+
+
+def test_authoritative_indexed_doc_ids_drops_committed_docs_missing_from_store(tmp_path):
+    from zotpilot.index_authority import IndexJournal, mark_committed
+
+    store = MagicMock()
+    store.db_path = tmp_path / "chroma"
+    store.get_indexed_doc_ids.return_value = {"DOC2"}
+
+    journal = IndexJournal(tmp_path / "index_journal.json")
+    mark_committed(journal, "DOC1")
+
+    assert authoritative_indexed_doc_ids(store, {"DOC1", "DOC2"}) == {"DOC2"}
+
+
 def test_reconcile_orphaned_index_docs_deletes_missing_docs():
     store = MagicMock()
     store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2", "DOC3"}
