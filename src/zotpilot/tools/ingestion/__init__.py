@@ -518,29 +518,76 @@ def ingest_by_identifiers(
             active_candidates, DEFAULT_PORT, BridgeServer,
         )
 
+    # action_required declared early — needed by both Step 4 blocking and Step 5 anti-bot
+    action_required: list[dict] = []
+
     # Step 4: Preflight (if Connector online)
     if ext_ok and active_candidates:
         urls = [c["url"] for c in active_candidates if c.get("url")]
         if urls:
-            remaining, preflight_failures, blocking = connector.run_preflight_check(
+            remaining, preflight_failures, blocking, blocked_publishers = connector.run_preflight_check(
                 [{"url": u} for u in urls], DEFAULT_PORT, BridgeServer, logger,
             )
-            # Preflight is advisory, not blocking.  Background tabs in Chrome
-            # MV3 throttle JS execution, causing Cloudflare challenges and SPA
-            # hydration to fail — producing false-positive anti-bot detections.
-            # Log the warning but let individual saves handle anti-bot per-paper;
-            # save_single_and_verify has its own anti-bot detection + retry logic.
+
+            # NEW: Blocking behavior — 全批预检完成后统一判断
             if blocking:
-                blocked_urls = [f.get("url") for f in preflight_failures]
-                logger.warning(
-                    "Preflight reported anti-bot for %d URL(s) — proceeding anyway "
-                    "(background tab JS throttling causes false positives): %s",
-                    len(blocked_urls), blocked_urls,
+                # Extract blocked publisher domains from preflight failures
+                blocked_domains = {
+                    connector.extract_publisher_domain(f["url"]) for f in preflight_failures
+                    if f.get("error_code") == "anti_bot_detected" and f.get("url")
+                }
+                blocked_count = 0
+                pending_count = 0
+
+                # 区分两种状态：被拦截 vs 通过预检但整批等待
+                for candidate in candidates_internal:
+                    if not candidate.get("status"):
+                        url = candidate.get("url", "")
+                        domain = connector.extract_publisher_domain(url) if url else ""
+                        if domain in blocked_domains:
+                            # 真正被 anti-bot 拦截
+                            candidate["status"] = "preflight_blocked"
+                            candidate["error"] = "anti_bot_detected"
+                            blocked_count += 1
+                        else:
+                            # 预检通过，因批次阻塞等待
+                            candidate["status"] = "preflight_pending"
+                            candidate["note"] = "passed preflight, waiting for blocked publishers to clear"
+                            pending_count += 1
+
+                # Extract publisher domain strings from the 4-tuple blocked_publishers
+                publisher_names = (
+                    [p["publisher"] for p in blocked_publishers]
+                    if blocked_publishers
+                    else sorted(blocked_domains)
                 )
+                action_required.append({
+                    "type": "preflight_blocked",
+                    "publishers": publisher_names,
+                    "blocked_count": blocked_count,
+                    "pending_count": pending_count,
+                    "message": (
+                        f"{blocked_count} 篇被 anti-bot 拦截"
+                        f"（{', '.join(publisher_names)}），"
+                        f"{pending_count} 篇就绪等待。"
+                        "请在浏览器完成验证后重新调用 ingest_by_identifiers。"
+                    ),
+                })
+
+                # Return early — 全批不 save，等用户决策后重新调用
+                return {
+                    "total": total_inputs,
+                    "results": [_result_from_candidate(c) for c in candidates_internal],
+                    "action_required": action_required,
+                }
+
+            # When no blocking: use remaining as the filtered candidate list for save
+            remaining_ids = {id(c) for c in remaining}
+            candidates_internal = [c for c in candidates_internal if id(c) in remaining_ids]
+
 
     # Step 5: Sequential save + verify
     results: list[dict] = []
-    action_required: list[dict] = []
     for index, candidate in enumerate(candidates_internal):
         # Already resolved (failed, duplicate)
         if candidate.get("status"):

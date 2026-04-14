@@ -28,9 +28,30 @@ description: >
    - The `local_duplicate` annotation from search tells you which candidates are already in the library. Filter them out before calling ingest unless the user explicitly wants a metadata refresh.
    - If the tool raises `INBOX collection unavailable`, `ZOTERO_API_KEY` / `ZOTERO_USER_ID` is missing — stop and ask the user to configure credentials before retrying.
 6. **Handle results**:
-   - If `action_required` contains "anti_bot" → **STOP**, tell user to open browser, wait for confirmation, retry with IDENTICAL inputs
+   - If `action_required` contains `"preflight_blocked"` → **STOP**, show the blocked report and wait for user to complete verification (see **Preflight Blocking** below)
+   - If `action_required` contains `"anti_bot"` (from save_single_and_verify) → **STOP**, tell user to manually open browser for verification, wait for confirmation, retry with IDENTICAL inputs
    - If `action_required` contains "connector_offline" → **STOP**, surface remediation to user
    - All saved → proceed to Phase 3
+
+   **Preflight Blocking** — when `action_required` contains `"preflight_blocked"`: 
+   - The preflight gate intercepted anti-bot detection (e.g. Cloudflare CAPTCHA) before save. **The browser tab has already been auto-popped to the foreground.**
+   - Show a status report distinguishing two statuses:
+     | Paper | Status | 说明 |
+     |-------|--------|------|
+     | Nature paper | preflight_blocked | anti-bot 拦截，需要用户处理 |
+     | arXiv paper  | preflight_pending | 通过预检，等待批次放行后入库 |
+   - Tell the user:
+     > 验证页面已自动在浏览器中打开（[blocked publishers] 的论文），请完成页面验证（如 Cloudflare CAPTCHA / 登录），完成后告诉我，我将重新提交整批入库。preflight_pending 的论文通过了预检，无需任何操作。
+   - Wait for user confirmation
+   - Re-run `ingest_by_identifiers` with **IDENTICAL inputs** (include ALL original candidates, both preflight_pending and preflight_blocked)
+
+   **Status meanings:**
+   - `preflight_blocked`: preflight gate intercepted, paper needs user anti-bot verification. Browser tab already auto-popped.
+   - `preflight_pending`: paper passed preflight but is waiting because other publishers in the batch were blocked. Will save normally on retry — **do NOT treat as a failure**.
+
+   **Two anti-bot signals — know the difference:**
+   - `preflight_blocked` (NEW): preflight gate intercepted, tab already auto-popped to foreground, user operates the already-open page
+   - `anti_bot_detected` (EXISTING, from save_single_and_verify): save stage intercepted, user needs to manually open the URL in browser
 7. **[USER_REQUIRED]** Show ingest results table (title / status / has_pdf / item_key). Items are already in the `INBOX` collection at this point. **STOP here** and ask explicitly:
    > 入库完成（已归档到 INBOX 集合）。是否继续进入 Phase 3 后处理（标签 + 分类 + 索引）？(Y/N)
 

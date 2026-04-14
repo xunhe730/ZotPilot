@@ -540,10 +540,10 @@ def run_preflight_check(
     *,
     sleep_fn=time.sleep,
     monotonic_fn=time.monotonic,
-) -> tuple[list[dict], list[dict], dict | None]:
+) -> tuple[list[dict], list[dict], dict | None, list[dict]]:
     """Run preflight on connector candidate URLs.
 
-    Returns (updated_connector_candidates, preflight_failures, blocking_decision_dict).
+    Returns (updated_connector_candidates, preflight_failures, blocking_decision_dict, blocked_publishers_details).
     """
     urls_to_save = [c["url"] for c in connector_candidates]
     preflight_report = preflight_urls(
@@ -553,7 +553,7 @@ def run_preflight_check(
     )
 
     if preflight_report.get("all_clear", False):
-        return connector_candidates, [], None
+        return connector_candidates, [], None, []
 
     failures: list[dict] = []
     blocked_domains: set[str] = set()
@@ -602,7 +602,7 @@ def run_preflight_check(
             dropped, len(blocked_domains), len(remaining),
         )
 
-    if not remaining and blocked_domains:
+    if blocked_domains:
         blocking_dict = {
             "decision_id": "preflight_blocked",
             "description": (
@@ -611,9 +611,22 @@ def run_preflight_check(
             ),
             "item_keys": [],
         }
-        return remaining, failures, blocking_dict
+        # Build blocked publishers details
+        blocked_publishers_details = []
+        for domain in blocked_domains:
+            domain_urls = [
+                f["url"] for f in failures
+                if extract_publisher_domain(f.get("url", "")) == domain
+            ]
+            blocked_publishers_details.append({
+                "publisher": domain,
+                "sample_urls": domain_urls[:3],
+                "error_code": "anti_bot_detected",
+                "total_affected": len(domain_urls),
+            })
+        return remaining, failures, blocking_dict, blocked_publishers_details
 
-    return remaining, failures, None
+    return remaining, failures, None, []
 
 
 # ---------------------------------------------------------------------------

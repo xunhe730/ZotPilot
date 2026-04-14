@@ -769,6 +769,8 @@ Zotero.AgentAPI = new function() {
 			let status = "accessible";
 			if (ANTI_BOT_PATTERNS.some((pattern) => title.toLowerCase().includes(pattern))) {
 				status = "anti_bot_detected";
+				// 后台 tab 避免批量预检干扰用户，仅 anti-bot 时才提升前台让用户完成验证
+				try { await browser.tabs.update(tabId, { active: true }); } catch (e) {}
 				tabId = null; // keep tab open — user needs it to complete verification
 			}
 			await _postResult({
