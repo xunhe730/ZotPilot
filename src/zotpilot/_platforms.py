@@ -104,6 +104,7 @@ class DesiredRuntime:
     args: tuple[str, ...]
     env: dict[str, str]
     targets: tuple[str, ...]
+    source_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -518,7 +519,7 @@ def apply_runtime_changes(
         fn = _REGISTER_FNS.get(plat)
         if fn is None:
             continue
-        if fn(dict(desired.env)):
+        if fn(dict(desired.env), desired.source_dir):
             registered.append(plat)
 
     return ApplyResult(
@@ -536,14 +537,16 @@ def reconcile_runtime(
     zotero_api_key: str | None = None,
     zotero_user_id: str | None = None,
     apply: bool = False,
+    dev_source_dir: Path | None = None,
 ) -> ReconcileResult:
     desired_env = _build_env(gemini_key, dashscope_key, zotero_api_key, zotero_user_id)
     current = inspect_current_state(desired_env, platforms)
     desired = DesiredRuntime(
-        command=_zotpilot_command(),
-        args=(),
+        command="uv" if dev_source_dir else _zotpilot_command(),
+        args=("run", "--directory", str(dev_source_dir), "zotpilot") if dev_source_dir else (),
         env=desired_env,
         targets=current.supported_targets,
+        source_dir=dev_source_dir,
     )
     changes = plan_runtime_changes(desired, current)
     applied = apply_runtime_changes(desired, changes) if apply else None
@@ -804,7 +807,7 @@ def deploy_skills(platforms: list[str] | None = None) -> dict[str, bool]:
 # CLI-based registration (Tier 1)
 # ---------------------------------------------------------------------------
 
-def _register_claude_code(env: dict[str, str]) -> bool:
+def _register_claude_code(env: dict[str, str], source_dir: Path | None = None) -> bool:
     """Register via ``claude mcp add``.
 
     The ``-e/--env`` flag is declared as variadic in claude-code (``<env...>``),
@@ -812,14 +815,19 @@ def _register_claude_code(env: dict[str, str]) -> bool:
     values.  To avoid that, put ``<name>`` and ``<commandOrUrl>`` FIRST and the
     variadic ``-e`` flags LAST.
     """
-    try:
-        zp = _zotpilot_command(allow_fallback=False)
-    except RuntimeError as e:
-        print(f"  ERROR: {e}", file=sys.stderr)
-        return False
+    if source_dir:
+        zp = shutil.which("uv") or "uv"
+        cmd_parts = [zp, "run", "--directory", str(source_dir), "zotpilot"]
+    else:
+        try:
+            zp = _zotpilot_command(allow_fallback=False)
+        except RuntimeError as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            return False
+        cmd_parts = [zp]
     subprocess.run(["claude", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
-    cmd = ["claude", "mcp", "add", "--scope", "user", "zotpilot", zp]
+    cmd = ["claude", "mcp", "add", "--scope", "user", "zotpilot"] + cmd_parts
     for k, v in env.items():
         cmd.extend(["-e", f"{k}={v}"])
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -829,19 +837,22 @@ def _register_claude_code(env: dict[str, str]) -> bool:
     return True
 
 
-def _register_codex(env: dict[str, str]) -> bool:
+def _register_codex(env: dict[str, str], source_dir: Path | None = None) -> bool:
     """Register via `codex mcp add`."""
-    try:
-        zp = _zotpilot_command(allow_fallback=False)
-    except RuntimeError as e:
-        print(f"  ERROR: {e}", file=sys.stderr)
-        return False
+    if source_dir:
+        zp_parts = ["uv", "run", "--directory", str(source_dir), "zotpilot"]
+    else:
+        try:
+            zp_parts = [_zotpilot_command(allow_fallback=False)]
+        except RuntimeError as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            return False
     subprocess.run(["codex", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
     cmd = ["codex", "mcp", "add", "zotpilot"]
     for k, v in env.items():
         cmd.extend(["--env", f"{k}={v}"])
-    cmd.extend(["--", zp])
+    cmd.extend(["--"] + zp_parts)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -849,23 +860,28 @@ def _register_codex(env: dict[str, str]) -> bool:
     return True
 
 
-def _register_gemini(env: dict[str, str]) -> bool:
+def _register_gemini(env: dict[str, str], source_dir: Path | None = None) -> bool:
     """Register via `gemini mcp add`.
 
     Syntax: gemini mcp add [options] <name> <command> [args...]
     No -- separator; command is a positional argument.
     """
-    try:
-        zp = _zotpilot_command(allow_fallback=False)
-    except RuntimeError as e:
-        print(f"  ERROR: {e}", file=sys.stderr)
-        return False
+    if source_dir:
+        zp = shutil.which("uv") or "uv"
+        extra_args = ["run", "--directory", str(source_dir), "zotpilot"]
+    else:
+        try:
+            zp = _zotpilot_command(allow_fallback=False)
+        except RuntimeError as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            return False
+        extra_args = []
     subprocess.run(["gemini", "mcp", "remove", "zotpilot"],
                    capture_output=True, text=True)
     cmd = ["gemini", "mcp", "add", "-s", "user"]
     for k, v in env.items():
         cmd.extend(["-e", f"{k}={v}"])
-    cmd.extend(["zotpilot", zp])  # <name> <command>, no --
+    cmd.extend(["zotpilot", zp] + extra_args)  # <name> <command> [args...]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  ERROR: {result.stderr.strip()}", file=sys.stderr)
@@ -877,7 +893,7 @@ def _register_gemini(env: dict[str, str]) -> bool:
 # Config-file-based registration (OpenCode + Tier 2)
 # ---------------------------------------------------------------------------
 
-def _write_mcp_config(config_path: Path, env: dict[str, str]) -> bool:
+def _write_mcp_config(config_path: Path, env: dict[str, str], source_dir: Path | None = None) -> bool:
     """Read-modify-write an MCP entry into a JSON config file.
 
     Handles: file missing, existing entries, other MCP servers.
@@ -914,24 +930,29 @@ def _write_mcp_config(config_path: Path, env: dict[str, str]) -> bool:
             )
             return False
 
-    # Build zotpilot MCP entry (use absolute path for reliability)
-    try:
-        zp = _zotpilot_command(allow_fallback=False)
-    except RuntimeError as e:
-        print(f"  ERROR: {e}", file=sys.stderr)
-        return False
+    # Build zotpilot MCP entry
+    if source_dir:
+        if is_opencode:
+            entry: dict = {"type": "local", "command": ["uv", "run", "--directory", str(source_dir), "zotpilot"]}
+        else:
+            entry = {"type": "stdio", "command": "uv", "args": ["run", "--directory", str(source_dir), "zotpilot"]}
+    else:
+        try:
+            zp = _zotpilot_command(allow_fallback=False)
+        except RuntimeError as e:
+            print(f"  ERROR: {e}", file=sys.stderr)
+            return False
+        if is_opencode:
+            entry = {"type": "local", "command": [zp]}
+        else:
+            entry = {"type": "stdio", "command": zp, "args": []}
+    if env:
+        entry["environment" if is_opencode else "env"] = env
     if is_opencode:
-        entry: dict = {"type": "local", "command": [zp]}
-        if env:
-            entry["environment"] = env
         # OpenCode: set experimental.mcp_timeout for long-running tool calls.
         # The per-server "timeout" only controls tool discovery, not execution.
         existing.setdefault("experimental", {})
         existing["experimental"].setdefault("mcp_timeout", 600000)
-    else:
-        entry = {"type": "stdio", "command": zp, "args": []}
-        if env:
-            entry["env"] = env
 
     # Merge
     if mcp_key not in existing:
@@ -973,21 +994,21 @@ def _write_mcp_config(config_path: Path, env: dict[str, str]) -> bool:
         return False
 
 
-def _register_opencode(env: dict[str, str]) -> bool:
+def _register_opencode(env: dict[str, str], source_dir: Path | None = None) -> bool:
     """OpenCode: config file write (interactive CLI not scriptable)."""
     config_path = _mcp_config_path("opencode")
     if not config_path:
         return False
-    return _write_mcp_config(config_path, env)
+    return _write_mcp_config(config_path, env, source_dir=source_dir)
 
 
-def _register_ide(plat: str, env: dict[str, str]) -> bool:
+def _register_ide(plat: str, env: dict[str, str], source_dir: Path | None = None) -> bool:
     """Register for IDE platforms (Cursor, Windsurf, Cline, Roo)."""
     config_path = _mcp_config_path(plat)
     if not config_path:
         print(f"  ERROR: Unknown config path for {plat}", file=sys.stderr)
         return False
-    return _write_mcp_config(config_path, env)
+    return _write_mcp_config(config_path, env, source_dir=source_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -999,10 +1020,10 @@ _REGISTER_FNS = {
     "codex": _register_codex,
     "gemini": _register_gemini,
     "opencode": _register_opencode,
-    "cursor": lambda env: _register_ide("cursor", env),
-    "windsurf": lambda env: _register_ide("windsurf", env),
-    "cline": lambda env: _register_ide("cline", env),
-    "roo": lambda env: _register_ide("roo", env),
+    "cursor": lambda env, source_dir=None: _register_ide("cursor", env, source_dir),
+    "windsurf": lambda env, source_dir=None: _register_ide("windsurf", env, source_dir),
+    "cline": lambda env, source_dir=None: _register_ide("cline", env, source_dir),
+    "roo": lambda env, source_dir=None: _register_ide("roo", env, source_dir),
 }
 
 
@@ -1012,6 +1033,7 @@ def register(
     dashscope_key: str | None = None,
     zotero_api_key: str | None = None,
     zotero_user_id: str | None = None,
+    dev_source_dir: Path | None = None,
 ) -> dict[str, bool]:
     """Compatibility wrapper over runtime reconciliation."""
     # Auto-fill from config file if not passed as CLI args
@@ -1049,6 +1071,7 @@ def register(
         zotero_api_key=zotero_api_key,
         zotero_user_id=zotero_user_id,
         apply=True,
+        dev_source_dir=dev_source_dir,
     )
     results = {
         plat: (

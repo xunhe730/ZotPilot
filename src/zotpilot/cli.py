@@ -981,12 +981,19 @@ def cmd_register(args):
     """
     from ._platforms import register
 
+    dev_source_dir = None
+    dev_arg = getattr(args, "dev", None)
+    if dev_arg is not None:
+        from pathlib import Path
+        dev_source_dir = Path(dev_arg).resolve() if dev_arg else Path(__file__).parent.parent.parent.resolve()
+
     results = register(
         platforms=args.platforms,
         gemini_key=args.gemini_key,
         dashscope_key=args.dashscope_key,
         zotero_api_key=args.zotero_api_key,
         zotero_user_id=args.zotero_user_id,
+        dev_source_dir=dev_source_dir,
     )
     return 0 if results and all(results.values()) else 1
 
@@ -1093,6 +1100,12 @@ def main(argv: list[str] | None = None) -> int:
     sub_register.add_argument("--dashscope-key", dest="dashscope_key")
     sub_register.add_argument("--zotero-api-key", dest="zotero_api_key")
     sub_register.add_argument("--zotero-user-id", dest="zotero_user_id")
+    sub_register.add_argument(
+        "--dev", nargs="?", const="", metavar="SOURCE_DIR",
+        help="Register using source directory (default: auto-detect repo root). "
+             "Use for development: runs 'uv run --directory <dir> zotpilot' so "
+             "source code changes take effect after MCP server restart.",
+    )
     sub_register.set_defaults(func=cmd_register)
 
     args = parser.parse_args(argv)
