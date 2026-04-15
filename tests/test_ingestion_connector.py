@@ -398,7 +398,12 @@ class TestSamplePreflightUrls:
 
 
 class TestRunPreflightCheck:
-    """Test that run_preflight_check blocks on anti_bot, timeout, and subscription."""
+    """Preflight is a mandatory gate: only `accessible` URLs proceed to save.
+
+    Tiered blocking scope:
+      - anti_bot_detected / subscription_required → publisher-wide domain block
+      - preflight_timeout / preflight_failed       → URL-only block
+    """
 
     def _make_candidate(self, url: str) -> dict:
         return {"url": url, "title": "Paper", "doi": None}
@@ -417,8 +422,8 @@ class TestRunPreflightCheck:
                 _logger=mock_logger,
             )
 
-    def test_anti_bot_detected_blocks(self):
-        """anti_bot_detected error should block the domain."""
+    def test_anti_bot_blocks_publisher_scope(self):
+        """anti_bot_detected is a site-level signal → block the whole publisher."""
         candidates = [
             self._make_candidate("https://science.org/paper1"),
             self._make_candidate("https://science.org/paper2"),
@@ -434,67 +439,96 @@ class TestRunPreflightCheck:
         }
         remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
         assert blocking is not None
-        assert len(remaining) == 0  # Both Science papers blocked
-        assert len(failures) == 1
+        assert remaining == []  # Both Science papers blocked (domain-wide)
+        assert publishers[0]["scope"] == "publisher"
+        assert publishers[0]["error_code"] == "anti_bot_detected"
 
-    def test_preflight_timeout_blocks(self):
-        """preflight_timeout error should block the domain (NEW behavior)."""
+    def test_subscription_blocks_publisher_scope(self):
+        """subscription_required is a site-level signal → block the whole publisher."""
         candidates = [
-            self._make_candidate("https://science.org/paper1"),
+            self._make_candidate("https://wiley.com/paper1"),
+            self._make_candidate("https://wiley.com/paper2"),
             self._make_candidate("https://arxiv.org/abs/2301.0001"),
         ]
         report = {
             "all_clear": False,
             "blocked": [],
             "errors": [{
-                "url": "https://science.org/paper1",
-                "error": "Timeout (60s)",
-                "error_code": "preflight_timeout",
-            }],
-        }
-        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
-        assert blocking is not None
-        assert len(remaining) == 1  # arXiv passes
-        assert remaining[0]["url"] == "https://arxiv.org/abs/2301.0001"
-        assert any(f["error_code"] == "preflight_timeout" for f in failures)
-
-    def test_subscription_required_blocks(self):
-        """subscription_required error should block the domain (NEW behavior)."""
-        candidates = [
-            self._make_candidate("https://ieee.org/paper1"),
-            self._make_candidate("https://arxiv.org/abs/2301.0001"),
-        ]
-        report = {
-            "all_clear": False,
-            "blocked": [],
-            "errors": [{
-                "url": "https://ieee.org/paper1",
+                "url": "https://wiley.com/paper1",
                 "error": "subscription required",
                 "error_code": "subscription_required",
             }],
         }
         remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
         assert blocking is not None
-        assert len(remaining) == 1  # arXiv passes
-        assert remaining[0]["url"] == "https://arxiv.org/abs/2301.0001"
-        assert any(f["error_code"] == "subscription_required" for f in failures)
+        assert [c["url"] for c in remaining] == ["https://arxiv.org/abs/2301.0001"]
+        assert publishers[0]["scope"] == "publisher"
+        assert publishers[0]["error_code"] == "subscription_required"
 
-    def test_preflight_failed_does_not_block(self):
-        """Generic preflight_failed should NOT block the domain."""
+    def test_timeout_blocks_url_scope_only(self):
+        """preflight_timeout is page-level (SPA hydration) → block only that URL."""
         candidates = [
-            self._make_candidate("https://ieee.org/paper1"),
+            self._make_candidate("https://ieeexplore.ieee.org/abs/1"),
+            self._make_candidate("https://ieeexplore.ieee.org/abs/2"),
         ]
         report = {
             "all_clear": False,
             "blocked": [],
             "errors": [{
-                "url": "https://ieee.org/paper1",
-                "error": "some error",
+                "url": "https://ieeexplore.ieee.org/abs/1",
+                "error": "Timeout (60s)",
+                "error_code": "preflight_timeout",
+            }],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert blocking is not None  # batch still halts for user review
+        assert [c["url"] for c in remaining] == ["https://ieeexplore.ieee.org/abs/2"]
+        assert publishers[0]["scope"] == "url"
+        assert publishers[0]["error_code"] == "preflight_timeout"
+
+    def test_generic_failure_blocks_url_scope(self):
+        """preflight_failed still blocks the URL — preflight is a mandatory gate."""
+        candidates = [
+            self._make_candidate("https://example.com/p"),
+            self._make_candidate("https://example.com/q"),
+        ]
+        report = {
+            "all_clear": False,
+            "blocked": [],
+            "errors": [{
+                "url": "https://example.com/p",
+                "error": "HTTP 500",
                 "error_code": "preflight_failed",
             }],
         }
         remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
-        assert blocking is None  # NOT blocking for generic errors
-        assert len(remaining) == 1  # IEEE paper still allowed
-        assert any(f["error_code"] == "preflight_failed" for f in failures)
+        assert blocking is not None
+        assert [c["url"] for c in remaining] == ["https://example.com/q"]
+        assert publishers[0]["scope"] == "url"
+        assert publishers[0]["error_code"] == "preflight_failed"
+
+    def test_only_accessible_urls_pass(self):
+        """Invariant: remaining ≡ candidates with `accessible` verdict from preflight."""
+        candidates = [self._make_candidate(u) for u in [
+            "https://a.com/1",
+            "https://b.com/1",
+            "https://c.com/1",
+            "https://d.com/1",
+        ]]
+        report = {
+            "all_clear": False,
+            "accessible": [{"url": "https://a.com/1"}],
+            "blocked": [
+                {"url": "https://b.com/1", "error_code": "anti_bot_detected"},
+            ],
+            "errors": [
+                {"url": "https://c.com/1", "error_code": "preflight_timeout"},
+                {"url": "https://d.com/1", "error_code": "preflight_failed"},
+            ],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert [c["url"] for c in remaining] == ["https://a.com/1"]
+        assert blocking is not None
+        scopes = sorted(p["scope"] for p in publishers)
+        assert scopes == ["publisher", "url", "url"]
 

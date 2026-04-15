@@ -556,14 +556,16 @@ def run_preflight_check(
         return connector_candidates, [], None, []
 
     failures: list[dict] = []
-    blocked_domains: set[str] = set()
+    blocked_domains: dict[str, str] = {}
+    blocked_urls: dict[str, str] = {}
 
     for blocked in preflight_report.get("blocked", []):
         blocked_url = blocked.get("url") or ""
-        blocked_domains.add(extract_publisher_domain(blocked_url))
+        error_code = blocked.get("error_code") or "anti_bot_detected"
+        blocked_domains[extract_publisher_domain(blocked_url)] = error_code
         failures.append({
             "url": blocked_url, "status": "failed",
-            "error_code": blocked.get("error_code") or "anti_bot_detected",
+            "error_code": error_code,
             "error": (
                 blocked.get("error")
                 or "Anti-bot protection detected. "
@@ -573,16 +575,21 @@ def run_preflight_check(
 
     for error in preflight_report.get("errors", []):
         error_url = error.get("url") or ""
-        # Block on anti-bot, timeout, and subscription errors.
-        # Generic failures (preflight_failed) are logged but not blocking.
         error_code = error.get("error_code") or "preflight_failed"
-        if error_code in ("anti_bot_detected", "preflight_timeout", "subscription_required"):
-            blocked_domains.add(extract_publisher_domain(error_url))
+        domain = extract_publisher_domain(error_url)
+
+        # Blocking scope by signal strength:
+        #   anti_bot_detected / subscription_required → publisher-wide
+        #     (site-level barriers; other URLs on same domain will also fail)
+        #   preflight_timeout / preflight_failed → URL-only
+        #     (page-level signal; could be SPA hydration or transient error.
+        #     We refuse to proceed to save without an `accessible` verdict,
+        #     but we won't lock out unrelated saves on the same publisher.)
+        if error_code in ("anti_bot_detected", "subscription_required"):
+            blocked_domains[domain] = error_code
         else:
-            _logger.debug(
-                "Preflight non-blocking error for %s: %s (%s)",
-                error_url, error.get("error"), error_code,
-            )
+            blocked_urls[error_url] = error_code
+
         failures.append({
             "url": error_url, "status": "failed",
             "error_code": error_code,
@@ -592,35 +599,45 @@ def run_preflight_check(
     remaining = [
         c for c in connector_candidates
         if extract_publisher_domain(c["url"]) not in blocked_domains
+        and c["url"] not in blocked_urls
     ]
     dropped = len(connector_candidates) - len(remaining)
     if dropped:
         _logger.info(
-            "Preflight: dropped %d connector candidate(s) from %d blocked domain(s); %d remain.",
-            dropped, len(blocked_domains), len(remaining),
+            "Preflight: dropped %d candidate(s) — %d blocked domain(s), %d blocked url(s); %d remain.",
+            dropped, len(blocked_domains), len(blocked_urls), len(remaining),
         )
 
-    if blocked_domains:
+    if blocked_domains or blocked_urls:
         blocking_dict = {
             "decision_id": "preflight_blocked",
             "description": (
-                "Preflight detected anti-bot protection (CAPTCHA / Cloudflare / login). "
-                "User must complete browser verification in Chrome, then retry."
+                "Preflight detected access barriers (anti-bot / paywall / page error). "
+                "Review the blocked items in Chrome, then retry."
             ),
             "item_keys": [],
         }
-        # Build blocked publishers details
-        blocked_publishers_details = []
-        for domain in blocked_domains:
+        blocked_publishers_details: list[dict] = []
+        for domain, code in blocked_domains.items():
             domain_urls = [
                 f["url"] for f in failures
                 if extract_publisher_domain(f.get("url", "")) == domain
+                and f.get("error_code") == code
             ]
             blocked_publishers_details.append({
                 "publisher": domain,
                 "sample_urls": domain_urls[:3],
-                "error_code": "anti_bot_detected",
+                "error_code": code,
+                "scope": "publisher",
                 "total_affected": len(domain_urls),
+            })
+        for url, code in blocked_urls.items():
+            blocked_publishers_details.append({
+                "publisher": extract_publisher_domain(url),
+                "sample_urls": [url],
+                "error_code": code,
+                "scope": "url",
+                "total_affected": 1,
             })
         return remaining, failures, blocking_dict, blocked_publishers_details
 
