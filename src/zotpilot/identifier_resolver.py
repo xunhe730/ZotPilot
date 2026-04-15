@@ -133,7 +133,7 @@ class IdentifierResolver:
 
         try:
             resp = httpx.get(
-                "http://export.arxiv.org/api/query",
+                "https://export.arxiv.org/api/query",
                 params={"id_list": clean_id, "max_results": 1},
                 timeout=15.0,
             )

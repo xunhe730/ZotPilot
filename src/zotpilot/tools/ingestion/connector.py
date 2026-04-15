@@ -1147,13 +1147,11 @@ def save_single_and_verify(
                 deleted = delete_item_safe(ik, get_writer=get_writer, _logger=_logger)
                 if not deleted:
                     _logger.warning("Failed to delete anti-bot item %s — manual cleanup may be needed", ik)
-            delete_warning = None if ik else None
             return {"status": "blocked", "method": "connector",
                     "error": "anti_bot_detected", "item_key": None, "has_pdf": False,
                     "title": title or "",
                     "action_required": "用户需在浏览器中完成验证，然后重试",
-                    "warning": delete_warning}
-        # Cold-start retry: Connector-side already retried _waitForReady once
+                    "warning": None}
         # Cold-start retry: Connector-side already retried _waitForReady once
         # (5s delay + 15s wait). If still no_translator, one more attempt with a
         # fresh tab — DNS/TLS cache is now warm and JS hydration should be faster.
