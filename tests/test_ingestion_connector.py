@@ -390,3 +390,111 @@ class TestSamplePreflightUrls:
         sample, skipped = sample_preflight_urls(urls, 5)
         assert sample == urls
         assert skipped == []
+
+
+# ---------------------------------------------------------------------------
+# run_preflight_check tests — blocking strategy
+# ---------------------------------------------------------------------------
+
+
+class TestRunPreflightCheck:
+    """Test that run_preflight_check blocks on anti_bot, timeout, and subscription."""
+
+    def _make_candidate(self, url: str) -> dict:
+        return {"url": url, "title": "Paper", "doi": None}
+
+    def _run_preflight(self, candidates, preflight_report):
+        """Helper: mock preflight_urls and call run_preflight_check."""
+        from zotpilot.tools.ingestion.connector import run_preflight_check
+        mock_logger = MagicMock()
+        with patch(
+            "zotpilot.tools.ingestion.connector.preflight_urls",
+            return_value=preflight_report,
+        ):
+            return run_preflight_check(
+                candidates, default_port=2619,
+                bridge_server_cls=MagicMock(),
+                _logger=mock_logger,
+            )
+
+    def test_anti_bot_detected_blocks(self):
+        """anti_bot_detected error should block the domain."""
+        candidates = [
+            self._make_candidate("https://science.org/paper1"),
+            self._make_candidate("https://science.org/paper2"),
+        ]
+        report = {
+            "all_clear": False,
+            "blocked": [{
+                "url": "https://science.org/paper1",
+                "title": "Just a moment...",
+                "error_code": "anti_bot_detected",
+            }],
+            "errors": [],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert blocking is not None
+        assert len(remaining) == 0  # Both Science papers blocked
+        assert len(failures) == 1
+
+    def test_preflight_timeout_blocks(self):
+        """preflight_timeout error should block the domain (NEW behavior)."""
+        candidates = [
+            self._make_candidate("https://science.org/paper1"),
+            self._make_candidate("https://arxiv.org/abs/2301.0001"),
+        ]
+        report = {
+            "all_clear": False,
+            "blocked": [],
+            "errors": [{
+                "url": "https://science.org/paper1",
+                "error": "Timeout (60s)",
+                "error_code": "preflight_timeout",
+            }],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert blocking is not None
+        assert len(remaining) == 1  # arXiv passes
+        assert remaining[0]["url"] == "https://arxiv.org/abs/2301.0001"
+        assert any(f["error_code"] == "preflight_timeout" for f in failures)
+
+    def test_subscription_required_blocks(self):
+        """subscription_required error should block the domain (NEW behavior)."""
+        candidates = [
+            self._make_candidate("https://ieee.org/paper1"),
+            self._make_candidate("https://arxiv.org/abs/2301.0001"),
+        ]
+        report = {
+            "all_clear": False,
+            "blocked": [],
+            "errors": [{
+                "url": "https://ieee.org/paper1",
+                "error": "subscription required",
+                "error_code": "subscription_required",
+            }],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert blocking is not None
+        assert len(remaining) == 1  # arXiv passes
+        assert remaining[0]["url"] == "https://arxiv.org/abs/2301.0001"
+        assert any(f["error_code"] == "subscription_required" for f in failures)
+
+    def test_preflight_failed_does_not_block(self):
+        """Generic preflight_failed should NOT block the domain."""
+        candidates = [
+            self._make_candidate("https://ieee.org/paper1"),
+        ]
+        report = {
+            "all_clear": False,
+            "blocked": [],
+            "errors": [{
+                "url": "https://ieee.org/paper1",
+                "error": "some error",
+                "error_code": "preflight_failed",
+            }],
+        }
+        remaining, failures, blocking, publishers = self._run_preflight(candidates, report)
+        assert blocking is None  # NOT blocking for generic errors
+        assert len(remaining) == 1  # IEEE paper still allowed
+        assert any(f["error_code"] == "preflight_failed" for f in failures)
+

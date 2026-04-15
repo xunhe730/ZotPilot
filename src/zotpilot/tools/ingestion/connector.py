@@ -547,7 +547,7 @@ def run_preflight_check(
     """
     urls_to_save = [c["url"] for c in connector_candidates]
     preflight_report = preflight_urls(
-        urls_to_save, sample_size=5,
+        urls_to_save, sample_size=len(urls_to_save),
         default_port=default_port, bridge_server_cls=bridge_server_cls,
         _logger=_logger, sleep_fn=sleep_fn, monotonic_fn=monotonic_fn,
     )
@@ -573,12 +573,10 @@ def run_preflight_check(
 
     for error in preflight_report.get("errors", []):
         error_url = error.get("url") or ""
-        # Only block the domain for genuine anti-bot errors, not timeouts
-        # or generic failures.  SPA pages (IEEE Xplore, Springer) may timeout
-        # during preflight due to slow JS hydration — blocking the entire
-        # domain for a timeout would prevent all saves to that publisher.
+        # Block on anti-bot, timeout, and subscription errors.
+        # Generic failures (preflight_failed) are logged but not blocking.
         error_code = error.get("error_code") or "preflight_failed"
-        if error_code == "anti_bot_detected":
+        if error_code in ("anti_bot_detected", "preflight_timeout", "subscription_required"):
             blocked_domains.add(extract_publisher_domain(error_url))
         else:
             _logger.debug(
