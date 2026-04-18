@@ -12,25 +12,7 @@ zotpilot update --dry-run    # 预览操作，不执行
 
 ---
 
-## [0.5.1] - 2026-04-15
-
-**质量加固 / Quality Hardening** — v0.5.0 发布后的修复与小功能补充。
-
-### Added
-- **`zotpilot register --dev [SOURCE_DIR]`** — 开发者模式注册：MCP server 直接跑源码（`uv run --directory <repo> zotpilot`），改代码后只需重启 MCP 连接无需重新安装
-
-### Fixed
-- **Preflight 真正阻塞** — 检测到反爬页面时阻塞整个批次并要求用户介入，不再悄然降级为 API fallback
-- **active_candidates 对象一致性** — `run_preflight_check` 接收 `active_candidates` 引用，保证 preflight 操作的对象与后续处理的对象为同一实例
-- **ArXiv API 改用 HTTPS** — `identifier_resolver` 中 ArXiv API 端点从 `http://` 改为 `https://`
-- **代码质量（P0–P2）** — 修复 `section_type` 验证、`chunk_index` 边界保护、`year_min=0` 过滤异常、消除死代码赋值
-
-### Changed
-- **AGENTS.md / CLAUDE.md** — 同步到 v0.5.0 三 Agent 协作模型（Claude / OpenCode / Codex），更新架构描述和文档维护规则
-
----
-
-## [0.5.0] - 2026-04-13
+## [0.5.0] - Unreleased
 
 **架构重构 / Architectural Refactor** — 重新设计入库流程、精简工具层、新增浏览器扩展。
 
@@ -42,6 +24,7 @@ zotpilot update --dry-run    # 预览操作，不执行
 - **索引可靠性大修**（Issue #7）：增量索引、中断恢复、不再丢失已完成的索引数据
 
 ### Added
+- **`zotpilot register --dev [SOURCE_DIR]`** — 开发者模式注册：MCP server 直接跑源码（`uv run --directory <repo> zotpilot`），改代码后只需重启 MCP 连接无需重新安装
 - **Connector 浏览器扩展** — 基于 Zotero Connector fork，加入 AI agent 调用路径。Agent 通过本地 bridge 触发浏览器保存，带机构权限下载 PDF。从 [GitHub Release](https://github.com/xunhe730/ZotPilot/releases) 下载 zip，加载到 Chrome 即可
 - **`ingest_by_identifiers` 工具** — 给 DOI / arXiv ID / URL 即可入库，自动去重、验证 PDF、失败时走 API fallback。返回每篇论文的最终状态（`saved_with_pdf` / `saved_metadata_only` / `duplicate` / `failed`）
 - **`profile_library` 工具** — 分析文献库的主题分布、期刊结构、时间跨度，帮助 agent 理解你的研究方向
@@ -53,6 +36,7 @@ zotpilot update --dry-run    # 预览操作，不执行
 - **入库即时验证** — Connector 保存后通过本地 Zotero API 验证 itemType + title，自动识别并清理出版商 translator 产生的网页快照垃圾 item，失败时走 DOI API fallback
 
 ### Changed
+- **AGENTS.md / CLAUDE.md** — 同步到 v0.5.0 三 Agent 协作模型（Claude / OpenCode / Codex），更新架构描述和文档维护规则
 - **MCP 工具从 33 个精简到 18 个**：
   - `search_papers` 新增 `section_type` 参数，可搜表格和图表（替代 `search_tables` / `search_figures`）
   - `ingest_by_identifiers` 支持 URL 输入（替代 `save_urls`）
@@ -68,6 +52,13 @@ zotpilot update --dry-run    # 预览操作，不执行
 - **旧工具别名** — `search_tables`、`search_figures`、`save_urls`、`create_collection`、`reindex_degraded` 等已合并到对应工具
 
 ### Fixed
+- **Preflight 真正阻塞 + 分级 blocking** — 检测到反爬页面时阻塞整个批次要求用户介入，不再悄然降级为 API fallback；分级策略：`anti_bot_detected` / `subscription_required` 封 publisher 域，`preflight_timeout` / `preflight_failed` 只封单 URL（不误伤 IEEE / Springer SPA 慢 hydration 的无关条目）
+- **DOI suffix 接受 `.` 字符** — `identifier_resolver._DOI_RE` 从 `[^\s\)\"\',;\.\?]+` 改为 `\S+`，不再误拒 Elsevier / IEEE 风格 DOI（如 `10.1016/j.jcp.2022.111902`、`10.1109/jas.2023.123537`）。与上游 `search.is_doi_query` 对齐
+- **OpenAlex SSL 首连重试** — `_request` 现在捕获 `httpx.RequestError` 并按现有 backoff 重试（原代码仅 429 走重试路径，TLS 首连抖动会直接挂）
+- **`state._init_lock` 自死锁** — `_get_library_override()` 去掉无意义的 lock acquire（持有者二次 acquire 非 `RLock` 导致 MCP `tools/call` 永不返回）
+- **active_candidates 对象一致性** — `run_preflight_check` 接收 `active_candidates` 引用，保证 preflight 操作的对象与后续处理的对象为同一实例
+- **ArXiv API 改用 HTTPS** — `identifier_resolver` 中 ArXiv API 端点从 `http://` 改为 `https://`
+- **代码质量（P0–P2）** — 修复 `section_type` 验证、`chunk_index` 边界保护、`year_min=0` 过滤异常、消除死代码赋值
 - **Issue #7：索引中断丢数据** — 增量索引基于 PDF hash，中断后自动从断点恢复；清理 ChromaDB 中的 stale 孤儿记录
 - **arXiv DOI 路由** — `10.48550/arXiv.xxx` 格式的 DOI 正确路由到 arXiv API（CrossRef 不索引这类 DOI）
 - **PDF 提取冷启动** — 硬化 PDF fallback 链，修复首次索引时的提取失败
