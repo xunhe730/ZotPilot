@@ -471,10 +471,9 @@ Zotero.AgentAPI = new function() {
 			}
 			Zotero.debug("[ZotPilot] item_key discovery: all new items have wrong titles — marking wrong_paper");
 			return null; // all new items look like wrong papers
-		return null; // all new items look like wrong papers
+		}
+		return null; // no matching item found
 	}
-
-	/**
 
 	/**
 	 * Handle a save command.
