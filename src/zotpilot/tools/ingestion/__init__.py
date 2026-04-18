@@ -527,45 +527,53 @@ def ingest_by_identifiers(
             active_candidates, DEFAULT_PORT, BridgeServer, logger,
         )
 
-        # NEW: Blocking behavior — 全批预检完成后统一判断
+        # Blocking behavior: 全批 halt。但只把"真正出问题"的 candidate 和它
+        # 归属的 publisher 报告给用户 — pending（同批连带等待）不出现在用户消息里。
         if blocking:
-            blocked_domains_set = {
-                connector.extract_publisher_domain(f["url"]) for f in preflight_failures
-                if f.get("error_code") == "anti_bot_detected" and f.get("url")
+            # Per-candidate failure lookup, keyed by the candidate's original
+            # URL (preflight_failures[*].url is the URL we probed).
+            failure_by_url: dict[str, dict] = {
+                f["url"]: f for f in preflight_failures if f.get("url")
             }
+
             blocked_count = 0
             pending_count = 0
-
-            # 区分两种状态：被拦截 vs 通过预检但整批等待
             for candidate in candidates_internal:
                 if not candidate.get("status"):
-                    url = candidate.get("url", "")
-                    domain = connector.extract_publisher_domain(url) if url else ""
-                    if domain in blocked_domains_set:
+                    cand_url = candidate.get("url", "")
+                    failure = failure_by_url.get(cand_url)
+                    if failure is not None:
                         candidate["status"] = "preflight_blocked"
-                        candidate["error"] = "anti_bot_detected"
+                        candidate["error"] = failure.get("error_code") or "preflight_failed"
                         blocked_count += 1
                     else:
+                        # Collateral — this one passed but batch is halted.
+                        # Kept in results for bookkeeping; NOT surfaced to user.
                         candidate["status"] = "preflight_pending"
                         candidate["note"] = "passed preflight, waiting for blocked publishers to clear"
                         pending_count += 1
 
-            # action_required：列出所有被拦截的出版社
-            publisher_names = (
-                [p["publisher"] for p in blocked_publishers]
-                if blocked_publishers
-                else sorted(blocked_domains_set)
-            )
+            # action_required: only the real problems
+            publisher_details = blocked_publishers or []
+            publisher_names = [d.get("publisher", "") for d in publisher_details]
+            if publisher_details:
+                parts = [
+                    f"{d['publisher']}（{d.get('error_code', 'preflight_failed')}）"
+                    for d in publisher_details
+                ]
+                details_str = "、".join(parts)
+            else:
+                details_str = "、".join(publisher_names)
+
             action_required.append({
                 "type": "preflight_blocked",
                 "publishers": publisher_names,
+                "details": publisher_details,
                 "blocked_count": blocked_count,
-                "pending_count": pending_count,
                 "message": (
-                    f"{blocked_count} 篇被 anti-bot 拦截"
-                    f"（{', '.join(publisher_names)}），"
-                    f"{pending_count} 篇就绪等待。"
-                    "请在浏览器完成验证后重新调用 ingest_by_identifiers。"
+                    f"{blocked_count} 篇需要你处理：{details_str}。"
+                    "请在浏览器完成验证或等待慢加载页面完成后，"
+                    "重新调用 ingest_by_identifiers。"
                 ),
             })
 

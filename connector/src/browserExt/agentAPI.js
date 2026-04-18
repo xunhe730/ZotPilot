@@ -670,7 +670,10 @@ Zotero.AgentAPI = new function() {
 		try {
 			let tab = await browser.tabs.create({ url, active: false });
 			tabId = tab.id;
-			await _waitForReady(tab.id, 30000); // 30s matches _handleSave; 15s was too short for JS-redirect pages (AIP/APS)
+			// 60s gives slow-loading publishers (CF auto-challenge, heavy SPAs)
+			// enough time to reach a stable "accessible" state. Shorter windows
+			// led to false-positive preflight_timeouts on otherwise OK pages.
+			await _waitForReady(tab.id, 60000);
 
 			// Tab may have been closed by Chrome (e.g. PDF download triggered by URL).
 			let title = "";
@@ -686,12 +689,13 @@ Zotero.AgentAPI = new function() {
 				return;
 			}
 
-			// Some publishers (AIP, APS) show a transient "请稍候…" / "Just a moment"
-			// title during a JS redirect, then update it once the final page loads.
-			// _waitForReady already waits for page stability, but title may lag behind
-			// the URL change. If anti-bot pattern matches, wait up to 2×2s for title to
-			// update before concluding it is a genuine challenge page.
-			const MAX_TITLE_RETRIES = 2;
+			// Some publishers (AIP, APS, Cloudflare auto-challenge) show a transient
+			// "请稍候…" / "Just a moment" title during a JS redirect or challenge,
+			// then update it once the final page loads. _waitForReady already waits
+			// for page stability, but title may lag behind. If anti-bot pattern
+			// matches, wait up to 5×2s = 10s for the title to update before
+			// concluding it is a genuine challenge page requiring human action.
+			const MAX_TITLE_RETRIES = 5;
 			const TITLE_RETRY_DELAY_MS = 2000;
 			for (let i = 0; i < MAX_TITLE_RETRIES && ANTI_BOT_PATTERNS.some(p => title.toLowerCase().includes(p)); i++) {
 				await new Promise(r => setTimeout(r, TITLE_RETRY_DELAY_MS));
@@ -724,12 +728,38 @@ Zotero.AgentAPI = new function() {
 			});
 		}
 		catch (err) {
+			// _waitForReady or similar threw. Before reporting a generic error,
+			// peek at the tab one more time: if the title matches an anti-bot
+			// pattern, this is almost certainly a genuine challenge page that
+			// failed to stabilize in time — report it as anti_bot_detected and
+			// promote the tab so the user can complete verification. Otherwise
+			// propagate as error (the python side will treat it as a real
+			// failure, not as accessible).
+			let recoveredStatus = null;
+			let recoveredTitle = "";
+			let recoveredFinalUrl = url;
+			if (tabId !== null) {
+				try {
+					const t = await browser.tabs.get(tabId);
+					recoveredTitle = t.title || "";
+					recoveredFinalUrl = t.url || url;
+					if (ANTI_BOT_PATTERNS.some(p => recoveredTitle.toLowerCase().includes(p))) {
+						recoveredStatus = "anti_bot_detected";
+						try { await browser.tabs.update(tabId, { active: true }); } catch (_) {}
+						tabId = null; // keep tab open — user needs it to complete verification
+					}
+				} catch (_) {
+					// tab already closed, nothing to recover
+				}
+			}
 			await _postResult({
 				request_id,
 				action: "preflight",
-				status: "error",
+				status: recoveredStatus || "error",
 				url,
-				error: err.message || String(err),
+				final_url: recoveredFinalUrl,
+				title: recoveredTitle,
+				error: recoveredStatus ? null : (err.message || String(err)),
 			});
 		}
 		finally {
