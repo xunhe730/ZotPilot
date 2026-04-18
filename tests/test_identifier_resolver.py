@@ -66,6 +66,23 @@ class TestIdentifierDetection:
         assert meta.doi is not None
         resolver._crossref.get_by_doi.assert_called_once()
 
+    @pytest.mark.parametrize("doi", [
+        # Elsevier journals routinely embed `.` in the suffix — `j.<journal>.<year>.<id>`
+        "10.1016/j.jcp.2022.111902",
+        "10.1016/j.apm.2023.07.011",
+        # IEEE journals use `.` as section separators in the suffix
+        "10.1109/jas.2023.123537",
+        # Springer / Nature — no dots (baseline)
+        "10.1038/s43017-023-00450-9",
+        "10.1007/s10444-023-10065-9",
+    ])
+    def test_doi_suffix_with_dots_accepted(self, doi):
+        """Regression: _DOI_RE must accept `.` in suffix (Elsevier/IEEE DOI style)."""
+        resolver = self._resolver_with_mock_crossref()
+        resolver.resolve(doi)
+        args = resolver._crossref.get_by_doi.call_args[0][0]
+        assert args == doi
+
     def test_doi_org_url(self):
         resolver = self._resolver_with_mock_crossref()
         resolver.resolve("https://doi.org/10.1038/test")

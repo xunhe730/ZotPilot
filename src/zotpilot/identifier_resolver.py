@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
 _ARXIV_OLD_RE = re.compile(r"^[a-z-]+/\d{7}(v\d+)?$")
-_DOI_RE = re.compile(r"^10\.\d{4,}/[^\s\)\"\',;\.\?]+$")
+_DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
 _S2_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -136,6 +136,7 @@ class IdentifierResolver:
                 "https://export.arxiv.org/api/query",
                 params={"id_list": clean_id, "max_results": 1},
                 timeout=15.0,
+                follow_redirects=True,
             )
             resp.raise_for_status()
         except httpx.TimeoutException:
@@ -176,7 +177,7 @@ class IdentifierResolver:
                 doi=doi,
                 title=title,
                 item_type="preprint",
-                oa_url=f"https://arxiv.org/pdf/{clean_id}",
+                oa_url=f"https://arxiv.org/pdf/{clean_id}.pdf",
                 arxiv_id=clean_id,
                 authors=authors,
                 year=year,
