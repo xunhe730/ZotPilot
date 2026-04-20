@@ -1,15 +1,8 @@
 ---
 name: zotpilot
-description: >-
-  Use when user mentions Zotero, academic papers, citations,
-  literature reviews, research libraries, or wants to search/organize their
-  paper collection. Also triggers on "find papers about...", "what's in my
-  library", "organize my papers", "who cites...", "tag these papers".
-  Always use this skill for Zotero-related tasks.
+description: "Searches a local Zotero library with semantic and boolean retrieval, indexes PDFs for full-text search, manages tags and collections, performs citation network lookups, and ingests papers from external academic databases. Use when user mentions Zotero, academic papers, citations, literature reviews, research libraries, or wants to search/organize their paper collection. Also triggers on 'find papers about...', 'what\u2019s in my library', 'organize my papers', 'who cites...', 'tag these papers'."
 license: MIT
-compatibility:
-  - Python 3.10+
-  - Zotero desktop (installed and run at least once)
+compatibility: "Python 3.10+, Zotero desktop (installed and run at least once)"
 ---
 
 # ZotPilot
