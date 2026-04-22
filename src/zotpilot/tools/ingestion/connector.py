@@ -107,8 +107,6 @@ def looks_like_error_page_title(raw_title: str, item_key: str | None) -> bool:
         return True
     if any(title.startswith(pattern) for pattern in ANTI_BOT_TITLE_PATTERNS):
         return True
-    if item_key:
-        return False
     return any(title.endswith(pattern) for pattern in GENERIC_SITE_ONLY_TITLE_PATTERNS)
 
 

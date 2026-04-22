@@ -398,8 +398,11 @@ class TestLooksLikeErrorPageTitle:
         assert looks_like_error_page_title("404 - Not Found", None) is True
         assert looks_like_error_page_title("Access Denied", None) is True
         assert looks_like_error_page_title("", None) is False
-        # With item_key, generic patterns are skipped
+        # item_key no longer bypasses error detection
         assert looks_like_error_page_title("Deep Learning Paper", "KEY1") is False
+        assert looks_like_error_page_title("Just a moment...", "KEY1") is True
+        assert looks_like_error_page_title("404 - Not Found", "KEY1") is True
+        assert looks_like_error_page_title("Cloudflare", "KEY1") is True
 
 
 # ---------------------------------------------------------------------------
