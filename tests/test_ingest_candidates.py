@@ -273,7 +273,7 @@ def test_manual_completion_required_returns_retry_payload(ingest_env, monkeypatc
     assert payload[0]["existing_item_key"] == "KEY-EXISTING"
 
 
-def test_only_one_manual_verification_candidate_runs_per_call(ingest_env, monkeypatch):
+def test_manual_verification_candidates_continue_in_same_call_when_no_manual_stop(ingest_env, monkeypatch):
     monkeypatch.setattr(
         ingestion_tool.connector,
         "check_connector_availability",
@@ -308,9 +308,64 @@ def test_only_one_manual_verification_candidate_runs_per_call(ingest_env, monkey
         ]
     )
 
-    assert seen == ["10.1016/a", "10.1000/c"]
+    assert seen == ["10.1016/a", "10.1016/b", "10.1000/c"]
+    assert result["action_required"] == []
+    assert [row["status"] for row in result["results"]] == [
+        "saved_metadata_only", "saved_metadata_only", "saved_metadata_only",
+    ]
+
+
+def test_manual_completion_stops_only_after_actual_manual_block(ingest_env, monkeypatch):
+    monkeypatch.setattr(
+        ingestion_tool.connector,
+        "check_connector_availability",
+        lambda *args, **kwargs: (True, None, None),
+    )
+    monkeypatch.setattr(
+        ingestion_tool.connector,
+        "run_preflight_check",
+        lambda candidates, *args, **kwargs: (list(candidates), [], None, []),
+    )
+    seen = []
+
+    def _save_single(url, doi, title, **kwargs):
+        seen.append(doi)
+        if doi == "10.1016/b":
+            return {
+                "status": "__manual_completion_required__",
+                "method": "connector",
+                "item_key": "KEY-B",
+                "has_pdf": False,
+                "title": title or "",
+                "resume_action": "reconcile_existing",
+                "timeout_stage": "manual_completion",
+                "action_required": None,
+                "warning": None,
+            }
+        return {
+            "status": "saved_metadata_only",
+            "method": "connector",
+            "item_key": f"KEY-{doi}",
+            "has_pdf": False,
+            "title": title or "",
+            "action_required": None,
+            "warning": None,
+        }
+
+    monkeypatch.setattr(ingestion_tool.connector, "save_single_and_verify", _save_single)
+
+    result = ingestion_tool.ingest_by_identifiers(
+        candidates=[
+            IngestCandidate(doi="10.1016/a", title="A", publisher="Elsevier BV", is_oa_published=False),
+            IngestCandidate(doi="10.1016/b", title="B", publisher="Elsevier BV", is_oa_published=False),
+            IngestCandidate(doi="10.1000/c", title="C", is_oa_published=True),
+        ]
+    )
+
+    assert seen == ["10.1016/a", "10.1016/b"]
+    assert [row["status"] for row in result["results"]] == ["saved_metadata_only"]
     assert result["action_required"][0]["type"] == "manual_completion_required"
-    assert [row["candidate_index"] for row in result["action_required"][0]["retry_payload"]] == [1]
+    assert [row["candidate_index"] for row in result["action_required"][0]["retry_payload"]] == [1, 2]
 
 
 def test_candidate_accepts_minimal_doi():

@@ -790,8 +790,7 @@ def ingest_by_identifiers(
         c for c in candidates_internal
         if not c.get("status") and _classify_execution_group(c) == "normal"
     ]
-    manual_deferred = manual_candidates[1:] if manual_candidates else []
-    execution_plan = (manual_candidates[:1] if manual_candidates else []) + access_candidates + normal_candidates
+    execution_plan = manual_candidates + access_candidates + normal_candidates
 
     # Step 5: Sequential save + verify
     results: list[dict] = []
@@ -838,7 +837,7 @@ def ingest_by_identifiers(
             pending_candidate = dict(candidate)
             pending_candidate["existing_item_key"] = existing_item_key
             pending_candidate["item_key"] = existing_item_key
-            deferred = manual_deferred + execution_plan[position + 1:]
+            deferred = execution_plan[position + 1:]
             retry_payload = sorted(
                 [
                     _candidate_retry_payload(
@@ -896,37 +895,6 @@ def ingest_by_identifiers(
 
     if manual_completion is not None:
         action_required.append(manual_completion)
-    elif manual_deferred:
-        retry_payload = sorted(
-            [
-                _candidate_retry_payload(
-                    c,
-                    resume_action=c.get("resume_action"),
-                    existing_item_key=c.get("existing_item_key"),
-                )
-                for c in manual_deferred
-            ],
-            key=lambda row: row.get("candidate_index", 0),
-        )
-        completed_count = sum(
-            1 for row in results if row["status"] in {"saved_with_pdf", "saved_metadata_only", "duplicate"}
-        )
-        completed_indexes = sorted(
-            row["candidate_index"] for row in results if row.get("candidate_index") is not None
-        )
-        action_required.append(
-            _build_manual_completion_action(
-                pending_candidate=manual_deferred[0],
-                current_result={"resume_action": "retry_save", "timeout_stage": "manual_queue", "item_key": None},
-                retry_payload=retry_payload,
-                completed_count=completed_count,
-                completed_indexes=completed_indexes,
-                message=(
-                    "为控制单次入库时长，本轮只处理了一个需要人工确认的出版社条目。"
-                    "如需继续后续高风险条目，请回复 Y；不要整批重试。"
-                ),
-            )
-        )
 
     return {
         "total": total_inputs,

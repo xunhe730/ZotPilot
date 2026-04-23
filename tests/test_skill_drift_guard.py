@@ -210,6 +210,9 @@ def test_phase3_prompt_is_gated_on_empty_action_required() -> None:
     assert "Do NOT ask about Phase 3 yet" in skill_text
     assert "Only when `action_required` is empty" in skill_text
     assert "A bare `Y` after that message must resume the pending Phase 2 retry only." in skill_text
+    assert "Never combine the Phase 2 retry/remediation gate and the Phase 3 `Y/N` gate in the same message." in skill_text
+    assert "Bad example (forbidden)" in skill_text
+    assert "Step 4b is a one-time batch gate for the selected Elsevier-like items, not a default per-paper stop." in skill_text
 
 
 # ---------------------------------------------------------------------------

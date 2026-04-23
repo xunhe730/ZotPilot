@@ -80,17 +80,18 @@ description: >
 
    If **any** selected candidate matches, you MUST show this block BEFORE calling `ingest_by_identifiers` and wait for a `Y` reply. Never call ingest in the same turn:
 
-   > ⚠️ 以下论文来自需要用户在 Zotero 点击确认的出版社（如 Elsevier / ScienceDirect）。入库过程中 Zotero Desktop 会弹出 translator 对话框，**请保持 Zotero 在前台，看到弹窗后立刻点击 "Continue"（或"确定"）**：
+   > ⚠️ 以下论文来自经常需要用户手动完成验证的出版社（如 Elsevier / ScienceDirect）。入库过程中可能出现 publisher 页面的 anti-bot / 登录验证，或 Zotero Desktop 的 translator 确认步骤。**请保持 Zotero 与浏览器在前台，并按页面或 Zotero 的实际提示立即完成验证**：
    >
    > - {title} ({publisher or "Elsevier"})
    > - …
    >
-   > 如果不及时点击，translator 会超时，且 **切勿重复触发入库**——会在库里留下重复的 item。确认你已经准备好后回复 **Y**。
+   > 如果没有及时完成这些验证步骤，本次入库可能超时；且 **切勿重复触发入库**——会在库里留下重复的 item。确认你已经准备好后回复 **Y**。
 
    Gate semantics:
    - A `Y` reply to **step 4b** only authorizes continuing **Phase 2 ingestion**.
    - It MUST trigger step 5 (`ingest_by_identifiers`) next.
    - It MUST NOT be interpreted as approval for Phase 3 post-processing.
+   - Step 4b is a one-time batch gate for the selected Elsevier-like items, not a default per-paper stop. After step 4b has been satisfied, continue the selected manual-verification candidates in the same ingest batch unless the tool actually returns `manual_completion_required`, `anti_bot_detected`, or `preflight_blocked`.
 
    - Only list matching candidates in the bullet list.
    - If none of the selected candidates matches — skip this step entirely.
@@ -111,6 +112,7 @@ description: >
    - Do not treat a bare `Y` from any of those prompts as consent for Phase 3.
    - Phase 3 may start only after step 7's ingest-results prompt is shown and the user replies `Y` to that specific prompt.
    - If any `action_required` entry is present after ingest, you MAY still show step 7's results table for visibility, but you MUST pair it with the retry / remediation instruction for that action and then STOP. In that case, do NOT ask the Phase 3 question yet.
+   - **Never combine the Phase 2 retry/remediation gate and the Phase 3 `Y/N` gate in the same message.** The user must never see one prompt where `Y` could mean either "retry blocked ingest" or "enter Phase 3".
 
    **Preflight Blocking** — when `action_required` contains `"preflight_blocked"`:
    - Preflight detected a real problem (anti-bot, subscription wall, or timeout) before save. **Preflight does NOT auto-open browser tabs — the user must open the URLs themselves.** Never tell the user that a tab was auto-opened.
@@ -145,6 +147,11 @@ description: >
    - For `blocked` / `failed` rows, append `(reason: <error or error_code>)` to 标题.
    - Items are already in the `INBOX` collection at this point (routed at save time).
    - If `action_required` is non-empty, show the table first, then show the blocking / retry instruction (for example, manual browser verification + "完成后回复 Y，我将重新调用 ingest_by_identifiers"), and **STOP there**. Do NOT ask about Phase 3 yet. A bare `Y` after that message must resume the pending Phase 2 retry only.
+   - When `action_required` is non-empty, the prompt must be single-purpose. Good example:
+
+   > 还有 {n} 篇论文卡在 Phase 2（入库重试）。请先完成上面的浏览器验证；完成后回复 **Y**，我只会重试这些未完成条目的入库。回复 **N** 则结束本轮，暂不进入 Phase 3。
+
+   - Bad example (forbidden): any prompt like "先处理拦截重试还是直接进入后处理，由你决定" or any combined `Y/N` question that mentions both retrying blocked items and entering Phase 3.
    - Only when `action_required` is empty, **STOP here** and ask:
 
    > 入库完成（已归档到 INBOX 集合）。是否继续进入 Phase 3 后处理（标签 + 分类 + 索引）？(Y/N)
