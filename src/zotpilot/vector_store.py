@@ -1,6 +1,10 @@
 """ChromaDB vector storage with chunk management."""
 import logging
 import re
+import shutil
+import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +18,45 @@ if TYPE_CHECKING:
     from .models import ExtractedTable
 
 logger = logging.getLogger(__name__)
+
+
+def _probe_chroma_db_access(db_path: Path) -> bool:
+    """Probe whether an existing Chroma index can be opened safely.
+
+    Run the probe in a subprocess so Rust-side segfaults do not take down the
+    caller. Returns False on any crash or non-zero exit.
+    """
+    if not db_path.exists():
+        return True
+    if not any(db_path.iterdir()):
+        return True
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import chromadb; "
+                "from chromadb.config import Settings; "
+                f"c=chromadb.PersistentClient(path={str(db_path)!r}, settings=Settings(anonymized_telemetry=False)); "
+                "col=c.get_or_create_collection(name='chunks', metadata={'hnsw:space':'cosine'}); "
+                "col.peek(limit=1)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return probe.returncode == 0
+
+
+def _quarantine_chroma_db(db_path: Path) -> Path | None:
+    """Move a broken Chroma directory aside and return the backup path."""
+    if not db_path.exists():
+        return None
+    suffix = time.strftime("%Y%m%d-%H%M%S")
+    backup = db_path.with_name(f"{db_path.name}.corrupt-{suffix}")
+    shutil.move(str(db_path), str(backup))
+    return backup
 
 
 def _ref_chunk_index(ref_map: dict, element_type: str, item) -> int:
@@ -43,6 +86,13 @@ class VectorStore:
 
     def __init__(self, db_path: Path, embedder: EmbedderProtocol):
         self.db_path = Path(db_path)
+        if not _probe_chroma_db_access(self.db_path):
+            backup = _quarantine_chroma_db(self.db_path)
+            logger.warning(
+                "Chroma index at %s could not be opened safely; moved aside to %s and rebuilding a fresh index.",
+                self.db_path,
+                backup,
+            )
         self.db_path.mkdir(parents=True, exist_ok=True)
 
         # Query embedding cache (FIFO eviction at maxsize)
@@ -60,10 +110,12 @@ class VectorStore:
         # Check if collection exists and has data
         try:
             existing = self.client.get_collection("chunks")
-            existing_count = existing.count()
-            if existing_count > 0 and embedder_dims is not None:
-                # Check stored dimension in metadata
-                stored_dims = existing.metadata.get("embedding_dimensions")
+            # Do not call collection.count() during startup. In the current
+            # Chroma/Rust stack that path can segfault on some existing local
+            # indexes; reading collection metadata is enough to validate the
+            # embedder dimension contract.
+            if embedder_dims is not None:
+                stored_dims = (existing.metadata or {}).get("embedding_dimensions")
                 if stored_dims is not None and stored_dims != embedder_dims:
                     raise EmbeddingDimensionMismatchError(
                         f"Embedding dimension mismatch: index has {stored_dims} dimensions "
@@ -390,7 +442,8 @@ class VectorStore:
 
     def count(self) -> int:
         """Return total number of chunks."""
-        return self.collection.count()
+        results = self.collection.get(include=[])  # IDs only, avoids Rust count() path
+        return len(results.get("ids") or [])
 
     def count_chunks_for_doc_ids(self, doc_ids: set[str]) -> int:
         """Count chunks belonging to the provided logical document IDs."""

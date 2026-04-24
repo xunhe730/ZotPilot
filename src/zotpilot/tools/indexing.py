@@ -181,9 +181,9 @@ def index_library(
     batch_size: Annotated[
         int,
         Field(
-            description="Items per batch (default 20). Set 0 for all at once. "  # noqa: E501
+            description="Items per batch (default 2). Set 0 for all at once. "  # noqa: E501
         ),
-    ] = 20,  # noqa: E501
+    ] = 2,  # noqa: E501
     max_pages: Annotated[
         int | None, Field(description="Skip PDFs over N pages. None uses config default (40). 0=no limit.")
     ] = None,  # noqa: E501

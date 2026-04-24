@@ -177,6 +177,41 @@ Environment variables remain supported as temporary overrides. Prefer \
 
 mcp = FastMCP("zotpilot", instructions=_MCP_INSTRUCTIONS)
 
+_fastmcp_tool = mcp.tool
+
+
+def _callable_tool(*args, **kwargs):
+    """Register a FastMCP tool while preserving the plain callable export.
+
+    Some FastMCP versions return a FunctionTool from the decorator. ZotPilot's
+    tests and internal helpers import tool functions directly, so keep the
+    module-level symbol callable after registration.
+    """
+    registered = _fastmcp_tool(*args, **kwargs)
+    if callable(registered) and not hasattr(registered, "fn"):
+        return registered
+    if hasattr(registered, "fn"):
+        return registered.fn
+
+    def decorator(fn):
+        tool = registered(fn)
+        return getattr(tool, "fn", fn)
+
+    return decorator
+
+
+mcp.tool = _callable_tool  # type: ignore[method-assign]
+
+if not hasattr(mcp, "list_tools"):
+
+    async def _list_tools(*, run_middleware: bool = True):
+        tools = mcp.get_tools()
+        if hasattr(tools, "__await__"):
+            tools = await tools
+        return list(tools.values())
+
+    mcp.list_tools = _list_tools  # type: ignore[attr-defined]
+
 # Lazy initialization with thread safety
 _init_lock = threading.Lock()
 _index_lock = threading.Lock()

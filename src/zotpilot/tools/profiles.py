@@ -50,13 +50,23 @@ def apply_tool_profile() -> str:
     profile = get_tool_profile_name()
     visible_tags = PROFILE_VISIBLE_TAGS.get(profile)
     if visible_tags is not None:
-        mcp.enable(tags=visible_tags, components={"tool"}, only=True)
+        enable = getattr(mcp, "enable", None)
+        if enable is not None:
+            enable(tags=visible_tags, components={"tool"}, only=True)
 
     disabled_tools = parse_disabled_tools()
     if profile == "core":
         disabled_tools.add("profile_library")
 
     if disabled_tools:
-        mcp.disable(names=disabled_tools, components={"tool"})
+        disable = getattr(mcp, "disable", None)
+        if disable is not None:
+            disable(names=disabled_tools, components={"tool"})
+        else:
+            for name in disabled_tools:
+                try:
+                    mcp.remove_tool(name)
+                except Exception:
+                    pass
 
     return profile

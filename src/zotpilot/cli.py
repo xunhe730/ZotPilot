@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 from ._platforms import (
@@ -404,12 +403,6 @@ def cmd_index(args):
         for doc in result["long_documents"]:
             print(f"  {doc['item_key']}: {doc['title']} ({doc['pages']} pages)")
         print("\nTo index these, re-run with: zotpilot index --max-pages 0")
-
-    if result["indexed"] > 0:
-        logging.getLogger(__name__).info(
-            "Waiting 60s for ChromaDB compaction to persist HNSW index to disk..."
-        )
-        time.sleep(60)
 
     return 1 if result["failed"] > 0 and result["indexed"] == 0 else 0
 
@@ -1155,8 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("--max-pages", type=int, default=None,
         help="Skip PDFs longer than N pages (default: 40, 0=no limit)")
     sub_index.add_argument("--no-vision", action="store_true", help="Disable vision extraction")
-    sub_index.add_argument("--batch-size", type=int, default=0,
-        help="Process N items per call (default: 0 = all at once)")
+    sub_index.add_argument("--batch-size", type=int, default=2,
+        help="Process N items per call (default: 2, 0 = all at once)")
     sub_index.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)

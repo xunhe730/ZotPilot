@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from zotpilot.cli import cmd_register, cmd_setup, cmd_sync, cmd_update
+from zotpilot.cli import cmd_index, cmd_register, cmd_setup, cmd_sync, cmd_update
 from zotpilot.runtime_settings import resolve_runtime_settings
 
 
@@ -148,8 +148,106 @@ class TestSetup:
 
         assert rc == 0
         data = json.loads((config_dir / "config.json").read_text())
+        assert data["zotero_data_dir"] == str(zotero_dir)
+        assert data["embedding_provider"] == "local"
         assert data["openalex_email"] is None
         assert data["zotero_user_id"] is None
+
+    def test_non_interactive_setup_requires_zotero_sqlite(self, tmp_path, monkeypatch, capsys):
+        """Non-interactive setup fails when zotero.sqlite is missing."""
+        _use_local_secrets(monkeypatch, tmp_path)
+        fake_dir = tmp_path / "not_zotero"
+        fake_dir.mkdir()
+
+        args = type(
+            "Args",
+            (),
+            {
+                "non_interactive": True,
+                "zotero_dir": str(fake_dir),
+                "provider": "local",
+                "gemini_key": None,
+                "dashscope_key": None,
+            },
+        )()
+        rc = cmd_setup(args)
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "zotero.sqlite not found" in captured.err
+
+    def test_setup_prints_config_path(self, tmp_path, monkeypatch, capsys):
+        """Setup prints the config file path after writing."""
+        _use_local_secrets(monkeypatch, tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        zotero_dir = _make_fake_zotero(tmp_path)
+
+        config_dir = tmp_path / ".config" / "zotpilot"
+        with (
+            patch("zotpilot.config._default_config_dir", return_value=config_dir),
+            patch("zotpilot.config._default_data_dir", return_value=tmp_path / "data"),
+            patch("zotpilot.config._old_config_path", return_value=tmp_path / "old" / "config.json"),
+            patch("zotpilot._platforms.register", return_value={"codex": True}),
+        ):
+            args = type(
+                "Args",
+                (),
+                {
+                    "non_interactive": True,
+                    "zotero_dir": str(zotero_dir),
+                    "provider": "local",
+                    "gemini_key": None,
+                    "dashscope_key": None,
+                },
+            )()
+            cmd_setup(args)
+
+        captured = capsys.readouterr()
+        assert "Config written to:" in captured.out
+
+
+class TestIndexCli:
+    def test_index_cli_defaults_to_batch_size_two(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        config = MagicMock()
+        config.validate.return_value = []
+        config.max_pages = 40
+        config.vision_enabled = False
+
+        indexer = MagicMock()
+        indexer.index_all.return_value = {
+            "results": [],
+            "indexed": 0,
+            "already_indexed": 0,
+            "skipped": 0,
+            "failed": 0,
+            "empty": 0,
+        }
+
+        args = type(
+            "Args",
+            (),
+            {
+                "config": None,
+                "verbose": False,
+                "no_vision": False,
+                "max_pages": None,
+                "batch_size": 2,
+                "force": False,
+                "limit": None,
+                "item_key": None,
+                "title": None,
+            },
+        )()
+
+        with (
+            patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+            patch("zotpilot.indexer.Indexer", return_value=indexer),
+        ):
+            rc = cmd_index(args)
+
+        assert rc == 0
+        assert indexer.index_all.call_args.kwargs["batch_size"] == 2
 
 
 class TestRegister:

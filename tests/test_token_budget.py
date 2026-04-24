@@ -447,6 +447,7 @@ class TestContextAndIndexingContracts:
 
         assert mock_indexer.index_all.call_args.kwargs["item_keys"] == ["KBQCDWBE", "54ZZF3LP"]
 
+
     def test_index_library_exposes_vision_budget_summary_when_requested(self):
         from zotpilot.tools.indexing import index_library
 

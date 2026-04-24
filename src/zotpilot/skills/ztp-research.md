@@ -209,8 +209,10 @@ Post-processing is a **plan-then-execute** flow: gather context, draft ONE unifi
 12. **Transient error handling**: if a batch call fails with an SSL / network error, retry the **same** batch call once. Do NOT fragment into per-paper calls unless the batch fails twice — fragmentation multiplies permission prompts.
 
 13. **Index update and verify**:
-    - `index_library(item_keys=[newly_ingested_keys])`
-    - `get_index_stats` + `search_topic` to confirm new papers are searchable
+    - `index_library(item_keys=[newly_ingested_keys], batch_size=2)` and repeat while `has_more=true`
+    - Only after the final successful batch, use `get_index_stats` + `search_topic` to confirm new papers are searchable
+    - If an `index_library` call times out, do NOT immediately resubmit the full set
+    - If a follow-up indexing call returns `Indexing in progress, please wait.`, treat that as evidence the previous indexing run is still active, stop immediately, and do NOT call `get_index_stats` in the same turn
 
 ## Phase 4 — Final Report
 

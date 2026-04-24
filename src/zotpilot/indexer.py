@@ -397,6 +397,7 @@ class Indexer:
 
             elapsed = time.perf_counter() - t0
             extraction_times.append(elapsed)
+            logger.info("Extraction timing [%s]: total=%.1fs", item.item_key, elapsed)
 
             if i % log_interval == 0 or i == total_to_extract:
                 avg_time = sum(extraction_times) / len(extraction_times)
@@ -661,11 +662,13 @@ class Indexer:
             return 0, 0, f"{len(extraction.pages)} pages but no text", extraction.stats, quality_grade
 
         # Chunk using the new interface
+        chunk_started = time.perf_counter()
         chunks = self.chunker.chunk(
             extraction.full_markdown,
             extraction.pages,
             extraction.sections,
         )
+        chunk_elapsed = time.perf_counter() - chunk_started
         if not chunks:
             return 0, 0, f"{len(extraction.pages)} pages, {total_chars} chars but no chunks created", extraction.stats, quality_grade  # noqa: E501
         logger.debug(f"  Created {len(chunks)} chunks")
@@ -687,11 +690,20 @@ class Indexer:
             "pdf_hash": self._pdf_hash(item.pdf_path),
             "quality_grade": quality_grade,
         }
+        store_started = time.perf_counter()
         self.store.add_chunks(item.item_key, doc_meta, chunks)
+        store_elapsed = time.perf_counter() - store_started
 
         # Mark committed after text-chunk persistence
         if journal is not None:
             mark_committed(journal, item_key)
+        logger.info(
+            "Index timings [%s]: chunk=%.1fs store=%.1fs chunks=%d",
+            item_key,
+            chunk_elapsed,
+            store_elapsed,
+            len(chunks),
+        )
 
         # Build reference map for table/figure placement
         from .pdf.reference_matcher import match_references

@@ -1,5 +1,7 @@
 """Tests for ChromaDB vector store."""
 
+from unittest.mock import patch
+
 import pytest
 
 from zotpilot.vector_store import VectorStore
@@ -69,3 +71,17 @@ class TestVectorStore:
     def test_empty_store_search(self, store):
         results = store.search("anything", top_k=5)
         assert results == []
+
+    def test_corrupt_db_is_quarantined_when_probe_fails(self, tmp_path, mock_embedder):
+        db_path = tmp_path / "chroma"
+        db_path.mkdir()
+        (db_path / "chroma.sqlite3").write_text("broken")
+
+        with (
+            patch("zotpilot.vector_store._probe_chroma_db_access", return_value=False),
+        ):
+            store = VectorStore(db_path, mock_embedder)
+
+        backups = list(tmp_path.glob("chroma.corrupt-*"))
+        assert len(backups) == 1
+        assert store.db_path.exists()
