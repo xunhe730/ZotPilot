@@ -83,7 +83,7 @@ class Config:
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
-        """Load shared non-sensitive config from disk."""
+        """Load shared config from disk."""
         if path is not None:
             config_path = Path(path).expanduser()
         else:
@@ -123,8 +123,8 @@ class Config:
             embedding_dimensions=data.get("embedding_dimensions", default_dims),
             chunk_size=data.get("chunk_size", 400),
             chunk_overlap=data.get("chunk_overlap", 100),
-            gemini_api_key=None,
-            dashscope_api_key=None,
+            gemini_api_key=data.get("gemini_api_key"),
+            dashscope_api_key=data.get("dashscope_api_key"),
             embedding_provider=data.get("embedding_provider", "gemini"),
             embedding_timeout=data.get("embedding_timeout", 120.0),
             embedding_max_retries=data.get("embedding_max_retries", 3),
@@ -139,15 +139,15 @@ class Config:
             openalex_email=data.get("openalex_email"),
             vision_enabled=data.get("vision_enabled", True),
             vision_model=data.get("vision_model", "claude-haiku-4-5-20251001"),
-            anthropic_api_key=None,
+            anthropic_api_key=data.get("anthropic_api_key"),
             vision_max_tables_per_run=data.get("vision_max_tables_per_run"),
             vision_max_cost_usd=data.get("vision_max_cost_usd"),
             max_pages=data.get("max_pages", 40),
             preflight_enabled=data.get("preflight_enabled", True),
-            zotero_api_key=None,
+            zotero_api_key=data.get("zotero_api_key"),
             zotero_user_id=data.get("zotero_user_id"),
             zotero_library_type=data.get("zotero_library_type", "user"),
-            semantic_scholar_api_key=None,
+            semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -181,18 +181,19 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
-            # SECURITY: API keys are deliberately excluded from persisted config.
-            # Secrets are resolved at runtime from ZotPilot's secure store or
-            # explicit environment overrides, never written to shared config.
+            "gemini_api_key": self.gemini_api_key,
+            "dashscope_api_key": self.dashscope_api_key,
+            "anthropic_api_key": self.anthropic_api_key,
             "vision_max_tables_per_run": self.vision_max_tables_per_run,
             "vision_max_cost_usd": self.vision_max_cost_usd,
             "max_pages": self.max_pages,
             "preflight_enabled": self.preflight_enabled,
-            # "zotero_api_key": self.zotero_api_key,  # SECURITY: excluded from disk
+            "zotero_api_key": self.zotero_api_key,
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
-            # "semantic_scholar_api_key": self.semantic_scholar_api_key,  # SECURITY: excluded
+            "semantic_scholar_api_key": self.semantic_scholar_api_key,
         }
+        data = {key: value for key, value in data.items() if value is not None}
 
         # Atomic write: temp file + rename
         tmp_path = None

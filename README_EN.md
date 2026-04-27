@@ -52,7 +52,7 @@ Then tell your agent "search my library for X" or "survey recent papers on Y". I
 
 **Prerequisites**: [Zotero 8](https://www.zotero.org/download/) installed and launched at least once · Python 3.10+ · a supported AI agent client (Claude Code / Codex / OpenCode). The ingestion workflow also needs the [Connector browser extension](#install-details).
 
-Current Codex builds prefer `~/.agents/skills` for user-installed skills, while still keeping the old `$CODEX_HOME/skills` location for backward compatibility. When `CODEX_HOME` is unset, that legacy path is usually `~/.codex/skills`.
+ZotPilot deploys Codex packaged skills to `~/.agents/skills`. The old `$CODEX_HOME/skills` location, usually `~/.codex/skills` when `CODEX_HOME` is unset, is only a Codex compatibility path and is not ZotPilot's deployment target.
 
 ---
 
@@ -73,7 +73,7 @@ ZotPilot has three parts:
 | `ztp-research` | Local library + OpenAlex search → candidate confirmation → Connector ingest → auto tag & collection → per-paper report |
 | `ztp-review` | Review, cluster, compare, and draft from papers already in your library |
 | `ztp-profile` | Profile your library structure: topics, venue tiers, time span, tag usage |
-| `ztp-setup` | Guides the agent to call `zotpilot setup` / `register` / `doctor` for install, upgrade, and troubleshooting. It is not a CLI command |
+| `ztp-setup` | Guides the agent to call `zotpilot setup` / `upgrade` / `doctor` for installation, updates, and troubleshooting. It is not a CLI command |
 
 ### Five core capabilities
 
@@ -128,17 +128,19 @@ zotpilot setup --non-interactive --provider gemini   # or dashscope / local
 
 There are two layers:
 
-- `zotpilot setup` writes shared local config to `~/.config/zotpilot/config.json`
-- `zotpilot config set` manages both shared config and secure credentials
-- `zotpilot register` only attaches ZotPilot MCP to detected AI clients
-- secrets are never written to `config.json` or embedded in client config
+- `zotpilot setup` writes shared local config to `~/.config/zotpilot/config.json` on macOS / Linux, or `%APPDATA%\zotpilot\config.json` on Windows, and automatically deploys skills / registers MCP
+- `zotpilot config set` manages shared config; API keys are stored in the same `config.json`
+- `zotpilot upgrade` upgrades the CLI and refreshes packaged skills / MCP runtime
+- API keys are not embedded in Claude / Codex / OpenCode client config
 
-Sensitive credentials are stored in ZotPilot's own secure store by default (macOS Keychain; explicit local-file fallback when needed). Environment variables remain available as temporary overrides:
+Environment variables remain available as temporary overrides and take precedence over `config.json`:
 
 ```bash
 export GEMINI_API_KEY=<your-key>           # or DASHSCOPE_API_KEY
 export ANTHROPIC_API_KEY=<your-key>        # optional: complex-table vision extraction
 ```
+
+`config.json` may contain API keys. Do not commit it, paste it publicly, or sync it to untrusted locations. On shared machines, prefer interactive `zotpilot setup` so keys are not left in shell history.
 
 Recommended order:
 
@@ -154,7 +156,7 @@ To change configuration later:
 zotpilot config set gemini_api_key <key>
 zotpilot config set zotero_user_id <id>
 zotpilot config set zotero_api_key <key>
-zotpilot register
+zotpilot setup
 ```
 
 Optional: `openalex_email` is not a secret. It is just a contact email for OpenAlex polite-pool access. With it, OpenAlex-backed search / citation tools can usually run at about 10 req/s instead of 1 req/s:
@@ -199,14 +201,14 @@ Search and citation lookup work without credentials. Write operations need a Zot
 ```bash
 zotpilot config set zotero_user_id 12345678
 zotpilot config set zotero_api_key YOUR_KEY
-zotpilot register
+zotpilot setup
 zotpilot doctor
 ```
 
 To migrate legacy client-embedded secrets:
 
 ```bash
-zotpilot config migrate-secrets
+zotpilot config migrate-secrets --to-config
 ```
 
 </details>
@@ -219,7 +221,7 @@ zotpilot doctor
 zotpilot status
 ```
 
-MCP tools missing? Run `zotpilot register` again and restart the agent.
+MCP tools or skills missing? Run `zotpilot setup` again and restart the agent. Advanced users can run `zotpilot install` to refresh only agent integration.
 
 </details>
 
@@ -343,12 +345,17 @@ Upgrades the active ZotPilot CLI, refreshes skill files, and reconciles MCP runt
 <details>
 <summary><b>Common update commands</b></summary>
 
-| Flag | Purpose |
+| Command / flag | Purpose |
 |------|---------|
+| `upgrade` or `update` (no flags) | Upgrade the CLI, refresh skills, and reconcile runtime state |
 | `--check` | Check only (always exit 0) |
-| `upgrade` (no flags) | Upgrade the CLI, refresh skills, and reconcile runtime state |
+| `--dry-run` | Preview runtime drift and update actions |
+| `--cli-only` | Upgrade only the CLI package |
+| `--skill-only` | Refresh only skills and runtime registration |
+| `--re-register` | Force client registration refresh even if no drift is detected |
+| `--migrate-secrets` | Migrate legacy client-embedded secrets before reconciling runtime |
 
-> In dev mode (`zotpilot register --dev`), `upgrade` reminds you to `git pull` for source updates but still reconciles runtime state.
+> In editable/dev installs, `upgrade` reminds you to `git pull` for source updates but still reconciles runtime state.
 
 </details>
 
@@ -420,9 +427,9 @@ Yes. Pick `--provider local`, skip write-operation keys, and search / browse / i
 
 | Symptom | Fix |
 |---------|-----|
-| Skills not showing up | `zotpilot register`, then restart the agent |
+| Skills not showing up | `zotpilot setup`, then restart the agent |
 | `zotpilot: command not found` | Install first: `pip install zotpilot` |
-| MCP tools missing | `zotpilot register`, then restart the agent |
+| MCP tools missing | `zotpilot setup`, then restart the agent |
 | Search returns empty | Run `zotpilot index` first |
 | `GEMINI_API_KEY not set` | `export GEMINI_API_KEY=<key>` or switch to `setup --provider local` |
 | Unsure what failed | `zotpilot doctor` |
@@ -439,7 +446,7 @@ git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
 pip install -e ".[dev]"
 
-zotpilot register --dev
+zotpilot setup
 python -m pytest
 python -m ruff check src/ tests/
 ```

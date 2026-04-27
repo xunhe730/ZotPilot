@@ -1,12 +1,12 @@
 ---
 name: ztp-setup
 description: >
-  Use for installing, configuring, or repairing ZotPilot.
+  Use for setting up, updating, or repairing ZotPilot.
   Trigger on: "安装ZotPilot", "配置嵌入模型", "注册MCP", "ZotPilot无法启动", "升级ZotPilot",
   "install zotpilot", "setup zotpilot", "configure embedding provider",
   "register MCP", "zotpilot not found", "zotpilot doctor", "update zotpilot", "zotpilot upgrade",
   or when the user is setting up for the first time, after an upgrade, or when commands are broken.
-  Covers: install → provider selection → API key setup → MCP registration → initial index → health check.
+  Covers: setup → provider selection → API key config → MCP/skill registration → initial index → health check, plus upgrade.
 ---
 # Setup Workflow
 
@@ -18,12 +18,12 @@ description: >
    - **gemini**: Requires Google API key. Paid, but provides high-quality embeddings.
    - **dashscope**: Aliyun service. Preferred for Chinese users.
    - **local**: No API key required, completely private, but indexing runs slowly.
-   - **none**: Disables vector indexing. Only metadata/SQL search remains available.
-5. **API Key Setup**: Prefer `zotpilot setup` or `zotpilot config set gemini_api_key KEY` / `zotpilot config set zotero_api_key KEY` over passing keys to `register`.
-6. Configure: `zotpilot setup --non-interactive --provider [selected_provider]`
-7. Register MCP: `zotpilot register`
+   - **none**: Not accepted by `zotpilot setup --provider`; use `zotpilot config set embedding_provider none` only when intentionally disabling vector indexing.
+5. **API Key Setup**: Prefer interactive `zotpilot setup` on shared machines. API keys are stored in `~/.config/zotpilot/config.json`; do not paste or commit that file.
+6. Configure: `zotpilot setup --non-interactive --provider [gemini|dashscope|local]`
+7. MCP registration and skill deployment are included in `zotpilot setup`. Advanced repair only: `zotpilot install` (alias: `zotpilot register`).
 8. Initial Index: `zotpilot index --limit 20` (first-time quick index)
 9. Verify health: `zotpilot doctor`
 
 ## Troubleshooting
-- If Zotero is not natively detected at standard paths during setup or registration, instruct the user to explicitly define it via the flag: `--zotero-dir /path/to/zotero/data`
+- If Zotero is not natively detected at standard paths during setup, instruct the user to explicitly define it via the flag: `--zotero-dir /path/to/zotero/data`

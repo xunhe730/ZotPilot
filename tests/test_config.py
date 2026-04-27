@@ -62,7 +62,7 @@ class TestConfigLoadFromFile:
 
 
 class TestRuntimeResolution:
-    def test_runtime_uses_secure_store_for_secrets(self, tmp_path, monkeypatch):
+    def test_runtime_uses_legacy_secret_backend_fallback(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"zotero_user_id": "11111111"}))
@@ -74,7 +74,18 @@ class TestRuntimeResolution:
         assert resolved.config.gemini_api_key == "stored-gemini"
         assert resolved.config.zotero_api_key == "stored-zotero"
         assert resolved.config.zotero_user_id == "11111111"
-        assert resolved.sources["gemini_api_key"] == "local-file"
+        assert resolved.sources["gemini_api_key"] == "legacy-local-file"
+
+    def test_config_secret_overrides_legacy_secret_backend(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"gemini_api_key": "config-gemini"}))
+        set_secret("gemini_api_key", "stored-gemini")
+
+        resolved = resolve_runtime_settings(config_file)
+
+        assert resolved.config.gemini_api_key == "config-gemini"
+        assert resolved.sources["gemini_api_key"] == "config"
 
     def test_env_overrides_secure_store(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -91,7 +102,7 @@ class TestRuntimeResolution:
         assert resolved.sources["gemini_api_key"] == "env-override"
         assert resolved.sources["zotero_user_id"] == "env-override"
 
-    def test_runtime_detects_legacy_config_secrets_without_loading_them_into_shared_config(self, tmp_path, monkeypatch):
+    def test_runtime_loads_config_secrets(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         config_file = tmp_path / "config.json"
         config_file.write_text(json.dumps({"gemini_api_key": "legacy-gemini"}))
@@ -99,12 +110,14 @@ class TestRuntimeResolution:
         cfg = Config.load(path=config_file)
         resolved = resolve_runtime_settings(config_file)
 
-        assert cfg.gemini_api_key is None
+        assert cfg.gemini_api_key == "legacy-gemini"
+        assert resolved.config.gemini_api_key == "legacy-gemini"
+        assert resolved.sources["gemini_api_key"] == "config"
         assert resolved.legacy_sources["gemini_api_key"] == "legacy-gemini"
 
 
 class TestConfigSave:
-    def test_save_does_not_persist_api_keys(self, tmp_path, monkeypatch):
+    def test_save_persists_api_keys(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         cfg = Config.load(path=tmp_path / "nonexistent.json")
         cfg.gemini_api_key = "secret-gemini"
@@ -114,8 +127,8 @@ class TestConfigSave:
         cfg.save(path=save_path)
 
         saved_data = json.loads(save_path.read_text())
-        assert "gemini_api_key" not in saved_data
-        assert "zotero_api_key" not in saved_data
+        assert saved_data["gemini_api_key"] == "secret-gemini"
+        assert saved_data["zotero_api_key"] == "secret-zotero"
         assert saved_data["zotero_user_id"] == "12345"
 
     def test_save_file_permissions(self, tmp_path, monkeypatch):

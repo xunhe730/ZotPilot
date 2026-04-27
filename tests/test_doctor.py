@@ -1,4 +1,4 @@
-"""Tests for ZotPilot doctor checks under the secure-store model."""
+"""Tests for ZotPilot doctor checks under the config-backed key model."""
 
 from __future__ import annotations
 
@@ -74,6 +74,19 @@ class TestCheckSecretBackend:
         assert result.status == "pass"
         assert "local-file" in result.message
 
+    def test_unavailable_backend_is_unused_when_config_has_key(self, monkeypatch):
+        config = MagicMock()
+        config.embedding_provider = "gemini"
+        config.gemini_api_key = "config-gemini"
+
+        with patch("zotpilot.doctor.describe_backend") as mock_backend:
+            mock_backend.return_value.available = False
+            mock_backend.return_value.detail = "No legacy backend configured"
+            result = _check_secret_backend(config, {"gemini_api_key": "config"})
+
+        assert result.status == "pass"
+        assert "unused" in result.message
+
 
 class TestCheckChromaDbIndex:
     @patch("zotpilot.zotero_client.ZoteroClient")
@@ -103,10 +116,10 @@ class TestCheckZoteroWebApi:
     def test_pass_when_both_set(self):
         result = _check_zotero_web_api(
             self._make_config("key123", "456"),
-            {"zotero_api_key": "secure-store", "zotero_user_id": "config"},
+            {"zotero_api_key": "config", "zotero_user_id": "config"},
         )
         assert result.status == "pass"
-        assert "secure-store" in result.message
+        assert "config" in result.message
 
     def test_warn_when_missing(self):
         result = _check_zotero_web_api(self._make_config(None, None), {})
@@ -131,7 +144,10 @@ class TestRunChecks:
     @patch("zotpilot.doctor._check_chromadb_index", return_value=CheckResult("chromadb_index", "pass", "ok"))
     @patch("zotpilot.doctor._check_embedding_api_key", return_value=CheckResult("embedding_api_key", "pass", "ok"))
     @patch("zotpilot.doctor._check_zotero_data", return_value=CheckResult("zotero_data", "pass", "ok"))
-    @patch("zotpilot.doctor._check_secret_backend", return_value=CheckResult("secret_backend", "pass", "local-file"))
+    @patch(
+        "zotpilot.doctor._check_secret_backend",
+        return_value=CheckResult("legacy_secret_backend", "pass", "local-file"),
+    )
     @patch("zotpilot.doctor.resolve_runtime_settings")
     def test_returns_all_checks(self, mock_resolve, *_mocks):
         config_file = Path(tempfile.mkdtemp(prefix="zotpilot-doctor-")) / "config.json"
@@ -140,7 +156,7 @@ class TestRunChecks:
 
         results = run_checks(config_path=str(config_file), full=True)
         names = [r.name for r in results]
-        assert "secret_backend" in names
+        assert "legacy_secret_backend" in names
         assert "write_connectivity" in names
 
 

@@ -169,8 +169,8 @@ filters. The default core profile provides browse/write/indexing tools such as \
 `browse_library`, `manage_tags`, and `index_library`. \
 Use `browse_library(view="feeds")` for RSS feeds. `get_index_stats` also \
 handles unindexed-paper pagination plus optional reranking and vision-cost details. \
-Write operations (tags, collections, notes) require zotero_api_key in \
-ZotPilot's secure credential store and zotero_user_id in shared config. \
+Write operations (tags, collections, notes) require zotero_api_key and \
+zotero_user_id in shared config. \
 Environment variables remain supported as temporary overrides. Prefer \
 `zotpilot setup` or `zotpilot config set ...` over editing client config.
 """

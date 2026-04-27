@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import sqlite3
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config import _default_config_dir
-from .runtime_settings import resolve_runtime_settings
+from .runtime_settings import SECRET_FIELDS, resolve_runtime_settings
 from .secret_store import describe_backend
 
 
@@ -34,6 +35,29 @@ def _check_config_exists(config_path: Path) -> CheckResult:
     if config_path.exists():
         return CheckResult("config_file", "pass", str(config_path))
     return CheckResult("config_file", "fail", f"Not found: {config_path}")
+
+
+def _check_config_permissions(config_path: Path, config) -> CheckResult:
+    has_config_secret = any(getattr(config, field, None) for field in SECRET_FIELDS)
+    if not config_path.exists():
+        return CheckResult("config_permissions", "warn", "config file missing")
+    if sys.platform == "win32":
+        if has_config_secret:
+            return CheckResult(
+                "config_permissions",
+                "warn",
+                "config.json contains API keys; Windows ACL hardening is not enforced by ZotPilot v1",
+            )
+        return CheckResult("config_permissions", "pass", "no API keys stored in config.json")
+    mode = stat.S_IMODE(config_path.stat().st_mode)
+    if mode == 0o600:
+        return CheckResult("config_permissions", "pass", "0600")
+    status = "fail" if has_config_secret else "warn"
+    return CheckResult(
+        "config_permissions",
+        status,
+        f"{oct(mode)}; expected 0o600{' because config.json contains API keys' if has_config_secret else ''}",
+    )
 
 
 def _check_zotero_data(config) -> CheckResult:
@@ -77,22 +101,18 @@ def _check_embedding_api_key(config) -> CheckResult:
     return CheckResult("embedding_api_key", "fail", f"Unknown provider: {provider}")
 
 
-def _check_secret_backend(config=None) -> CheckResult:
+def _check_secret_backend(config=None, sources: dict[str, str] | None = None) -> CheckResult:
     backend = describe_backend()
-    needs_secret_backend = (
-        config is not None
-        and (
-            config.embedding_provider in {"gemini", "dashscope"}
-            or bool(config.anthropic_api_key)
-            or bool(config.zotero_api_key)
-        )
+    uses_legacy_backend = any(
+        source.startswith("legacy-") for source in (sources or {}).values()
     )
     if backend.available:
         detail = backend.name if not backend.path else f"{backend.name} ({backend.path})"
-        return CheckResult("secret_backend", "pass", detail)
-    if not needs_secret_backend:
-        return CheckResult("secret_backend", "pass", f"unused ({backend.detail or 'no secure backend configured'})")
-    return CheckResult("secret_backend", "fail", backend.detail or "No secret backend available")
+        return CheckResult("legacy_secret_backend", "pass", detail)
+    if not uses_legacy_backend:
+        detail = backend.detail or "no legacy backend configured"
+        return CheckResult("legacy_secret_backend", "pass", f"unused ({detail})")
+    return CheckResult("legacy_secret_backend", "warn", backend.detail or "No legacy secret backend available")
 
 
 def _check_chromadb_index(config) -> CheckResult:
@@ -205,12 +225,13 @@ def run_checks(config_path: str | None = None, full: bool = False) -> list[Check
 
     # Load config (needed for remaining checks)
     config = resolved.config
+    results.append(_check_config_permissions(resolved_config_path, config))
 
     # 3. Zotero data directory + sqlite
     results.append(_check_zotero_data(config))
 
-    # 4. Secret backend
-    results.append(_check_secret_backend(config))
+    # 4. Legacy secret backend
+    results.append(_check_secret_backend(config, resolved.sources))
 
     # 5. Embedding API key
     results.append(_check_embedding_api_key(config))
