@@ -1,4 +1,4 @@
-"""Tests for `zotpilot config` subcommands under the secure-store model."""
+"""Tests for `zotpilot config` subcommands under the config-backed key model."""
 
 from __future__ import annotations
 
@@ -39,11 +39,17 @@ def _run_config(args: list[str], config_path: Path, monkeypatch, capsys):
     p.add_argument("key", nargs="?")
     p.add_argument("value", nargs="?")
     p.add_argument("--config", default=str(config_path))
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--to-config", action="store_true", default=True, dest="to_config")
     p.set_defaults(func=cmd_config)
 
     parsed = parser.parse_args(["config"] + args)
     parsed.config = str(config_path)
     parsed.config_subcmd = parsed.subcommand
+    if not hasattr(parsed, "to_config"):
+        parsed.to_config = True
+    if not hasattr(parsed, "force"):
+        parsed.force = False
     returncode = cmd_config(parsed)
     captured = capsys.readouterr()
     return SimpleNamespace(out=captured.out, err=captured.err, returncode=returncode)
@@ -77,16 +83,16 @@ class TestConfigSet:
 
 
 class TestConfigCommand:
-    def test_secret_fields_store_in_secure_store(self, tmp_path, monkeypatch, capsys):
+    def test_secret_fields_store_in_config_json(self, tmp_path, monkeypatch, capsys):
         _use_local_secrets(monkeypatch, tmp_path)
         cfg_path = tmp_path / "config.json"
         out = _run_config(["set", "zotero_api_key", "secret-zot"], cfg_path, monkeypatch, capsys)
         assert out.returncode == 0
-        assert "secure credential store" in out.out.lower()
+        assert "config.json" in out.out.lower()
 
         resolved = resolve_runtime_settings(cfg_path)
         assert resolved.config.zotero_api_key == "secret-zot"
-        assert not cfg_path.exists()
+        assert json.loads(cfg_path.read_text())["zotero_api_key"] == "secret-zot"
 
     def test_non_secret_fields_persist_to_config_json(self, tmp_path, monkeypatch, capsys):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -110,8 +116,46 @@ class TestConfigCommand:
         _run_config(["set", "zotero_api_key", "secret-zot"], cfg_path, monkeypatch, capsys)
         out = _run_config(["unset", "zotero_api_key"], cfg_path, monkeypatch, capsys)
         assert out.returncode == 0
+        assert "zotero_api_key" not in json.loads(cfg_path.read_text())
         resolved = resolve_runtime_settings(cfg_path)
         assert resolved.config.zotero_api_key is None
+
+    def test_config_unset_removes_legacy_secret_fallback(self, tmp_path, monkeypatch, capsys):
+        from zotpilot.secret_store import set_secret
+
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps({"gemini_api_key": "config-gemini"}))
+        set_secret("gemini_api_key", "legacy-gemini")
+
+        out = _run_config(["unset", "gemini_api_key"], cfg_path, monkeypatch, capsys)
+
+        assert out.returncode == 0
+        resolved = resolve_runtime_settings(cfg_path)
+        assert resolved.config.gemini_api_key is None
+
+    def test_migrate_secrets_defaults_to_config_json(self, tmp_path, monkeypatch, capsys):
+        from zotpilot.secret_store import set_secret
+
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg_path = tmp_path / "config.json"
+        set_secret("gemini_api_key", "legacy-gemini")
+
+        out = _run_config(["migrate-secrets"], cfg_path, monkeypatch, capsys)
+
+        assert out.returncode == 0
+        data = json.loads(cfg_path.read_text())
+        assert data["gemini_api_key"] == "legacy-gemini"
+
+    def test_migrate_secrets_does_not_capture_runtime_env(self, tmp_path, monkeypatch, capsys):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg_path = tmp_path / "config.json"
+        monkeypatch.setenv("GEMINI_API_KEY", "env-should-stay-runtime-only")
+
+        out = _run_config(["migrate-secrets"], cfg_path, monkeypatch, capsys)
+
+        assert out.returncode == 0
+        assert not cfg_path.exists()
 
     def test_status_json_includes_new_runtime_fields(self, tmp_path, monkeypatch, capsys):
         _use_local_secrets(monkeypatch, tmp_path)

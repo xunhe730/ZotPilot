@@ -20,7 +20,7 @@ def _check_skill_drift():
             mcp.instructions += (
                 "\n\n⚠️ ZotPilot skills or configuration paths are outdated "
                 "or not in sync with the current system.\n"
-                "Please run `zotpilot update --re-register` or `zotpilot register` "
+                "Please run `zotpilot setup` or `zotpilot upgrade --re-register` "
                 "to fix this issue."
             )
     except Exception:

@@ -88,10 +88,14 @@ def resolve_runtime_settings(
     legacy_sources = _collect_legacy_config_secrets(path)
 
     for field in SECRET_FIELDS:
+        config_value = getattr(base, field, None)
+        if config_value:
+            sources[field] = "config"
+            continue
         secret_value = get_secret(field)
         if secret_value:
             updates[field] = secret_value
-            sources[field] = backend.name
+            sources[field] = f"legacy-{backend.name}"
 
     for env_key, field in ENV_TO_FIELD.items():
         value = os.environ.get(env_key)

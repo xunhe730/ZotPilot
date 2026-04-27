@@ -18,7 +18,7 @@ from ._platforms import (
 from .config import Config, _default_config_dir
 from .credential_migration import migrate_secrets
 from .runtime_settings import resolve_runtime_config, resolve_runtime_settings
-from .secret_store import SecretStoreError, delete_secret, describe_backend, set_secret
+from .secret_store import SecretStoreError, delete_secret
 
 logger = logging.getLogger(__name__)
 
@@ -31,30 +31,24 @@ def _default_config_path() -> Path:
 def _split_validate_errors(errors: list[str]) -> tuple[list[str], list[str]]:
     """Split config.validate() errors into (blocking_errors, api_key_warnings).
 
-    API key errors are non-blocking warnings when keys may be configured in the
-    ZotPilot secure credential store or provided via environment overrides.
+    API key errors are non-blocking warnings when keys may be configured in
+    config.json or provided via environment overrides.
     """
     warnings = [e for e in errors if "_API_KEY not set" in e]
     blocking = [e for e in errors if e not in warnings]
     return blocking, warnings
 
 
-def _store_secret(field: str, value: str | None) -> str | None:
-    if not value:
-        return None
-    return set_secret(field, value)
-
-
 def _import_register_secret_overrides(args, config_path: Path) -> bool:
     imported_any = False
     if getattr(args, "gemini_key", None):
-        _store_secret("gemini_api_key", args.gemini_key)
+        _config_set("gemini_api_key", args.gemini_key, config_path)
         imported_any = True
     if getattr(args, "dashscope_key", None):
-        _store_secret("dashscope_api_key", args.dashscope_key)
+        _config_set("dashscope_api_key", args.dashscope_key, config_path)
         imported_any = True
     if getattr(args, "zotero_api_key", None):
-        _store_secret("zotero_api_key", args.zotero_api_key)
+        _config_set("zotero_api_key", args.zotero_api_key, config_path)
         imported_any = True
     if getattr(args, "zotero_user_id", None):
         cfg = Config.load(path=config_path)
@@ -72,12 +66,14 @@ def cmd_setup(args):
 
     # Redirect misused API key flags (agents sometimes guess these exist)
     _py = "python" if sys.platform == "win32" else "python3"
-    for flag, opt in [("gemini_key", "--gemini-key"), ("dashscope_key", "--dashscope-key")]:
+    for flag, opt, config_key in [
+        ("gemini_key", "--gemini-key", "gemini_api_key"),
+        ("dashscope_key", "--dashscope-key", "dashscope_api_key"),
+    ]:
         if getattr(args, flag, None):
             print(
-                f"Note: {opt} is not a setup argument — credentials go into ZotPilot's secure store.\n"
-                f"Pass it to 'register' instead:\n"
-                f"  zotpilot register {opt} <key>"
+                f"Note: {opt} is not a setup argument — use interactive setup or config set instead:\n"
+                f"  zotpilot config set {config_key} <key>"
             )
 
     non_interactive = getattr(args, "non_interactive", False)
@@ -244,7 +240,7 @@ def cmd_setup(args):
 
     from dataclasses import replace
 
-    # Load defaults, override setup-chosen fields, then save (no secrets persisted)
+    # Load defaults, override setup-chosen fields, then save.
     from .config import Config as _Config
 
     base_config = _Config.load(config_path)
@@ -253,34 +249,24 @@ def cmd_setup(args):
         zotero_data_dir=zotero_path,
         chroma_db_path=chroma_db_path,
         embedding_provider=embedding_provider,
+        gemini_api_key=gemini_api_key or base_config.gemini_api_key,
+        dashscope_api_key=dashscope_api_key or base_config.dashscope_api_key,
+        zotero_api_key=zotero_api_key or base_config.zotero_api_key,
         zotero_user_id=zotero_user_id or base_config.zotero_user_id,
     )
     config.save(config_path)
 
-    try:
-        stored_fields: list[str] = []
-        if gemini_api_key:
-            _store_secret("gemini_api_key", gemini_api_key)
-            stored_fields.append("GEMINI_API_KEY")
-        if dashscope_api_key:
-            _store_secret("dashscope_api_key", dashscope_api_key)
-            stored_fields.append("DASHSCOPE_API_KEY")
-        if zotero_api_key:
-            _store_secret("zotero_api_key", zotero_api_key)
-            stored_fields.append("ZOTERO_API_KEY")
-        if stored_fields:
-            print(f"Secrets stored in {describe_backend().name}: {', '.join(stored_fields)}")
-    except SecretStoreError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
-
     results = register_runtime(platforms=None)
+    registration_ok = (
+        _report_registration_results(results, context="Client registrations updated")
+        if results else False
+    )
 
     if non_interactive:
         print(f"Config written to: {config_path}")
-        if results:
-            print("Client registrations updated. Restart your AI agent.")
-        print(f"Shared config saved to {config_path}; secrets are managed via {describe_backend().name}.")
+        if registration_ok:
+            print("Restart your AI agent.")
+        print(f"Shared config saved to {config_path}. API keys, when configured, are stored in this file.")
         # Tell user how to provide API keys
         if embedding_provider == "gemini":
             print("Set your API key via:")
@@ -299,25 +285,28 @@ def cmd_setup(args):
         import os as _os
         if gemini_api_key and not _os.environ.get("GEMINI_API_KEY"):
             masked = gemini_api_key[:4] + "..." + gemini_api_key[-4:] if len(gemini_api_key) > 8 else "****"
-            print("\n  NOTE: GEMINI_API_KEY was stored in the secure credential store.")
+            print("\n  NOTE: GEMINI_API_KEY was stored in config.json.")
             print(f"    Masked value: {masked}")
         if dashscope_api_key and not _os.environ.get("DASHSCOPE_API_KEY"):
             masked = dashscope_api_key[:4] + "..." + dashscope_api_key[-4:] if len(dashscope_api_key) > 8 else "****"
-            print("\n  NOTE: DASHSCOPE_API_KEY was stored in the secure credential store.")
+            print("\n  NOTE: DASHSCOPE_API_KEY was stored in config.json.")
             print(f"    Masked value: {masked}")
         if zotero_api_key and not _os.environ.get("ZOTERO_API_KEY"):
             masked = zotero_api_key[:4] + "..." + zotero_api_key[-4:] if len(zotero_api_key) > 8 else "****"
-            print("\n  NOTE: ZOTERO_API_KEY was stored in the secure credential store.")
+            print("\n  NOTE: ZOTERO_API_KEY was stored in config.json.")
             print(f"    Masked value: {masked}")
 
         print("\n" + "=" * 40)
-        print("Setup complete!")
+        print("Setup complete!" if registration_ok else "Setup partially completed.")
         print()
-        print("Detected client runtimes have been registered with the new ZotPilot MCP command.")
-        print("Restart your AI agent to load the new MCP config and skills.")
-        print(f"Shared config lives in {config_path}; secrets are managed via {describe_backend().name}.")
+        if registration_ok:
+            print("Detected client runtimes have been registered with the new ZotPilot MCP command.")
+            print("Restart your AI agent to load the new MCP config and skills.")
+        else:
+            print("Client registration failed. Run `zotpilot doctor` for details.")
+        print(f"Shared config lives in {config_path}. API keys, when configured, are stored in this file.")
 
-    return 0
+    return 0 if registration_ok else 1
 
 
 def cmd_index(args):
@@ -430,6 +419,7 @@ def cmd_status(args):
             "gemini_key_set": bool(config.gemini_api_key),
             "dashscope_key_set": bool(config.dashscope_api_key),
             "secret_backend": resolved.secret_backend,
+            "legacy_secret_backend": resolved.secret_backend,
             "write_ops_ready": bool(config.zotero_api_key and config.zotero_user_id),
             "index_ready": False,
             "doc_count": 0,
@@ -481,7 +471,7 @@ def cmd_status(args):
     print(f"  Zotero data dir:    {config.zotero_data_dir}")
     print(f"  ChromaDB path:      {config.chroma_db_path}")
     print(f"  Embedding provider: {config.embedding_provider}")
-    print(f"  Secret backend:     {resolved.secret_backend}")
+    print(f"  Legacy secret backend: {resolved.secret_backend}")
     print(f"  Write ops ready:    {'yes' if (config.zotero_api_key and config.zotero_user_id) else 'no'}")
     print(f"  Embedding model:    {config.embedding_model}")
     print(f"  Embedding dims:     {config.embedding_dimensions}")
@@ -584,7 +574,7 @@ def cmd_doctor(args):
         print()
         if embedded:
             print(f"  [FAIL] legacy_embedded_secrets: found embedded client secrets in {', '.join(embedded_platforms)}")
-            print("    Run `zotpilot config migrate-secrets` and then restart affected clients.")
+            print("    Run `zotpilot config migrate-secrets --to-config` and then restart affected clients.")
         counts = {"pass": 0, "warn": 0, "fail": 0}
         for r in results:
             counts[r.status] += 1
@@ -642,6 +632,11 @@ def _config_set(key: str, value: str, config_path: Path) -> None:
         with open(config_path, encoding="utf-8") as f:
             data = json.load(f)
     data[key] = _coerce_value(key, value)
+    _write_config_data(config_path, data)
+
+
+def _write_config_data(config_path: Path, data: dict) -> None:
+    """Write raw config data using atomic write (tempfile + os.replace)."""
     # Atomic write: temp file + rename
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = None
@@ -719,11 +714,11 @@ def cmd_config(args):
                   f"Find your numeric ID at https://www.zotero.org/settings/keys")
         if key in _SENSITIVE_FIELDS:
             try:
-                backend = _store_secret(key, value)
-            except SecretStoreError as exc:
-                print(f"Error: {exc}", file=sys.stderr)
+                _config_set(key, value, config_path)
+            except (ValueError, json.JSONDecodeError) as e:
+                print(f"Error: {e}", file=sys.stderr)
                 return 1
-            print(f"✓ Stored '{key}' in secure credential store [{backend}]")
+            print(f"✓ Saved '{key}' to {config_path}")
             return 0
         try:
             _config_set(key, value, config_path)
@@ -760,12 +755,12 @@ def cmd_config(args):
             if val is None:
                 continue
             print(f"  {field}: {val}")
-        print("Secure credentials:")
+        print("API keys:")
         for field in sorted(_SENSITIVE_FIELDS):
             val = getattr(resolved.config, field, None)
             if val is None:
                 continue
-            src = resolved.sources.get(field, "secure-store")
+            src = resolved.sources.get(field, "unset")
             print(f"  {field}: {_mask_secret(str(val))} [{src}]")
         env_overrides = {field: src for field, src in resolved.sources.items() if src == "env-override"}
         print("Active env overrides:")
@@ -779,8 +774,11 @@ def cmd_config(args):
     if subcmd == "unset":
         key = args.key
         if key in _SENSITIVE_FIELDS:
+            data = _read_raw_config(config_path)
+            data.pop(key, None)
+            _write_config_data(config_path, data)
             delete_secret(key)
-            print(f"✓ Removed '{key}' from secure credential store")
+            print(f"✓ Removed '{key}' from {config_path} and legacy secret backend")
             return 0
         cfg = Config.load(path=config_path)
         setattr(cfg, key, None)
@@ -790,7 +788,11 @@ def cmd_config(args):
 
     if subcmd == "migrate-secrets":
         try:
-            result = migrate_secrets(config_path=config_path, force=getattr(args, "force", False))
+            result = migrate_secrets(
+                config_path=config_path,
+                force=getattr(args, "force", False),
+                to_config=getattr(args, "to_config", True),
+            )
         except SecretStoreError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -798,7 +800,7 @@ def cmd_config(args):
         if result.imported:
             print(f"  Imported: {', '.join(sorted(result.imported))}")
         if result.preserved:
-            print(f"  Preserved existing secure-store values: {', '.join(sorted(result.preserved))}")
+            print(f"  Preserved existing target values: {', '.join(sorted(result.preserved))}")
         if result.config_updated:
             print("  Updated shared config with zotero_user_id")
         if result.re_registered_platforms:
@@ -977,8 +979,8 @@ def cmd_update(args):
 
         if getattr(args, "migrate_secrets", False):
             try:
-                migrate_secrets(config_path=config_path, force=False)
-                print("Legacy secrets migrated to secure store.")
+                migrate_secrets(config_path=config_path, force=False, to_config=True)
+                print("Legacy secrets migrated to config.json.")
             except SecretStoreError as exc:
                 print(f"Secret migration failed: {exc}", file=sys.stderr)
                 errors.append("secret migration failed")
@@ -1097,13 +1099,13 @@ def cmd_register(args):
     config_path = _default_config_path()
     try:
         imported_any = _import_register_secret_overrides(args, config_path)
-    except SecretStoreError as exc:
+    except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     if imported_any:
         print(
             "Warning: register --*-key flags are deprecated for interactive use. "
-            "Credentials were imported into the secure store instead."
+            "Credentials were written to config.json instead."
         )
 
     results = register(
@@ -1124,7 +1126,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command")
 
     # setup
-    sub_setup = subparsers.add_parser("setup", help="Interactive setup wizard")
+    sub_setup = subparsers.add_parser("setup", help="Configure ZotPilot and register supported AI clients")
     sub_setup.add_argument(
         "--non-interactive", action="store_true",
         help="Run without prompts (use flags or auto-detect)",
@@ -1185,12 +1187,22 @@ def main(argv: list[str] | None = None) -> int:
     cfg_unset.add_argument("key", help="Config field name")
 
     config_sub.add_parser("path", help="Print config file path")
-    cfg_migrate = config_sub.add_parser("migrate-secrets", help="Import legacy secrets into the secure store")
-    cfg_migrate.add_argument("--force", action="store_true", help="Overwrite existing secure-store values")
+    cfg_migrate = config_sub.add_parser("migrate-secrets", help="Migrate legacy secrets")
+    cfg_migrate.add_argument("--force", action="store_true", help="Overwrite existing target values")
+    cfg_migrate.add_argument(
+        "--to-config",
+        action="store_true",
+        default=True,
+        help="Copy legacy secret-store values into config.json (default)",
+    )
     sub_config.set_defaults(func=cmd_config)
 
     # update
-    sub_update = subparsers.add_parser("upgrade", aliases=["update"], help="Upgrade CLI and skill files")
+    sub_update = subparsers.add_parser(
+        "upgrade",
+        aliases=["update"],
+        help="Upgrade ZotPilot and refresh client registration",
+    )
     grp = sub_update.add_mutually_exclusive_group()
     grp.add_argument("--cli-only", action="store_true", help="Only update CLI")
     grp.add_argument("--skill-only", action="store_true", help="Only update skill files")
@@ -1202,7 +1214,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_update.add_argument(
         "--migrate-secrets",
         action="store_true",
-        help="Migrate legacy secrets into the secure store",
+        help="Migrate legacy secrets into config.json",
     )
     sub_update.add_argument(
         "--re-register",
@@ -1231,7 +1243,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_register = subparsers.add_parser(
         "register",
         aliases=["install"],
-        help="Install and register ZotPilot on detected AI agent platforms",
+        help="Advanced: refresh client registration only",
     )
     sub_register.add_argument("--platform", action="append", dest="platforms",
                               help="Target platform (repeatable). Auto-detects if omitted.")

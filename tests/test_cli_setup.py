@@ -35,7 +35,7 @@ def _use_local_secrets(monkeypatch, tmp_path: Path) -> Path:
 
 
 class TestSetup:
-    def test_non_interactive_setup_writes_shared_config_and_secure_secrets(self, tmp_path, monkeypatch):
+    def test_non_interactive_setup_writes_shared_config_and_api_keys(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("GEMINI_API_KEY", "env-gemini")
@@ -69,14 +69,42 @@ class TestSetup:
         assert data["zotero_data_dir"] == str(zotero_dir)
         assert data["embedding_provider"] == "gemini"
         assert data["zotero_user_id"] == "12345678"
-        assert "gemini_api_key" not in data
-        assert "zotero_api_key" not in data
+        assert data["gemini_api_key"] == "env-gemini"
+        assert data["zotero_api_key"] == "env-zotero"
 
         resolved = resolve_runtime_settings(config_dir / "config.json")
         assert resolved.config.gemini_api_key == "env-gemini"
         assert resolved.config.zotero_api_key == "env-zotero"
         assert resolved.config.zotero_user_id == "12345678"
         assert resolved.secret_backend == "local-file"
+
+    def test_setup_fails_when_client_registration_fails(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        zotero_dir = _make_fake_zotero(tmp_path)
+        config_dir = tmp_path / ".config" / "zotpilot"
+
+        with (
+            patch("zotpilot.config._default_config_dir", return_value=config_dir),
+            patch("zotpilot.config._default_data_dir", return_value=tmp_path / "data"),
+            patch("zotpilot.config._old_config_path", return_value=tmp_path / "old" / "config.json"),
+            patch("zotpilot._platforms.register", return_value={"codex": False}),
+        ):
+            args = type(
+                "Args",
+                (),
+                {
+                    "non_interactive": True,
+                    "zotero_dir": str(zotero_dir),
+                    "provider": "local",
+                    "gemini_key": None,
+                    "dashscope_key": None,
+                },
+            )()
+            rc = cmd_setup(args)
+
+        assert rc == 1
+        assert (config_dir / "config.json").exists()
 
     def test_interactive_setup_collects_zotero_write_credentials(self, tmp_path, monkeypatch, capsys):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -150,8 +178,8 @@ class TestSetup:
         data = json.loads((config_dir / "config.json").read_text())
         assert data["zotero_data_dir"] == str(zotero_dir)
         assert data["embedding_provider"] == "local"
-        assert data["openalex_email"] is None
-        assert data["zotero_user_id"] is None
+        assert "openalex_email" not in data
+        assert "zotero_user_id" not in data
 
     def test_non_interactive_setup_requires_zotero_sqlite(self, tmp_path, monkeypatch, capsys):
         """Non-interactive setup fails when zotero.sqlite is missing."""
@@ -251,7 +279,7 @@ class TestIndexCli:
 
 
 class TestRegister:
-    def test_register_legacy_secret_flags_import_into_secure_store(self, tmp_path, monkeypatch):
+    def test_register_legacy_secret_flags_import_into_config(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))
 
@@ -278,6 +306,9 @@ class TestRegister:
         assert resolved.config.gemini_api_key == "legacy-gemini"
         assert resolved.config.zotero_api_key == "legacy-zotero"
         assert resolved.config.zotero_user_id == "7654321"
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["gemini_api_key"] == "legacy-gemini"
+        assert data["zotero_api_key"] == "legacy-zotero"
 
 
 class TestUpdateSync:
@@ -296,7 +327,7 @@ class TestUpdateSync:
         )
         return config_path
 
-    def test_update_does_not_back_import_runtime_secrets_to_config(self, tmp_path, monkeypatch):
+    def test_update_does_not_back_import_runtime_env_to_config(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
         config_path = self._setup_minimal_config(tmp_path)
         monkeypatch.setenv("HOME", str(tmp_path))

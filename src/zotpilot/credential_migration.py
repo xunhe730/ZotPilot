@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import _platforms
 from .config import Config, _default_config_dir, _old_config_path
 from .runtime_settings import SECRET_FIELDS
-from .secret_store import has_secret, set_secret
+from .secret_store import get_secret, has_secret, set_secret
 
 _ENV_TO_SECRET_FIELD = {
     "GEMINI_API_KEY": "gemini_api_key",
@@ -75,6 +74,7 @@ def migrate_secrets(
     *,
     config_path: Path | str | None = None,
     force: bool = False,
+    to_config: bool = True,
 ) -> MigrationResult:
     target_path = _config_path(config_path)
     config = Config.load(target_path)
@@ -84,23 +84,46 @@ def migrate_secrets(
     imported: dict[str, str] = {}
     preserved: list[str] = []
 
-    for env_key, config_field in _ENV_TO_SECRET_FIELD.items():
-        current = os.environ.get(env_key)
-        candidate = current or client_candidates.get(config_field) or config_candidates.get(config_field)
-        if not candidate:
-            continue
-        if has_secret(config_field) and not force:
-            preserved.append(config_field)
-            continue
-        set_secret(config_field, candidate)
-        imported[config_field] = (
-            "env" if current else ("client-config" if config_field in client_candidates else "config-file")
-        )
+    if to_config:
+        data_updated = False
+        for env_key, config_field in _ENV_TO_SECRET_FIELD.items():
+            candidate = (
+                get_secret(config_field)
+                or client_candidates.get(config_field)
+                or config_candidates.get(config_field)
+            )
+            if not candidate:
+                continue
+            if getattr(config, config_field, None) and not force:
+                preserved.append(config_field)
+                continue
+            setattr(config, config_field, candidate)
+            if get_secret(config_field):
+                source = "legacy-secret-backend"
+            elif config_field in client_candidates:
+                source = "client-config"
+            else:
+                source = "config-file"
+            imported[config_field] = source
+            data_updated = True
+        if data_updated:
+            config.save(target_path)
+    else:
+        for env_key, config_field in _ENV_TO_SECRET_FIELD.items():
+            candidate = client_candidates.get(config_field) or config_candidates.get(config_field)
+            if not candidate:
+                continue
+            if has_secret(config_field) and not force:
+                preserved.append(config_field)
+                continue
+            set_secret(config_field, candidate)
+            imported[config_field] = (
+                "client-config" if config_field in client_candidates else "config-file"
+            )
 
     config_updated = False
     user_id_candidate = (
-        os.environ.get("ZOTERO_USER_ID")
-        or client_candidates.get("zotero_user_id")
+        client_candidates.get("zotero_user_id")
         or config_candidates.get("zotero_user_id")
     )
     if user_id_candidate and (force or not config.zotero_user_id):
@@ -110,7 +133,7 @@ def migrate_secrets(
 
     re_registered_platforms: list[str] = []
     backups: list[str] = list(touched_platforms)
-    if imported or config_updated or touched_platforms:
+    if (imported and not to_config) or config_updated or touched_platforms:
         result = _platforms.reconcile_runtime(apply=True)
         re_registered_platforms = list(result.applied.registered if result.applied else ())
 
