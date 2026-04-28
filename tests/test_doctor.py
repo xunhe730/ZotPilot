@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ from zotpilot.doctor import (
     CheckResult,
     _check_chromadb_index,
     _check_config_exists,
+    _check_config_permissions,
     _check_embedding_api_key,
     _check_python_version,
     _check_secret_backend,
@@ -192,3 +194,18 @@ class TestCmdDoctorJsonOutput:
         data = json.loads(capsys.readouterr().out)
         assert data["legacy_embedded_secrets_detected"] is True
         assert data["legacy_embedded_secret_platforms"] == ["codex"]
+
+
+class TestCheckConfigPermissions:
+    def test_check_config_permissions_reads_raw_file_not_env(self, tmp_path):
+        """Regression: _check_config_permissions should check raw file data, not env overrides."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text('{"embedding_provider": "gemini"}', encoding="utf-8")
+        if sys.platform != "win32":
+            config_path.chmod(0o644)
+
+        result = _check_config_permissions(config_path)
+        # Should pass (no secrets in file) even if env vars were set
+        assert result.status in ("pass", "warn")  # warn only for permissions, not for "contains API keys"
+        assert "contains API keys" not in result.message
+

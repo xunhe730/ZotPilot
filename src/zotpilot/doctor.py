@@ -1,6 +1,7 @@
 """Health-check diagnostics for ZotPilot environment."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import stat
 import sys
@@ -37,9 +38,15 @@ def _check_config_exists(config_path: Path) -> CheckResult:
     return CheckResult("config_file", "fail", f"Not found: {config_path}")
 
 
-def _check_config_permissions(config_path: Path, config) -> CheckResult:
-    has_config_secret = any(getattr(config, field, None) for field in SECRET_FIELDS)
-    if not config_path.exists():
+def _check_config_permissions(config_path: Path) -> CheckResult:
+    has_config_secret = False
+    if config_path.exists():
+        try:
+            raw_data = json.loads(config_path.read_text(encoding="utf-8"))
+            has_config_secret = any(raw_data.get(field) for field in SECRET_FIELDS)
+        except (json.JSONDecodeError, OSError):
+            return CheckResult("config_permissions", "warn", "config file is unreadable or malformed")
+    else:
         return CheckResult("config_permissions", "warn", "config file missing")
     if sys.platform == "win32":
         if has_config_secret:
@@ -225,7 +232,7 @@ def run_checks(config_path: str | None = None, full: bool = False) -> list[Check
 
     # Load config (needed for remaining checks)
     config = resolved.config
-    results.append(_check_config_permissions(resolved_config_path, config))
+    results.append(_check_config_permissions(resolved_config_path))
 
     # 3. Zotero data directory + sqlite
     results.append(_check_zotero_data(config))

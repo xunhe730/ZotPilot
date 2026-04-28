@@ -51,10 +51,11 @@ def _import_register_secret_overrides(args, config_path: Path) -> bool:
         _config_set("zotero_api_key", args.zotero_api_key, config_path)
         imported_any = True
     if getattr(args, "zotero_user_id", None):
-        cfg = Config.load(path=config_path)
-        cfg.zotero_user_id = args.zotero_user_id
-        cfg.save(path=config_path)
+        if not args.zotero_user_id.isdigit():
+            print("  WARNING: zotero_user_id should be a numeric ID, not a username.", file=sys.stderr)
+        _config_set("zotero_user_id", args.zotero_user_id, config_path)
         imported_any = True
+
     return imported_any
 
 
@@ -65,7 +66,6 @@ def cmd_setup(args):
     from .zotero_detector import detect_zotero_data_dir
 
     # Redirect misused API key flags (agents sometimes guess these exist)
-    _py = "python" if sys.platform == "win32" else "python3"
     for flag, opt, config_key in [
         ("gemini_key", "--gemini-key", "gemini_api_key"),
         ("dashscope_key", "--dashscope-key", "dashscope_api_key"),
@@ -574,7 +574,7 @@ def cmd_doctor(args):
         print()
         if embedded:
             print(f"  [FAIL] legacy_embedded_secrets: found embedded client secrets in {', '.join(embedded_platforms)}")
-            print("    Run `zotpilot config migrate-secrets --to-config` and then restart affected clients.")
+            print("    Run `zotpilot config migrate-secrets` and then restart affected clients.")
         counts = {"pass": 0, "warn": 0, "fail": 0}
         for r in results:
             counts[r.status] += 1
@@ -715,7 +715,7 @@ def cmd_config(args):
         if key in _SENSITIVE_FIELDS:
             try:
                 _config_set(key, value, config_path)
-            except (ValueError, json.JSONDecodeError) as e:
+            except (ValueError, json.JSONDecodeError, RuntimeError) as e:
                 print(f"Error: {e}", file=sys.stderr)
                 return 1
             print(f"✓ Saved '{key}' to {config_path}")
@@ -723,7 +723,7 @@ def cmd_config(args):
         try:
             _config_set(key, value, config_path)
             print(f"✓ Saved to {config_path}")
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, json.JSONDecodeError, RuntimeError) as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
         return 0
@@ -774,11 +774,15 @@ def cmd_config(args):
     if subcmd == "unset":
         key = args.key
         if key in _SENSITIVE_FIELDS:
-            data = _read_raw_config(config_path)
-            data.pop(key, None)
-            _write_config_data(config_path, data)
-            delete_secret(key)
-            print(f"✓ Removed '{key}' from {config_path} and legacy secret backend")
+            try:
+                data = _read_raw_config(config_path)
+                data.pop(key, None)
+                _write_config_data(config_path, data)
+                delete_secret(key)
+                print(f"✓ Removed '{key}' from {config_path} and legacy secret backend")
+            except (json.JSONDecodeError, RuntimeError) as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
             return 0
         cfg = Config.load(path=config_path)
         setattr(cfg, key, None)
@@ -791,7 +795,7 @@ def cmd_config(args):
             result = migrate_secrets(
                 config_path=config_path,
                 force=getattr(args, "force", False),
-                to_config=getattr(args, "to_config", True),
+                to_config=True,
             )
         except SecretStoreError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -1189,12 +1193,6 @@ def main(argv: list[str] | None = None) -> int:
     config_sub.add_parser("path", help="Print config file path")
     cfg_migrate = config_sub.add_parser("migrate-secrets", help="Migrate legacy secrets")
     cfg_migrate.add_argument("--force", action="store_true", help="Overwrite existing target values")
-    cfg_migrate.add_argument(
-        "--to-config",
-        action="store_true",
-        default=True,
-        help="Copy legacy secret-store values into config.json (default)",
-    )
     sub_config.set_defaults(func=cmd_config)
 
     # update

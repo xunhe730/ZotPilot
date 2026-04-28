@@ -40,14 +40,13 @@ def _run_config(args: list[str], config_path: Path, monkeypatch, capsys):
     p.add_argument("value", nargs="?")
     p.add_argument("--config", default=str(config_path))
     p.add_argument("--force", action="store_true")
-    p.add_argument("--to-config", action="store_true", default=True, dest="to_config")
+
     p.set_defaults(func=cmd_config)
 
     parsed = parser.parse_args(["config"] + args)
     parsed.config = str(config_path)
     parsed.config_subcmd = parsed.subcommand
-    if not hasattr(parsed, "to_config"):
-        parsed.to_config = True
+
     if not hasattr(parsed, "force"):
         parsed.force = False
     returncode = cmd_config(parsed)

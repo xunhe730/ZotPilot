@@ -208,7 +208,7 @@ zotpilot doctor
 To migrate legacy client-embedded secrets:
 
 ```bash
-zotpilot config migrate-secrets --to-config
+zotpilot config migrate-secrets
 ```
 
 </details>
@@ -317,7 +317,7 @@ Agent ──→ MCP tools ───┬── semantic search ──→ ChromaDB 
 ```text
 Installed zotpilot (wheel ships skills + references)
 ├── src/zotpilot/skills/
-├── src/zotpilot/references/
+├── references/
 └── connector/
 
 # Config / index
@@ -434,7 +434,7 @@ Yes. Pick `--provider local`, skip write-operation keys, and search / browse / i
 | `GEMINI_API_KEY not set` | `export GEMINI_API_KEY=<key>` or switch to `setup --provider local` |
 | Unsure what failed | `zotpilot doctor` |
 
-Deeper guidance lives in [troubleshooting.md](src/zotpilot/references/troubleshooting.md).
+Deeper guidance lives in [troubleshooting.md](references/troubleshooting.md).
 
 ---
 

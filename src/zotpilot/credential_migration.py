@@ -133,7 +133,7 @@ def migrate_secrets(
 
     re_registered_platforms: list[str] = []
     backups: list[str] = list(touched_platforms)
-    if (imported and not to_config) or config_updated or touched_platforms:
+    if imported or config_updated or touched_platforms:
         result = _platforms.reconcile_runtime(apply=True)
         re_registered_platforms = list(result.applied.registered if result.applied else ())
 

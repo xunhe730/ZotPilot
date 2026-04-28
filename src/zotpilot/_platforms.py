@@ -221,14 +221,9 @@ def _zotpilot_command(allow_fallback: bool = True) -> str:
 def _mcp_config_path(plat: str) -> Path | None:
     """Return the MCP config file path for platforms that use config files."""
     home = _home()
-    if _is_windows():
-        paths = {
-            "opencode": home / ".config" / "opencode" / "opencode.json",
-        }
-    else:  # macOS / Linux
-        paths = {
-            "opencode": home / ".config" / "opencode" / "opencode.json",
-        }
+    paths = {
+        "opencode": home / ".config" / "opencode" / "opencode.json",
+    }
     return paths.get(plat)
 
 
@@ -366,7 +361,13 @@ def _inspect_registration(plat: str) -> tuple[bool, str | None, tuple[str, ...],
     if not isinstance(entry, dict):
         return False, None, (), {}, str(expanded)
     command = entry.get("command")
-    args = tuple(str(arg) for arg in entry.get("args", []) or ())
+    # OpenCode stores command as a list: [binary, arg1, arg2, ...]
+    # Split it so inspection matches the (command, args) shape used everywhere else.
+    if isinstance(command, list):
+        args = tuple(str(a) for a in command[1:])
+        command = command[0] if command else None
+    else:
+        args = tuple(str(arg) for arg in entry.get("args", []) or ())
     env_key = "environment" if "opencode" in str(expanded) else "env"
     env = {str(k): str(v) for k, v in (entry.get(env_key, {}) or {}).items()}
     return True, str(command) if command is not None else None, args, env, str(expanded)
@@ -624,12 +625,16 @@ def print_skill_hints(platforms: list[str]) -> None:
     for plat in tier1:
         info = PLATFORMS[plat]
         base = Path(info.get("skills_dir", "")).expanduser()
-        router_dir = base / "zotpilot"
-        if (router_dir / "SKILL.md").is_file():
-            # Count deployed skill dirs
-            skill_dirs = [d for d in base.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()
-                          and d.name.startswith(("zotpilot", "ztp-"))]
-            print(f"  {info['label']}: {len(skill_dirs)} skills deployed under {base}")
+        deployed_skill_dirs = (
+            [
+                d for d in base.iterdir()
+                if d.is_dir() and (d / "SKILL.md").is_file() and d.name.startswith("ztp-")
+            ]
+            if base.exists()
+            else []
+        )
+        if deployed_skill_dirs:
+            print(f"  {info['label']}: {len(deployed_skill_dirs)} skills deployed under {base}")
         else:
             print(f"  {info['label']}: skills NOT found — register will deploy to {base}")
 
@@ -1021,8 +1026,6 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
         print(f"    Manual: claude mcp add --scope user zotpilot -- {command} {' '.join(args)}")
     elif plat == "codex":
         print(f"    Manual: codex mcp add zotpilot -- {command} {' '.join(args)}")
-    elif plat == "gemini":
-        print(f"    Manual: gemini mcp add -s user zotpilot {command} {' '.join(args)}")
     else:
         config_path = _mcp_config_path(plat)
         is_opencode = "opencode" in str(config_path) if config_path else False

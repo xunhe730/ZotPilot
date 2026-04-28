@@ -55,7 +55,7 @@ packages = ["src/zotpilot"]
 include = [
     "src/zotpilot/**/*.py",
     "src/zotpilot/skills/*.md",
-    "src/zotpilot/references/*.md",
+    "references/*.md",
     "src/zotpilot/data/**/*",
     "src/zotpilot/py.typed",
 ]

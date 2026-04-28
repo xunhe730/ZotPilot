@@ -103,13 +103,7 @@ def test_all_headings_in_allowlist() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("pattern,reason", FORBIDDEN_PATTERNS)
-@pytest.mark.xfail(
-    reason=(
-        "ztp-research.md may contain forbidden patterns from before the drift guard was enforced. "
-        "These must be removed in a follow-up PR. Do NOT modify ztp-research.md here."
-    ),
-    strict=False,
-)
+
 def test_no_forbidden_pattern(pattern: str, reason: str) -> None:
     skill_text = SKILL_PATH.read_text()
     matches = [(i + 1, line) for i, line in enumerate(skill_text.splitlines())
@@ -228,13 +222,7 @@ def test_phase3_prompt_is_gated_on_empty_action_required() -> None:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("phrase", TYPE_GUARANTEE_STRINGS)
-@pytest.mark.xfail(
-    reason=(
-        "ztp-research.md may contain type-guarantee language from earlier drafts. "
-        "Such language belongs in code comments, not skill prose. Remove in follow-up PR."
-    ),
-    strict=False,
-)
+
 def test_no_type_guarantee_language(phrase: str) -> None:
     skill_text = SKILL_PATH.read_text()
     matches = [(i + 1, line) for i, line in enumerate(skill_text.splitlines())
