@@ -85,7 +85,7 @@ elif [[ $BUILD_BROWSER_EXT -eq 0 ]] && [[ $BUILD_SAFARI -eq 0 ]]; then
 fi
 
 if [ -z $VERSION ]; then
-	VERSION="0.0.3"
+	VERSION="0.5.0"
 fi
 
 if [ -z "$BUILD_DIR" ]; then

@@ -12,7 +12,7 @@ zotpilot update --dry-run    # 预览操作，不执行
 
 ---
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-04-28
 
 **架构重构 / Architectural Refactor** — 重新设计入库流程、精简工具层、新增浏览器扩展。
 

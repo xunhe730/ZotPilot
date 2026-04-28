@@ -40,6 +40,18 @@
 
 ---
 
+## v0.5.0 — Research Workflow
+
+The main change in this release: agents can now actually collect papers for you, not just search what's already in your library.
+
+The new **Connector browser extension** lets the agent save papers through your own Chrome session. The practical benefit is straightforward: institutional PDFs come along. If you're on a campus network or VPN, hand the agent a list of DOIs or arXiv IDs and it gets them all into Zotero with PDFs attached. No manual one-by-one downloading.
+
+The full research workflow runs with `/ztp-research`: OpenAlex search, candidate confirmation, Connector ingestion, auto-tagging and filing, per-paper report. The agent handles each step in sequence.
+
+This release also trims the tool count from 33 to 18, fixes a range of edge-case bugs, and hardens incremental indexing so it correctly resumes from where it stopped after an interruption.
+
+---
+
 ## Quick Start
 
 ```bash

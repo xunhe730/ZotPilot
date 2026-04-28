@@ -172,12 +172,10 @@ class TestGetPaperDetailsNoRag:
 
 
 class TestSearchPapersNoRag:
-    @patch("zotpilot.tools.search._get_config")
-    @patch("zotpilot.tools.search._get_retriever")
-    def test_raises_tool_error(self, mock_retriever, mock_config):
+    @patch("zotpilot.tools.search._get_store_optional")
+    def test_raises_tool_error(self, mock_store_optional):
         from fastmcp.exceptions import ToolError
-        mock_retriever.side_effect = ToolError("Semantic search requires indexing")
-        mock_config.return_value = _MockConfig()
+        mock_store_optional.side_effect = ToolError("Semantic search requires indexing")
 
         from zotpilot.tools.search import search_papers
         with pytest.raises(ToolError, match="Semantic search requires indexing"):

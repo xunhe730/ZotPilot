@@ -41,7 +41,7 @@ const argv = require('yargs')
 	.describe('connector-version', 'Version of the extension')
 	.help('h')
 	.alias('h', 'help')
-	.default({'connector-version': '4.999.0', p: false})
+	.default({'connector-version': '0.5.0', p: false})
 	.argv;
 
 var injectInclude = [
