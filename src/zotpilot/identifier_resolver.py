@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$")
 _ARXIV_OLD_RE = re.compile(r"^[a-z-]+/\d{7}(v\d+)?$")
-_DOI_RE = re.compile(r"^10\.\d{4,}/\S+")
+_DOI_RE = re.compile(r"^10\.\d{4,}/\S+$")
 _S2_ID_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -94,7 +94,18 @@ class IdentifierResolver:
         )
 
     def _resolve_doi(self, doi: str) -> PaperMetadata:
-        """Fetch metadata from CrossRef by DOI."""
+        """Fetch metadata from CrossRef by DOI.
+
+        arXiv DOIs (10.48550/arXiv.NNNN.NNNNN) are routed to the arXiv API
+        since CrossRef does not index them.
+        """
+        # arXiv DOI fast-path: avoid CrossRef 404 for 10.48550/arXiv.*
+        doi_lower = doi.strip().lower()
+        arxiv_prefix = "10.48550/arxiv."
+        if doi_lower.startswith(arxiv_prefix):
+            arxiv_id = doi[len(arxiv_prefix):].strip()
+            return self._resolve_arxiv(arxiv_id)
+
         work = self._crossref.get_by_doi(doi)
         if work is None:
             raise ToolError(f"DOI not found in CrossRef: {doi!r}")
@@ -122,9 +133,10 @@ class IdentifierResolver:
 
         try:
             resp = httpx.get(
-                "http://export.arxiv.org/api/query",
+                "https://export.arxiv.org/api/query",
                 params={"id_list": clean_id, "max_results": 1},
                 timeout=15.0,
+                follow_redirects=True,
             )
             resp.raise_for_status()
         except httpx.TimeoutException:
@@ -165,7 +177,7 @@ class IdentifierResolver:
                 doi=doi,
                 title=title,
                 item_type="preprint",
-                oa_url=f"https://arxiv.org/pdf/{clean_id}",
+                oa_url=f"https://arxiv.org/pdf/{clean_id}.pdf",
                 arxiv_id=clean_id,
                 authors=authors,
                 year=year,

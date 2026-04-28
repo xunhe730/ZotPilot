@@ -142,7 +142,7 @@ class CrossRefClient:
             issue=data.get("issue"),
             pages=data.get("page"),
             publisher=data.get("publisher"),
-            url=f"https://doi.org/{doi}",
+            url=data.get("resource", {}).get("primary", {}).get("URL") or f"https://doi.org/{doi}",
             oa_url=oa_url,
             raw=data,
         )

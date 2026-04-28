@@ -45,30 +45,43 @@ def _merge_results_by_chunk(primary: list, secondary: list, top_k: int) -> list:
     return merged[:top_k]
 
 
-def _result_to_dict(r) -> dict:
+def _result_to_dict(r, verbosity: str = "full") -> dict:
     """Convert RetrievalResult to API response dict.
 
     Expects r.composite_score to be populated by reranker.
     """
-    return {
+    result = {
         "doc_title": r.doc_title,
-        "authors": r.authors,
+        "doc_id": r.doc_id,
         "year": r.year,
-        "citation_key": r.citation_key,
-        "publication": r.publication,
         "page": r.page_num,
+        "chunk_index": r.chunk_index,
         "relevance_score": round(r.score, 3),
         "composite_score": round(r.composite_score, 3) if r.composite_score is not None else None,
         "section": r.section,
-        "section_confidence": round(r.section_confidence, 2),
-        "journal_quartile": r.journal_quartile,
         "passage": r.text,
-        "context_before": r.context_before,
-        "context_after": r.context_after,
-        "full_context": r.full_context(),
-        "doc_id": r.doc_id,
-        "item_key": r.doc_id,
-        "chunk_index": r.chunk_index,
-        "tags": r.tags,
-        "collections": r.collections,
     }
+
+    if verbosity != "minimal" and (r.context_before or r.context_after):
+        result.update({
+            "context_before": r.context_before,
+            "context_after": r.context_after,
+            "full_context": r.full_context(),
+        })
+
+    if verbosity in {"standard", "full"}:
+        result.update({
+            "authors": r.authors,
+            "citation_key": r.citation_key,
+            "publication": r.publication,
+            "section_confidence": round(r.section_confidence, 2),
+            "journal_quartile": r.journal_quartile,
+        })
+
+    if verbosity == "full":
+        result.update({
+            "tags": r.tags,
+            "collections": r.collections,
+        })
+
+    return result

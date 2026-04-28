@@ -149,8 +149,8 @@ class PPStructureEngine:
     objects.
     """
     def __init__(self) -> None:
-        from paddleocr import PPStructureV3  # noqa: E402
-        from paddlex.inference.pipelines.layout_parsing.pipeline_v2 import (
+        from paddleocr import PPStructureV3  # type: ignore[import-not-found]  # no stubs available  # noqa: E402
+        from paddlex.inference.pipelines.layout_parsing.pipeline_v2 import (  # type: ignore[import-not-found]  # no stubs available
             _LayoutParsingPipelineV2,
         )
 

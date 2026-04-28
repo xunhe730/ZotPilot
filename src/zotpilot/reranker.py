@@ -170,7 +170,7 @@ class Reranker:
         section_weight = effective_section.get(result.section, 0.7)
         journal_weight = effective_journal.get(result.journal_quartile, 0.7)
 
-        return (result.score ** self.alpha) * section_weight * journal_weight
+        return (max(result.score, 0.0) ** self.alpha) * section_weight * journal_weight
 
 
 def validate_section_weights(section_weights: dict) -> list[str]:

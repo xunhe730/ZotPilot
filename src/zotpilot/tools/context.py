@@ -4,14 +4,17 @@ from typing import Annotated
 
 from pydantic import Field
 
-from ..state import ToolError, _get_config, _get_store, mcp
+from ..index_authority import current_library_pdf_doc_ids
+from ..state import ToolError, _get_config, _get_store, _get_zotero, mcp
+from .profiles import tool_tags
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "context"))
 def get_passage_context(
     doc_id: Annotated[str, Field(description="Document ID from search results")],
     chunk_index: Annotated[int, Field(description="Chunk index from search results")],
     window: Annotated[int, Field(description="Chunks before/after to include", ge=1, le=5)] = 2,
+    include_merged: Annotated[bool, Field(description="Return merged text instead of per-passage text")] = False,
     table_page: Annotated[int | None, Field(description="Page number of table (for table context)")] = None,
     table_index: Annotated[int | None, Field(description="Index of table on page")] = None,
 ) -> dict:
@@ -23,20 +26,36 @@ def get_passage_context(
             "Passage context requires indexing. "
             "Configure an embedding provider and run index_library() first."
         )
+    if doc_id not in current_library_pdf_doc_ids(_get_zotero()):
+        raise ToolError(f"Document not found: {doc_id}")
     store = _get_store()
 
     # Handle table context lookup
     if table_page is not None and table_index is not None:
-        return _get_table_reference_context(store, doc_id, table_page, table_index, window)
+        return _get_table_reference_context(store, doc_id, table_page, table_index, window, include_merged)
 
     # Standard text chunk context
     chunks = store.get_adjacent_chunks(doc_id, chunk_index, window=window)
 
     if not chunks:
-        raise ToolError(f"No chunks found for doc_id={doc_id}")
+        raise ToolError(f"No chunks found for doc_id={doc_id}, chunk_index={chunk_index}")
 
     # Get section and journal_quartile from center chunk
-    center_chunk = next((c for c in chunks if c.metadata["chunk_index"] == chunk_index), chunks[0])
+    center_chunk = next((c for c in chunks if c.metadata.get("chunk_index", -1) == chunk_index), None)
+    if center_chunk is None:
+        raise ToolError(f"chunk_index={chunk_index} not found in doc_id={doc_id}")
+
+    passages = [
+        {
+            "chunk_index": c.metadata.get("chunk_index", -1),
+            "page": c.metadata.get("page_num", 0),
+            "section": c.metadata.get("section", "unknown"),
+            "section_confidence": c.metadata.get("section_confidence", 1.0),
+            "is_center": c.metadata.get("chunk_index", -1) == chunk_index,
+            **({} if include_merged else {"text": c.text}),
+        }
+        for c in chunks
+    ]
 
     return {
         "doc_id": doc_id,
@@ -47,18 +66,8 @@ def get_passage_context(
         "journal_quartile": center_chunk.metadata.get("journal_quartile") or None,
         "center_chunk_index": chunk_index,
         "window": window,
-        "passages": [
-            {
-                "chunk_index": c.metadata["chunk_index"],
-                "page": c.metadata["page_num"],
-                "section": c.metadata.get("section", "unknown"),
-                "section_confidence": c.metadata.get("section_confidence", 1.0),
-                "text": c.text,
-                "is_center": c.metadata["chunk_index"] == chunk_index,
-            }
-            for c in chunks
-        ],
-        "merged_text": "\n\n".join(c.text for c in chunks),
+        "passages": passages,
+        **({"merged_text": "\n\n".join(c.text for c in chunks)} if include_merged else {}),
     }
 
 
@@ -68,6 +77,7 @@ def _get_table_reference_context(
     table_page: int,
     table_index: int,
     window: int,
+    include_merged: bool,
 ) -> dict:
     """Find text that references a specific table and return with context."""
     # Get the specific table's metadata
@@ -124,7 +134,7 @@ def _get_table_reference_context(
         text_results["ids"], text_results["documents"], text_results["metadatas"]
     ):
         if ref_pattern.search(text):
-            matching_chunk_idx = meta["chunk_index"]
+            matching_chunk_idx = meta.get("chunk_index", -1)
             break
 
     if matching_chunk_idx is None:
@@ -144,12 +154,24 @@ def _get_table_reference_context(
     # Found reference - get context around it
     context_chunks = store.get_adjacent_chunks(doc_id, matching_chunk_idx, window=window)
     center_chunk = next(
-        (c for c in context_chunks if c.metadata["chunk_index"] == matching_chunk_idx),
+        (c for c in context_chunks if c.metadata.get("chunk_index", -1) == matching_chunk_idx),
         context_chunks[0] if context_chunks else None
     )
 
     if not center_chunk:
         raise ToolError(f"Could not retrieve context for chunk {matching_chunk_idx}")
+
+    passages = [
+        {
+            "chunk_index": c.metadata.get("chunk_index", -1),
+            "page": c.metadata.get("page_num", 0),
+            "section": c.metadata.get("section", "unknown"),
+            "section_confidence": c.metadata.get("section_confidence", 1.0),
+            "is_center": c.metadata.get("chunk_index", -1) == matching_chunk_idx,
+            **({} if include_merged else {"text": c.text}),
+        }
+        for c in context_chunks
+    ]
 
     return {
         "doc_id": doc_id,
@@ -163,15 +185,6 @@ def _get_table_reference_context(
         "section_confidence": center_chunk.metadata.get("section_confidence", 1.0),
         "center_chunk_index": matching_chunk_idx,
         "window": window,
-        "passages": [
-            {
-                "chunk_index": c.metadata["chunk_index"],
-                "page": c.metadata["page_num"],
-                "section": c.metadata.get("section", "unknown"),
-                "text": c.text,
-                "is_center": c.metadata["chunk_index"] == matching_chunk_idx,
-            }
-            for c in context_chunks
-        ],
-        "merged_text": "\n\n".join(c.text for c in context_chunks),
+        "passages": passages,
+        **({"merged_text": "\n\n".join(c.text for c in context_chunks)} if include_merged else {}),
     }

@@ -1,0 +1,11 @@
+{
+  "name": "zotpilot-gen-icons",
+  "version": "1.0.0",
+  "description": "Icon generation script for ZotPilot Connector",
+  "scripts": {
+    "generate": "node generate.js"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
+}

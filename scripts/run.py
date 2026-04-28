@@ -9,7 +9,6 @@ Usage by AI agent (via SKILL.md):
 
 Windows note: use 'python' instead of 'python3' if python3 is not in PATH.
 """
-import argparse
 import shutil
 import subprocess
 import sys
@@ -65,7 +64,8 @@ def _find_zotpilot_after_pip() -> list[str] | None:
     if user_bin.exists():
         return [str(user_bin)]
     # Windows pip --user installs to %APPDATA%\Python\PythonXYY\Scripts\
-    import os as _os, platform as _plt
+    import os as _os
+    import platform as _plt
     if _plt.system() == "Windows":
         appdata = _os.environ.get("APPDATA", "")
         if appdata:
@@ -208,49 +208,25 @@ def _ensure_zotpilot(uv: str) -> list[str] | None:
 
 
 def _handle_register(argv: list[str]) -> int:
-    """Handle the 'register' subcommand for cross-platform MCP registration."""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "platforms", Path(__file__).resolve().parent / "platforms.py"
-    )
-    if spec is None or spec.loader is None:
-        print("ERROR: platforms.py not found in scripts/", file=sys.stderr)
-        return 1
-    platforms_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(platforms_mod)
-    register = platforms_mod.register
-    PLATFORMS = platforms_mod.PLATFORMS
-
-    parser = argparse.ArgumentParser(
-        prog="run.py register",
-        description="Register ZotPilot MCP server on AI agent platforms.",
-    )
-    parser.add_argument(
-        "--platform", action="append", dest="platforms",
-        choices=list(PLATFORMS.keys()),
-        help="Platform to register on (repeatable). Auto-detects if omitted.",
-    )
-    parser.add_argument("--gemini-key", help="Gemini API key for embeddings")
-    parser.add_argument("--dashscope-key", help="DashScope API key for embeddings")
-    parser.add_argument("--zotero-api-key", help="Zotero Web API key (for write ops)")
-    parser.add_argument("--zotero-user-id", help="Zotero numeric user ID (for write ops)")
-    args = parser.parse_args(argv)
-
-    results = register(
-        platforms=args.platforms,
-        gemini_key=args.gemini_key,
-        dashscope_key=args.dashscope_key,
-        zotero_api_key=args.zotero_api_key,
-        zotero_user_id=args.zotero_user_id,
-    )
-    return 0 if results and all(results.values()) else 1
+    """Ensure CLI exists, then delegate to `zotpilot register`."""
+    uv = _ensure_uv()
+    pip_cmd = _ensure_zotpilot(uv)
+    if pip_cmd is None:
+        subprocess.run(
+            _uv_args(uv) + ["tool", "install", "--reinstall", str(SKILL_DIR)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if pip_cmd is not None:
+        return subprocess.run(pip_cmd + ["register", *argv]).returncode
+    return subprocess.run(_uv_args(uv) + ["tool", "run", "zotpilot", "register", *argv]).returncode
 
 
 def main():
     args = sys.argv[1:]
 
-    # Intercept 'register' before uv check — register only edits JSON config files,
-    # it does not need uv or the zotpilot CLI to be installed.
+    # Intercept 'register' before the general delegation path so it can bootstrap the CLI first.
     if args and args[0] == "register":
         sys.exit(_handle_register(args[1:]))
 

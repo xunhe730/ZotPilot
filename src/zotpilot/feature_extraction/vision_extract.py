@@ -466,6 +466,7 @@ Empty string if none.
 percentages. Omit or set to `[0, 0, 100, 100]` when `needed` is false.\
 """
 
+VISION_COMPACT_SYSTEM = _PROMPT_BODY
 VISION_FIRST_SYSTEM = _PROMPT_BODY + "\n\n" + EXTRACTION_EXAMPLES
 
 

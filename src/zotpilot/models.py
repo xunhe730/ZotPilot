@@ -34,6 +34,7 @@ class ZoteroItem:
     doi: str = ""             # Digital Object Identifier
     tags: str = ""            # Semicolon-separated Zotero tags
     collections: str = ""     # Semicolon-separated collection names
+    date_added: str = ""      # ISO 8601 datetime when item was added to Zotero
 
 
 # =============================================================================

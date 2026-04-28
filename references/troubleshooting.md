@@ -8,11 +8,11 @@
 | `uv: command not found` | uv not installed | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | status shows `config_exists: false` | Never ran setup | `zotpilot setup --non-interactive` |
 | status shows `zotero_dir_valid: false` | Wrong Zotero path | `zotpilot setup --non-interactive --zotero-dir /correct/path` |
-| `GEMINI_API_KEY not set` | Missing API key | Set env var: `export GEMINI_API_KEY=...` Get key at https://aistudio.google.com/apikey |
+| `GEMINI_API_KEY not set` | Missing API key | `zotpilot config set gemini_api_key <key>` or rerun `zotpilot setup` |
 | `DASHSCOPE_API_KEY not set` | Missing API key | Set env var: `export DASHSCOPE_API_KEY=...` Get key at https://bailian.console.aliyun.com/ |
 | `index_ready: false, doc_count: 0` | Never indexed | `zotpilot index` (full) or `zotpilot index --limit 10` (test) |
 | Search returns empty results | Query too specific or index empty | Check `get_index_stats`. Try broader query or `search_boolean` |
-| `ZOTERO_API_KEY not set` | Write operation without credentials | See "Enable Write Operations" below |
+| `ZOTERO_API_KEY not set` | Write operation without credentials | `zotpilot config set zotero_api_key <key>` then `zotpilot register` |
 | `Document has no DOI` | Paper missing DOI in Zotero | Cannot use citation tools — add DOI in Zotero first |
 | MCP tools not available | MCP not registered | See "MCP Registration by Platform" below |
 | Indexing fails on specific PDFs | Corrupted or scanned PDF | Try `--no-vision` flag, or use `--item-key` to skip |
@@ -62,8 +62,8 @@
 # Without env vars (local embeddings)
 claude mcp add -s user zotpilot -- zotpilot
 
-# With Gemini API key
-claude mcp add -s user -e GEMINI_API_KEY=<key> zotpilot -- zotpilot
+# Current model
+claude mcp add -s user zotpilot -- zotpilot mcp serve
 
 # Verify
 claude mcp list
@@ -73,39 +73,29 @@ If tools still not showing, restart Claude Code or run `/mcp`.
 
 ### OpenCode
 
-```bash
-opencode mcp add
-# Follow prompts: name=zotpilot, command=zotpilot, transport=stdio
+Edit `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "experimental": {
+    "mcp_timeout": 600000
+  },
+  "mcp": {
+    "zotpilot": {
+      "type": "local",
+      "command": ["zotpilot", "mcp", "serve"]
+    }
+  }
+}
 ```
 
-### OpenClaw
+> **`experimental.mcp_timeout`（重要）：** OpenCode 的 per-server `timeout` 只控制工具发现（`listTools`），不控制 tool call 执行。ZotPilot 的索引和批量操作可能超过默认 30 秒超时，导致 `MCP Error -32001: Request Timeout`。设 `600000`（10 分钟）可避免此问题。
 
-1. Install MCP bridge plugin:
-   ```bash
-   openclaw plugins install @aiwerk/openclaw-mcp-bridge
-   ```
-2. Edit `~/.openclaw/openclaw.json`:
-   ```json
-   {
-     "plugins": {
-       "entries": {
-         "openclaw-mcp-bridge": {
-           "config": {
-             "servers": {
-               "zotpilot": {
-                 "transport": "stdio",
-                 "command": "zotpilot",
-                 "args": [],
-                 "env": { "GEMINI_API_KEY": "${GEMINI_API_KEY}" }
-               }
-             }
-           }
-         }
-       }
-     }
-   }
-   ```
-3. Restart: `openclaw gateway restart`
+### Unsupported clients
+
+OpenClaw, Gemini CLI, Cursor, and Windsurf are not first-class supported
+targets in the current runtime reconciler. Do not follow older guidance that
+suggests `zotpilot register` will manage them.
 
 ## Enable Write Operations
 
@@ -119,10 +109,12 @@ Tag and collection management requires Zotero Web API credentials:
 **Claude Code:**
 ```bash
 claude mcp remove zotpilot
-claude mcp add -s user -e GEMINI_API_KEY=<key> -e ZOTERO_API_KEY=<key> -e ZOTERO_USER_ID=<id> zotpilot -- zotpilot
+zotpilot config set zotero_user_id <id>
+zotpilot config set zotero_api_key <key>
+zotpilot register
 ```
 
-**OpenCode / OpenClaw:** Add the env vars to the existing MCP config.
+**OpenCode / OpenClaw:** Re-run `zotpilot register` after configuring credentials in ZotPilot; do not manually embed secrets into the client config.
 
 5. Restart your AI agent.
 

@@ -1,8 +1,7 @@
 """Tests for search tool functions."""
+from unittest.mock import MagicMock, patch
+
 import pytest
-from types import SimpleNamespace
-from unittest.mock import patch, MagicMock
-from dataclasses import replace
 
 from zotpilot.models import RetrievalResult, ZoteroItem
 
@@ -36,6 +35,14 @@ def _make_config():
     return cfg
 
 
+def _pdf_item(key: str):
+    item = MagicMock()
+    item.item_key = key
+    item.pdf_path = MagicMock()
+    item.pdf_path.exists.return_value = True
+    return item
+
+
 @pytest.fixture
 def mock_singletons():
     """Patch all state singletons for search tool tests."""
@@ -47,8 +54,14 @@ def mock_singletons():
     with patch("zotpilot.tools.search._get_retriever", return_value=retriever), \
          patch("zotpilot.tools.search._get_reranker", return_value=reranker), \
          patch("zotpilot.tools.search._get_store", return_value=store), \
+         patch("zotpilot.tools.search._get_store_optional", return_value=store), \
          patch("zotpilot.tools.search._get_config", return_value=config), \
          patch("zotpilot.tools.search._get_zotero") as mock_zotero:
+        mock_zotero.return_value.get_all_items_with_pdfs.return_value = [
+            _pdf_item("DOC1"),
+            _pdf_item("A"),
+            _pdf_item("B"),
+        ]
         yield {
             "retriever": retriever,
             "reranker": reranker,
@@ -68,8 +81,14 @@ class TestSearchPapers:
         output = search_papers(query="test query", top_k=5)
         assert len(output) == 1
         assert output[0]["doc_id"] == "DOC1"
-        assert output[0]["item_key"] == "DOC1"
         assert output[0]["passage"] == "some text"
+        assert "authors" not in output[0]
+        mock_singletons["retriever"].search.assert_called_once_with(
+            query="test query",
+            top_k=15,
+            context_window=0,
+            filters=None,
+        )
 
     def test_invalid_chunk_types_raises(self, mock_singletons):
         from zotpilot.tools.search import search_papers
@@ -83,6 +102,23 @@ class TestSearchPapers:
         output = search_papers(query="test")
         assert output == []
 
+    def test_filters_orphaned_doc_ids(self, mock_singletons):
+        from zotpilot.tools.search import search_papers
+
+        current = MagicMock()
+        current.item_key = "DOC1"
+        current.pdf_path = MagicMock()
+        current.pdf_path.exists.return_value = True
+        mock_singletons["zotero"].return_value.get_all_items_with_pdfs.return_value = [current]
+
+        results = [_make_rr(doc_id="ORPHAN", score=0.95), _make_rr(doc_id="DOC1", score=0.90)]
+        mock_singletons["retriever"].search.return_value = results
+        mock_singletons["reranker"].rerank.side_effect = lambda rows, *_args, **_kwargs: rows
+
+        output = search_papers(query="test query", top_k=5)
+
+        assert [row["doc_id"] for row in output] == ["DOC1"]
+
 
 class TestSearchTopic:
     def test_happy_path(self, mock_singletons):
@@ -93,7 +129,16 @@ class TestSearchTopic:
 
         output = search_topic(query="neural networks", num_papers=5)
         assert len(output) == 2
-        assert output[0]["item_key"] == output[0]["doc_id"]
+        assert "item_key" not in output[0]
+        assert "best_passage" not in output[0]
+        assert "best_passage_chunk_index" in output[0]
+        assert "best_passage_context" not in output[0]
+        mock_singletons["retriever"].search.assert_called_once_with(
+            query="neural networks",
+            top_k=50,
+            context_window=0,
+            filters=None,
+        )
 
     def test_invalid_chunk_types_raises(self, mock_singletons):
         from zotpilot.tools.search import search_topic
@@ -116,8 +161,8 @@ class TestSearchBoolean:
 
         output = search_boolean(query="test words")
         assert len(output) == 1
-        assert output[0]["item_key"] == "KEY1"
         assert output[0]["doc_id"] == "KEY1"
+        assert "item_key" not in output[0]
 
     def test_empty_query(self, mock_singletons):
         from zotpilot.tools.search import search_boolean

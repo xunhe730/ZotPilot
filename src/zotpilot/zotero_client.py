@@ -1,4 +1,5 @@
 """Zotero SQLite database client."""
+import re
 import sqlite3
 from html.parser import HTMLParser
 from pathlib import Path
@@ -33,6 +34,28 @@ def _sqlite_uri(path: Path) -> str:
     On Unix, it produces 'file:///home/...' which also works.
     """
     return path.as_uri() + "?mode=ro&immutable=1"
+
+
+def _normalize_doi_text(doi: str | None) -> str | None:
+    """Normalize stored DOI text for exact lookups."""
+    if not doi:
+        return None
+    cleaned = doi.strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if cleaned.startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+    return cleaned or None
+
+
+def _normalize_arxiv_id_text(arxiv_id: str | None) -> str | None:
+    """Normalize an arXiv ID for extra-field lookups."""
+    if not arxiv_id:
+        return None
+    cleaned = arxiv_id.strip()
+    if cleaned.lower().startswith("arxiv:"):
+        cleaned = cleaned.split(":", 1)[1].strip()
+    cleaned = re.sub(r"v\d+$", "", cleaned, flags=re.IGNORECASE)
+    return cleaned or None
 
 
 class ZoteroClient:
@@ -362,7 +385,7 @@ class ZoteroClient:
     SINGLE_ITEM_SQL = """
     WITH
         base_items AS (
-            SELECT items.itemID, items."key" AS itemKey, items.itemTypeID
+            SELECT items.itemID, items."key" AS itemKey, items.itemTypeID, items.dateAdded
             FROM items
             WHERE items.itemTypeID NOT IN (1, 14)
               AND items.itemID NOT IN (SELECT itemID FROM deletedItems)
@@ -460,7 +483,8 @@ class ZoteroClient:
         COALESCE(item_collections.collection_names, '') AS collections,
         pdfs.attachmentKey,
         pdfs.linkMode,
-        pdfs.path
+        pdfs.path,
+        base_items.dateAdded
     FROM base_items
     LEFT JOIN titles ON base_items.itemID = titles.itemID
     LEFT JOIN years ON base_items.itemID = years.itemID
@@ -522,6 +546,7 @@ class ZoteroClient:
             doi=row["doi"],
             tags=row["tags"],
             collections=row["collections"],
+            date_added=row["dateAdded"] if "dateAdded" in row.keys() else "",
         )
 
     def get_item(self, item_key: str) -> ZoteroItem | None:
@@ -539,6 +564,68 @@ class ZoteroClient:
 
         citation_keys = self._load_citation_keys()
         return self._row_to_item(row, citation_keys)
+
+    def get_item_key_by_doi(self, doi: str | None) -> str | None:
+        """Return the first non-deleted top-level item key matching a DOI."""
+        normalized = _normalize_doi_text(doi)
+        if not normalized:
+            return None
+
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        try:
+            row = conn.execute(
+                """
+                SELECT i.key
+                FROM items i
+                JOIN itemData id ON id.itemID = i.itemID
+                JOIN itemDataValues idv ON idv.valueID = id.valueID
+                JOIN fields f ON f.fieldID = id.fieldID
+                WHERE f.fieldName = 'DOI'
+                  AND replace(
+                        replace(
+                            replace(lower(trim(idv.value)), 'https://doi.org/', ''),
+                            'http://doi.org/', ''
+                        ),
+                        'doi:', ''
+                      ) = ?
+                  AND i.itemTypeID NOT IN (1, 14)
+                  AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                  AND i.libraryID = ?
+                LIMIT 1
+                """,
+                (normalized, self.library_id),
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def get_item_key_by_arxiv_id(self, arxiv_id: str | None) -> str | None:
+        """Return the first non-deleted top-level item key whose extra field mentions an arXiv ID."""
+        normalized = _normalize_arxiv_id_text(arxiv_id)
+        if not normalized:
+            return None
+
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        try:
+            row = conn.execute(
+                """
+                SELECT i.key
+                FROM items i
+                JOIN itemData id ON id.itemID = i.itemID
+                JOIN itemDataValues idv ON idv.valueID = id.valueID
+                JOIN fields f ON f.fieldID = id.fieldID
+                WHERE f.fieldName = 'extra'
+                  AND lower(idv.value) LIKE ?
+                  AND i.itemTypeID NOT IN (1, 14)
+                  AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                  AND i.libraryID = ?
+                LIMIT 1
+                """,
+                (f"%arxiv:{normalized.lower()}%", self.library_id),
+            ).fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
 
     def get_notes(self, item_key: str | None = None, query: str | None = None, limit: int = 20) -> list[dict]:
         """Get notes, optionally filtered by parent item or content search."""
@@ -770,6 +857,24 @@ class ZoteroClient:
                 ORDER BY count DESC, tags.name
             """, (self.library_id,)).fetchall()
             return [{"name": r["name"], "count": r["count"]} for r in rows]
+        finally:
+            conn.close()
+
+    def get_item_collections(self, item_key: str) -> list[dict]:
+        """Get collections containing an item."""
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("""
+                SELECT c.key, c.collectionName AS name
+                FROM items i
+                JOIN collectionItems ci ON i.itemID = ci.itemID
+                JOIN collections c ON ci.collectionID = c.collectionID
+                WHERE i.key = ?
+                  AND i.libraryID = ?
+                ORDER BY c.collectionName
+            """, (item_key, self.library_id)).fetchall()
+            return [{"key": row["key"], "name": row["name"]} for row in rows]
         finally:
             conn.close()
 
@@ -1081,13 +1186,13 @@ class ZoteroClient:
         col = col_map[field]
 
         if op == "contains":
-            return f"{col} LIKE ?", [f"%{value}%"]
+            return f"LOWER({col}) LIKE LOWER(?)", [f"%{value}%"]
         elif op == "is":
-            return f"{col} = ?", [value]
+            return f"LOWER({col}) = LOWER(?)", [value]
         elif op == "isNot":
-            return f"({col} IS NULL OR {col} != ?)", [value]
+            return f"({col} IS NULL OR LOWER({col}) != LOWER(?))", [value]
         elif op == "beginsWith":
-            return f"{col} LIKE ?", [f"{value}%"]
+            return f"LOWER({col}) LIKE LOWER(?)", [f"{value}%"]
         elif op == "gt":
             return f"{col} > ?", [value]
         elif op == "lt":

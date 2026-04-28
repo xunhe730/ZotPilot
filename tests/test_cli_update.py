@@ -10,18 +10,17 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from zotpilot.cli import (
+from zotpilot import __version__
+from zotpilot._platforms import (
     SkillDir,
     _detect_cli_installer,
     _get_current_version,
     _get_latest_pypi_version,
     _get_skill_dirs,
-    _is_zotpilot_skill_repo,
     _uv_bin_dir,
-    cmd_update,
+    deploy_skills,
 )
+from zotpilot.cli import cmd_update
 
 
 def _make_args(**kwargs):
@@ -31,14 +30,11 @@ def _make_args(**kwargs):
     return argparse.Namespace(**defaults)
 
 
-def _make_skill_dir(tmp_path: Path, name: str = "zotpilot") -> Path:
+def _make_skill_dir(tmp_path: Path, name: str = "ztp-research") -> Path:
     """Create a minimal valid skill directory structure."""
     skill_dir = tmp_path / name
     skill_dir.mkdir(exist_ok=True)
-    (skill_dir / ".git").mkdir(exist_ok=True)
-    (skill_dir / "scripts").mkdir(exist_ok=True)
-    (skill_dir / "scripts" / "run.py").touch()
-    (skill_dir / "SKILL.md").write_text("---\nname: zotpilot\n---\n")
+    (skill_dir / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
     return skill_dir
 
 
@@ -50,7 +46,7 @@ def _make_skill_dir(tmp_path: Path, name: str = "zotpilot") -> Path:
 class TestUvBinDir:
     def test_uv_bin_dir_failure_returns_none(self):
         """subprocess raises → None."""
-        with patch("zotpilot.cli.subprocess.run", side_effect=Exception("no uv")):
+        with patch("zotpilot._platforms.subprocess.run", side_effect=Exception("no uv")):
             assert _uv_bin_dir(["uv"]) is None
 
     def test_uv_bin_dir_nonzero_returns_none(self):
@@ -58,7 +54,7 @@ class TestUvBinDir:
         mock_result = MagicMock()
         mock_result.returncode = 1
         mock_result.stdout = ""
-        with patch("zotpilot.cli.subprocess.run", return_value=mock_result):
+        with patch("zotpilot._platforms.subprocess.run", return_value=mock_result):
             assert _uv_bin_dir(["uv"]) is None
 
     def test_uv_bin_dir_empty_stdout_returns_none(self):
@@ -66,7 +62,7 @@ class TestUvBinDir:
         mock_result = MagicMock()
         mock_result.returncode = 0
         mock_result.stdout = "   "
-        with patch("zotpilot.cli.subprocess.run", return_value=mock_result):
+        with patch("zotpilot._platforms.subprocess.run", return_value=mock_result):
             assert _uv_bin_dir(["uv"]) is None
 
 
@@ -91,7 +87,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = None  # no direct_url.json
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=None):
+             patch("zotpilot._platforms._uv_bin_dir", return_value=None):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "pip"
         assert uv_cmd is None
@@ -116,7 +112,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = None
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=str(bin_dir / "uv")), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=bin_dir.resolve()), \
+             patch("zotpilot._platforms._uv_bin_dir", return_value=bin_dir.resolve()), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"
@@ -140,7 +136,7 @@ class TestDetectCliInstaller:
 
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", side_effect=fake_uv_bin_dir), \
+             patch("zotpilot._platforms._uv_bin_dir", side_effect=fake_uv_bin_dir), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"
@@ -152,7 +148,7 @@ class TestDetectCliInstaller:
         mock_dist.read_text.return_value = "not valid json {"
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value=None), \
-             patch("zotpilot.cli._uv_bin_dir", return_value=None):
+             patch("zotpilot._platforms._uv_bin_dir", return_value=None):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "unknown"
         assert uv_cmd is None
@@ -177,7 +173,7 @@ class TestDetectCliInstaller:
 
         with patch("importlib.metadata.distribution", return_value=mock_dist), \
              patch("shutil.which", return_value="/usr/local/bin/uv"), \
-             patch("zotpilot.cli._uv_bin_dir", side_effect=fake_uv_bin_dir), \
+             patch("zotpilot._platforms._uv_bin_dir", side_effect=fake_uv_bin_dir), \
              patch.object(sys, "argv", [str(fake_exe)]):
             installer, uv_cmd = _detect_cli_installer()
         assert installer == "uv"
@@ -195,7 +191,7 @@ class TestGetVersion:
         with patch("importlib.metadata.version", side_effect=Exception("not found")):
             version = _get_current_version()
         # Falls back to zotpilot.__version__
-        assert version == "0.3.1"
+        assert version == __version__
 
 
 # ---------------------------------------------------------------------------
@@ -216,33 +212,6 @@ class TestGetLatestPypi:
 # ---------------------------------------------------------------------------
 # TestIsZotpilotSkillRepo
 # ---------------------------------------------------------------------------
-
-
-class TestIsZotpilotSkillRepo:
-    def test_skill_identity_check_no_skill_md(self, tmp_path):
-        """No SKILL.md → False."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_skill_identity_check_wrong_skill_name(self, tmp_path):
-        """SKILL.md with name: other → False."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        (tmp_path / "SKILL.md").write_text("---\nname: other-tool\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_skill_identity_check_missing_signature_file(self, tmp_path):
-        """SKILL.md with name: zotpilot but no scripts/run.py → False."""
-        (tmp_path / "SKILL.md").write_text("---\nname: zotpilot\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_valid_skill_repo_returns_true(self, tmp_path):
-        """Valid SKILL.md + scripts/run.py → True."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        (tmp_path / "SKILL.md").write_text("---\nname: zotpilot\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +235,7 @@ class TestGetSkillDirs:
         """Derives dirs from PLATFORMS, not a hardcoded list."""
         fake_skills = tmp_path / "skills"
         fake_skills.mkdir()
-        skill_path = fake_skills / "zotpilot"
+        skill_path = fake_skills / "ztp-research"
         skill_path.mkdir()
         fake_platforms = {
             "test-platform": {"tier": 1, "skills_dir": str(fake_skills)},
@@ -286,9 +255,9 @@ class TestGetSkillDirs:
         a_skills.mkdir()
         b_skills.mkdir()
 
-        real_skill = a_skills / "zotpilot"
+        real_skill = a_skills / "ztp-research"
         real_skill.mkdir()
-        sym_skill = b_skills / "zotpilot"
+        sym_skill = b_skills / "ztp-research"
         os.symlink(real_skill, sym_skill)
 
         fake_platforms = {
@@ -314,7 +283,7 @@ class TestGetSkillDirs:
         """Broken symlink included in results with is_broken_symlink=True."""
         skills_dir = tmp_path / "skills"
         skills_dir.mkdir()
-        zotpilot_sym = skills_dir / "zotpilot"
+        zotpilot_sym = skills_dir / "ztp-research"
         os.symlink(tmp_path / "nonexistent_target", zotpilot_sym)
 
         fake_platforms = {
@@ -330,6 +299,78 @@ class TestGetSkillDirs:
         assert result[0].is_broken_symlink is True
         assert result[0].is_symlink is True
         assert result[0].is_duplicate is False
+
+
+class TestDeploySkills:
+    def _patch_platforms(self, fake_platforms: dict):
+        import zotpilot._platforms as _plat_mod
+
+        orig = _plat_mod.PLATFORMS
+        _plat_mod.PLATFORMS = fake_platforms
+        return orig
+
+    def _restore_platforms(self, orig):
+        import zotpilot._platforms as _plat_mod
+
+        _plat_mod.PLATFORMS = orig
+
+    def test_codex_uses_flat_one_directory_per_skill_layout(self, tmp_path):
+        skills_root = tmp_path / "skills"
+        source = tmp_path / "source"
+        skills_root.mkdir()
+        source.mkdir()
+        (source / "ztp-research.md").write_text("---\nname: ztp-research\n---\n")
+        (source / "ztp-setup.md").write_text("---\nname: ztp-setup\n---\n")
+
+        fake_platforms = {
+            "codex": {
+                "tier": 1,
+                "binary": "codex",
+                "label": "Codex CLI",
+                "skills_dir": str(skills_root),
+                "skill_layout": "flat",
+            },
+        }
+        orig = self._patch_platforms(fake_platforms)
+        try:
+            with patch("zotpilot._platforms._skill_source_files", return_value=sorted(source.glob("*.md"))):
+                result = deploy_skills(platforms=["codex"])
+        finally:
+            self._restore_platforms(orig)
+
+        assert result == {"codex": True}
+        assert (skills_root / "ztp-research" / "SKILL.md").exists()
+        assert (skills_root / "ztp-setup" / "SKILL.md").exists()
+        assert not (skills_root / "ztp-research" / "ztp-setup.md").exists()
+
+    def test_redeploys_when_skill_content_changes_without_version_bump(self, tmp_path):
+        skills_root = tmp_path / "skills"
+        source = tmp_path / "source"
+        skills_root.mkdir()
+        source.mkdir()
+        skill_file = source / "ztp-research.md"
+        skill_file.write_text("---\nname: ztp-research\n---\nold\n")
+
+        fake_platforms = {
+            "codex": {
+                "tier": 1,
+                "binary": "codex",
+                "label": "Codex CLI",
+                "skills_dir": str(skills_root),
+            },
+        }
+        orig = self._patch_platforms(fake_platforms)
+        try:
+            with patch("zotpilot._platforms._skill_source_files", return_value=[skill_file]):
+                assert deploy_skills(platforms=["codex"]) == {"codex": True}
+                deployed = skills_root / "ztp-research" / "SKILL.md"
+                assert deployed.read_text() == "---\nname: ztp-research\n---\nold\n"
+
+                skill_file.write_text("---\nname: ztp-research\n---\nnew\n")
+                assert deploy_skills(platforms=["codex"]) == {"codex": True}
+                assert deployed.read_text() == "---\nname: ztp-research\n---\nnew\n"
+        finally:
+            self._restore_platforms(orig)
 
 
 # ---------------------------------------------------------------------------
@@ -427,57 +468,48 @@ class TestCmdUpdate:
         out = capsys.readouterr().out
         assert "not found" in out.lower() or "manually" in out.lower()
 
-    def test_git_not_in_path_exits_1(self, tmp_path, capsys):
-        """git status raises FileNotFoundError → caught, manual cmd printed, return 1."""
+    def test_skill_only_editable_warns_instead_of_running_git(self, tmp_path, capsys):
+        """Editable installs skip code upgrade but still reconcile runtime."""
         args = _make_args(skill_only=True)
         skill_dir = _make_skill_dir(tmp_path)
         sd = SkillDir(path=skill_dir, is_symlink=False, is_broken_symlink=False, is_duplicate=False)
 
-        def fake_run(cmd, **kwargs):
-            raise FileNotFoundError("git not found")
-
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._get_skill_dirs", return_value=[sd]), \
-             patch("zotpilot.cli.subprocess.run", side_effect=fake_run):
+             patch("zotpilot.cli._detect_cli_installer", return_value=("editable", None)), \
+             patch(
+                 "zotpilot.cli._deployment_status",
+                 return_value={"drift_state": "needs-sync", "legacy_embedded_secrets_detected": False},
+             ), \
+             patch("zotpilot.cli.resolve_runtime_config", return_value=MagicMock()), \
+             patch("zotpilot._platforms.register", return_value={"codex": True}) as mock_register, \
+             patch("zotpilot.cli.subprocess.run") as mock_run:
             result = cmd_update(args)
-        assert result == 1
-        out = capsys.readouterr().out
-        assert "git" in out.lower()
 
-    def test_git_pull_nonzero_exits_1(self, tmp_path, capsys):
-        """git pull returns non-zero → stderr printed, return 1."""
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "code update remains manual" in out
+        mock_register.assert_called_once()
+        mock_run.assert_not_called()
+
+    def test_skill_only_noneditable_uses_reconcile_runtime(self, capsys):
+        """Non-editable installs reconcile runtime during update."""
         args = _make_args(skill_only=True)
-        skill_dir = _make_skill_dir(tmp_path)
-        sd = SkillDir(path=skill_dir, is_symlink=False, is_broken_symlink=False, is_duplicate=False)
-
-        def fake_run(cmd, **kwargs):
-            r = MagicMock()
-            if "remote" in cmd:
-                r.returncode = 1
-                r.stdout = ""
-                return r
-            if "status" in cmd:
-                r.returncode = 0
-                r.stdout = ""
-                return r
-            if "pull" in cmd:
-                r.returncode = 1
-                r.stderr = "merge conflict detected"
-                return r
-            r.returncode = 0
-            r.stdout = ""
-            r.stderr = ""
-            return r
 
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
-             patch("zotpilot.cli._get_skill_dirs", return_value=[sd]), \
-             patch("zotpilot.cli.subprocess.run", side_effect=fake_run):
+             patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
+             patch(
+                 "zotpilot.cli._deployment_status",
+                 return_value={"drift_state": "needs-sync", "legacy_embedded_secrets_detected": False},
+             ), \
+             patch("zotpilot.cli.resolve_runtime_config", return_value=MagicMock()), \
+             patch("zotpilot._platforms.register", return_value={"codex": True}) as mock_register:
             result = cmd_update(args)
-        assert result == 1
-        out = capsys.readouterr().out
-        assert "merge conflict detected" in out
+
+        assert result == 0
+        mock_register.assert_called_once()
 
     def test_symlink_skill_dir_skipped(self, tmp_path, capsys):
         """skill dir is_symlink=True → git pull not called."""
@@ -552,66 +584,34 @@ class TestCmdUpdate:
         pull_calls = [c for c in mock_run.call_args_list if "pull" in (c[0][0] if c[0] else [])]
         assert len(pull_calls) == 0
 
-    def test_skill_remote_mismatch_warns_but_does_not_skip(self, tmp_path, capsys):
-        """Non-canonical remote URL → warning logged but git pull still called."""
-        args = _make_args(skill_only=True)
-        skill_dir = _make_skill_dir(tmp_path)
-        sd = SkillDir(path=skill_dir, is_symlink=False, is_broken_symlink=False, is_duplicate=False)
-
-        def fake_run(cmd, **kwargs):
-            r = MagicMock()
-            if "remote" in cmd and "get-url" in cmd:
-                r.returncode = 0
-                r.stdout = "https://example.com/someone-else/fork.git"
-                return r
-            if "status" in cmd:
-                r.returncode = 0
-                r.stdout = ""
-                return r
-            if "pull" in cmd:
-                r.returncode = 0
-                r.stdout = "Already up to date."
-                r.stderr = ""
-                return r
-            r.returncode = 0
-            r.stdout = ""
-            return r
+    def test_skill_update_dry_run_reports_packaged_deploy(self, capsys):
+        """Dry-run reports runtime drift instead of mutating."""
+        args = _make_args(skill_only=True, dry_run=True)
 
         with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
-             patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
-             patch("zotpilot.cli._get_skill_dirs", return_value=[sd]), \
-             patch("zotpilot.cli.subprocess.run", side_effect=fake_run) as mock_run:
-            result = cmd_update(args)
-
-        pull_calls = [c for c in mock_run.call_args_list if "pull" in (c[0][0] if c[0] else [])]
-        assert len(pull_calls) == 1  # pull WAS called despite URL mismatch
-        out = capsys.readouterr().out
-        assert "Note:" in out or "does not look" in out
-
-    def test_broken_symlink_distinct_from_valid_symlink(self, tmp_path, capsys):
-        """Broken symlink prints 'target missing'; valid symlink prints 'update the source repo'."""
-        args = _make_args(skill_only=True)
-        real_target = tmp_path / "real_target"
-        real_target.mkdir()
-
-        valid_sym = tmp_path / "valid_sym"
-        os.symlink(real_target, valid_sym)
-
-        broken_sym = tmp_path / "broken_sym"
-        os.symlink(tmp_path / "nonexistent", broken_sym)
-
-        sd_valid = SkillDir(path=valid_sym, is_symlink=True, is_broken_symlink=False, is_duplicate=False)
-        sd_broken = SkillDir(path=broken_sym, is_symlink=True, is_broken_symlink=True, is_duplicate=False)
-
-        with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
-             patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
-             patch("zotpilot.cli._get_skill_dirs", return_value=[sd_valid, sd_broken]), \
-             patch("zotpilot.cli.subprocess.run"):
+             patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime") as mock_reconcile:
+            mock_reconcile.return_value.changes.drift_state = "needs-sync"
+            mock_reconcile.return_value.changes.reasons = {"codex": ["skills-out-of-sync"]}
             cmd_update(args)
 
         out = capsys.readouterr().out
-        assert "target missing" in out
-        assert "update the source repo" in out
+        assert "Drift: needs-sync" in out
+
+    def test_skill_update_deploy_failure_returns_1(self, capsys):
+        """Reconcile failures fail the update command."""
+        args = _make_args(skill_only=True)
+
+        with patch("zotpilot.cli._get_current_version", return_value="0.2.0"), \
+             patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
+             patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
+             patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
+             patch("zotpilot._platforms.reconcile_runtime", side_effect=RuntimeError("boom")):
+            with patch("zotpilot.cli.subprocess.run"):
+                result = cmd_update(args)
+
+        assert result == 1
 
 
 # ---------------------------------------------------------------------------

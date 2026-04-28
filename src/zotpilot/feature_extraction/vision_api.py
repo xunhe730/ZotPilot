@@ -14,10 +14,15 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
 import pymupdf
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
 from .vision_extract import (
+    VISION_COMPACT_SYSTEM,
     VISION_FIRST_SYSTEM,
     AgentResponse,
     build_common_ctx,
@@ -73,6 +78,8 @@ _PRICING: dict[str, dict[str, float]] = {
         "cache_read": 0.10,
     },
 }
+
+_DEFAULT_VISION_MAX_TOKENS = 1536
 
 
 def _compute_cost(usage: object, model: str) -> float:
@@ -136,6 +143,8 @@ class VisionAPI:
         model: str = "claude-haiku-4-5-20251001",
         cost_log_path: Path | str = Path("vision_api_costs.json"),
         cache: bool = True,
+        prompt_mode: str = "compact",
+        max_output_tokens: int = _DEFAULT_VISION_MAX_TOKENS,
     ) -> None:
         if anthropic is None:
             raise ImportError("anthropic package required: pip install anthropic")
@@ -144,8 +153,16 @@ class VisionAPI:
         self._model = model
         self._cost_log_path = Path(cost_log_path)
         self._cache = cache
+        self._prompt_mode = prompt_mode
+        self._max_output_tokens = max_output_tokens
         self._session_id = datetime.now(timezone.utc).isoformat()
         self._session_cost = 0.0
+
+    def _system_prompt(self) -> str:
+        """Return the configured system prompt variant."""
+        if self._prompt_mode == "full":
+            return VISION_FIRST_SYSTEM
+        return VISION_COMPACT_SYSTEM
 
     # ------------------------------------------------------------------
     # Public API
@@ -332,7 +349,7 @@ class VisionAPI:
             })
 
         system_blocks: list[dict] = [
-            {"type": "text", "text": VISION_FIRST_SYSTEM},
+            {"type": "text", "text": self._system_prompt()},
         ]
         if self._cache:
             system_blocks[0]["cache_control"] = {"type": "ephemeral"}
@@ -341,7 +358,7 @@ class VisionAPI:
             "custom_id": f"{spec.table_id}__transcriber",
             "params": {
                 "model": self._model,
-                "max_tokens": 4096,
+                "max_tokens": self._max_output_tokens,
                 "system": system_blocks,
                 "messages": [{"role": "user", "content": user_content}],
             },

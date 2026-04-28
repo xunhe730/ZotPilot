@@ -1,9 +1,12 @@
 """Tests for batch write operations (merged batch_tags + batch_collections)."""
-import pytest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from zotpilot.tools.write_ops import (
-    batch_tags, batch_collections, _BATCH_MAX,
+    _BATCH_MAX,
+    batch_collections,
+    batch_tags,
 )
 
 
@@ -14,8 +17,23 @@ def mock_writer():
         yield writer
 
 
+@pytest.fixture
+def mock_zotero():
+    zotero = MagicMock()
+    zotero.get_all_tags.return_value = [
+        {"name": "ml", "count": 3},
+        {"name": "dl", "count": 2},
+        {"name": "nlp", "count": 1},
+        {"name": "old", "count": 1},
+        {"name": "new", "count": 1},
+        {"name": "t", "count": 1},
+    ]
+    with patch("zotpilot.tools.write_ops._get_zotero", return_value=zotero):
+        yield zotero
+
+
 class TestBatchTags:
-    def test_add_happy(self, mock_writer):
+    def test_add_happy(self, mock_writer, mock_zotero):
         items = [
             {"item_key": "A", "tags": ["ml"]},
             {"item_key": "B", "tags": ["dl"]},
@@ -39,7 +57,7 @@ class TestBatchTags:
         assert result["succeeded"] == 1
         mock_writer.remove_item_tags.assert_called_once_with("A", ["old"])
 
-    def test_partial_fail(self, mock_writer):
+    def test_partial_fail(self, mock_writer, mock_zotero):
         mock_writer.add_item_tags.side_effect = [None, Exception("API error")]
         items = [
             {"item_key": "A", "tags": ["ml"]},
@@ -50,18 +68,18 @@ class TestBatchTags:
         assert result["failed"] == 1
         assert result["results"][1]["error"] == "API error"
 
-    def test_empty(self, mock_writer):
+    def test_empty(self, mock_writer, mock_zotero):
         result = batch_tags(action="add", items=[])
         assert result["total"] == 0
         assert result["succeeded"] == 0
 
-    def test_over_limit(self, mock_writer):
+    def test_over_limit(self, mock_writer, mock_zotero):
         from zotpilot.state import ToolError
         items = [{"item_key": f"K{i}", "tags": ["t"]} for i in range(_BATCH_MAX + 1)]
         with pytest.raises(ToolError, match="exceeds limit"):
             batch_tags(action="add", items=items)
 
-    def test_missing_field(self, mock_writer):
+    def test_missing_field(self, mock_writer, mock_zotero):
         items = [{"item_key": "A"}]  # missing tags
         result = batch_tags(action="add", items=items)
         assert result["results"][0]["success"] is False
@@ -90,7 +108,7 @@ class TestBatchCollections:
     def test_add_invalidates_cache(self, mock_writer):
         with patch("zotpilot.tools.write_ops._invalidate_collection_cache") as mock_inv:
             batch_collections(action="add", item_keys=["A"], collection_key="COL1")
-            mock_inv.assert_called_once()
+            assert mock_inv.call_count >= 1  # called per-item via _add_to_collection_impl (add + inbox cleanup)
 
     def test_remove_invalidates_cache(self, mock_writer):
         with patch("zotpilot.tools.write_ops._invalidate_collection_cache") as mock_inv:

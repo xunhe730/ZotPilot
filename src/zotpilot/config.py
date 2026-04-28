@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,8 +69,11 @@ class Config:
     vision_enabled: bool
     vision_model: str
     anthropic_api_key: str | None
+    vision_max_tables_per_run: int | None
+    vision_max_cost_usd: float | None
     # Long document filtering
     max_pages: int  # Maximum PDF pages to index (0 = no limit)
+    preflight_enabled: bool
     # Zotero Web API (for write operations)
     zotero_api_key: str | None
     zotero_user_id: str | None
@@ -79,7 +83,7 @@ class Config:
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
-        """Load config from file and/or environment."""
+        """Load shared config from disk."""
         if path is not None:
             config_path = Path(path).expanduser()
         else:
@@ -119,8 +123,8 @@ class Config:
             embedding_dimensions=data.get("embedding_dimensions", default_dims),
             chunk_size=data.get("chunk_size", 400),
             chunk_overlap=data.get("chunk_overlap", 100),
-            gemini_api_key=os.environ.get("GEMINI_API_KEY") or data.get("gemini_api_key"),
-            dashscope_api_key=os.environ.get("DASHSCOPE_API_KEY") or data.get("dashscope_api_key"),
+            gemini_api_key=data.get("gemini_api_key"),
+            dashscope_api_key=data.get("dashscope_api_key"),
             embedding_provider=data.get("embedding_provider", "gemini"),
             embedding_timeout=data.get("embedding_timeout", 120.0),
             embedding_max_retries=data.get("embedding_max_retries", 3),
@@ -132,27 +136,30 @@ class Config:
             oversample_topic_factor=data.get("oversample_topic_factor", 5),
             stats_sample_limit=data.get("stats_sample_limit", 10000),
             ocr_language=data.get("ocr_language", "eng"),
-            openalex_email=os.environ.get("OPENALEX_EMAIL") or data.get("openalex_email"),
+            openalex_email=data.get("openalex_email"),
             vision_enabled=data.get("vision_enabled", True),
             vision_model=data.get("vision_model", "claude-haiku-4-5-20251001"),
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY") or data.get("anthropic_api_key"),
+            anthropic_api_key=data.get("anthropic_api_key"),
+            vision_max_tables_per_run=data.get("vision_max_tables_per_run"),
+            vision_max_cost_usd=data.get("vision_max_cost_usd"),
             max_pages=data.get("max_pages", 40),
-            zotero_api_key=os.environ.get("ZOTERO_API_KEY") or data.get("zotero_api_key"),
-            zotero_user_id=os.environ.get("ZOTERO_USER_ID") or data.get("zotero_user_id"),
+            preflight_enabled=data.get("preflight_enabled", True),
+            zotero_api_key=data.get("zotero_api_key"),
+            zotero_user_id=data.get("zotero_user_id"),
             zotero_library_type=data.get("zotero_library_type", "user"),
-            semantic_scholar_api_key=os.environ.get("S2_API_KEY") or data.get("semantic_scholar_api_key"),
+            semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
         )
 
     def save(self, path: Path | str | None = None) -> None:
-        """Write the config to JSON."""
+        """Write the config to JSON using an atomic write pattern."""
         if path is not None:
             config_path = Path(path).expanduser()
         else:
             config_path = _default_config_dir() / "config.json"
 
+        # Create parent dirs if missing
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Never persist API keys to disk — they should come from env vars.
         data = {
             "zotero_data_dir": str(self.zotero_data_dir),
             "chroma_db_path": str(self.chroma_db_path),
@@ -174,19 +181,43 @@ class Config:
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
             "vision_model": self.vision_model,
+            "gemini_api_key": self.gemini_api_key,
+            "dashscope_api_key": self.dashscope_api_key,
+            "anthropic_api_key": self.anthropic_api_key,
+            "vision_max_tables_per_run": self.vision_max_tables_per_run,
+            "vision_max_cost_usd": self.vision_max_cost_usd,
             "max_pages": self.max_pages,
+            "preflight_enabled": self.preflight_enabled,
+            "zotero_api_key": self.zotero_api_key,
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
+            "semantic_scholar_api_key": self.semantic_scholar_api_key,
         }
+        data = {key: value for key, value in data.items() if value is not None}
 
-        # Write with restrictive permissions on Unix, normal write on Windows
-        if sys.platform != "win32":
-            fd = os.open(str(config_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
+        # Atomic write: temp file + rename
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(
+                dir=config_path.parent, suffix=".tmp", prefix="zotpilot_"
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
-        else:
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+
+            # Set restrictive permissions on Unix before atomic rename
+            if sys.platform != "win32":
+                os.chmod(tmp_path, 0o600)
+
+            os.replace(tmp_path, config_path)
+            tmp_path = None  # Successfully replaced, no cleanup needed
+        except OSError as e:
+            # Clean up temp file on failure, original config untouched
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise RuntimeError(f"Failed to write config to {config_path}: {e}") from e
 
     def validate(self) -> list[str]:
         """Return list of validation errors, empty if valid."""

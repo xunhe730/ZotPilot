@@ -1,11 +1,10 @@
 """Tests for section heading classification."""
-import pytest
 
+from zotpilot.models import CONFIDENCE_FALLBACK, SectionSpan
 from zotpilot.pdf.section_classifier import (
-    categorize_heading,
     assign_section_with_confidence,
+    categorize_heading,
 )
-from zotpilot.models import SectionSpan, CONFIDENCE_FALLBACK
 
 
 class TestCategorizeHeading:

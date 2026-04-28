@@ -1,0 +1,11 @@
+{
+  "headings": [
+    "## §4 — Search SOP for effective discovery",
+    "### Step 4.1 — Decompose the query into 3-5 precise searches",
+    "### Step 4.2 — Merge client-side",
+    "### Step 4.3 — Report transparently to the user",
+    "### Optional: WebFetch for context gathering",
+    "### When to skip multi-query decomposition"
+  ],
+  "_note": "Known-good baseline extracted from src/zotpilot/skills/ztp-research.md on 2026-04-10. These are the only H2/H3 headings present in the file. P9 drift guard uses this list to detect new control-flow headings added to SKILL prose."
+}

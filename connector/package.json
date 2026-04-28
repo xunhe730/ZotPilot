@@ -1,0 +1,33 @@
+{
+  "name": "zotero-connectors",
+  "version": "0.5.0",
+  "devDependencies": {
+    "@babel/cli": "^7.8.3",
+    "@babel/core": "^7.8.3",
+    "@babel/plugin-proposal-class-properties": "^7.8.3",
+    "@babel/plugin-proposal-object-rest-spread": "^7.8.3",
+    "@babel/plugin-transform-react-jsx": "^7.8.3",
+    "@babel/preset-react": "^7.8.3",
+    "bluebird": "^3.5.3",
+    "chai": "^5.2.0",
+    "dompurify": "^3.2.5",
+    "gulp": "^4.0.2",
+    "gulp-concat": "^2.6.1",
+    "gulp-plumber": "^1.2.1",
+    "merge-stream": "^2.0.0",
+    "mocha": "^11.2.2",
+    "prop-types": "^15.6.2",
+    "puppeteer": "^24.8.0",
+    "react": "^16.13.1",
+    "react-dom": "^16.13.1",
+    "react-dom-factories": "^1.0.2",
+    "semver": "^5.6.0",
+    "sinon": "^20.0.0",
+    "through2": "^2.0.5",
+    "yargs": "^6.0.0"
+  },
+  "scripts": {
+    "test": "mocha",
+    "test:unit": "mocha --config test/agentAPI.mocharc.js"
+  }
+}

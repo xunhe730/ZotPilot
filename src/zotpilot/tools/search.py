@@ -1,4 +1,5 @@
 """Search tools: semantic, topic, boolean, tables, figures."""
+import json
 import logging
 import time
 from collections import defaultdict
@@ -14,6 +15,7 @@ from ..filters import (
     _build_chromadb_filters,
     _has_text_filters,
 )
+from ..index_authority import current_library_pdf_doc_ids
 from ..reranker import validate_journal_weights, validate_section_weights
 from ..result_utils import (
     _merge_results_by_chunk,
@@ -26,18 +28,32 @@ from ..state import (
     _get_reranker,
     _get_retriever,
     _get_store,
+    _get_store_optional,
     _get_zotero,
     mcp,
 )
+from .profiles import tool_tags
 
 logger = logging.getLogger(__name__)
 
 
-@mcp.tool()
+def _filter_live_results(results, live_doc_ids: set[str]):
+    """Drop search hits for docs that are no longer present in the current PDF library."""
+    if not live_doc_ids:
+        return []
+    return [row for row in results if row.doc_id in live_doc_ids]
+
+
+def _current_pdf_doc_ids() -> set[str]:
+    """Resolve the current authoritative set of searchable document IDs."""
+    return current_library_pdf_doc_ids(_get_zotero())
+
+
+@mcp.tool(tags=tool_tags("core", "search"))
 def search_papers(
     query: Annotated[str, Field(description="Natural language search query")],
     top_k: Annotated[int, Field(description="Number of results", ge=1, le=50)] = 10,
-    context_chunks: Annotated[int, Field(description="Adjacent chunks to include for context", ge=0, le=3)] = 1,
+    context_chunks: Annotated[int, Field(description="Adjacent chunks to include for context", ge=0, le=3)] = 0,
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
@@ -47,9 +63,37 @@ def search_papers(
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
     required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,  # noqa: E501
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
+    section_type: Annotated[Literal["text", "tables", "figures"] | None, Field(description="Filter by content type (tables or figures)")] = None,  # noqa: E501
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
+
+    # Validate section_type before dispatching
+    if section_type is not None and section_type not in ("text", "tables", "figures"):
+        raise ToolError(f"Invalid section_type: {section_type}. Must be 'text', 'tables', or 'figures'.")
+
+    if section_type == "tables":
+        return search_tables(
+            query=query, top_k=top_k, year_min=year_min, year_max=year_max,
+            author=author, tag=tag, collection=collection,
+            journal_weights=journal_weights, verbosity=verbosity
+        )
+    if section_type == "figures":
+        return search_figures(
+            query=query, top_k=top_k, year_min=year_min, year_max=year_max,
+            author=author, tag=tag, collection=collection,
+            verbosity=verbosity
+        )
 
     # Validate chunk_types if provided
     if chunk_types is not None:
@@ -75,6 +119,7 @@ def search_papers(
     retriever = _get_retriever()
     reranker = _get_reranker()
     _config = _get_config()
+    live_doc_ids = _current_pdf_doc_ids()
 
     queries = [query]
 
@@ -91,6 +136,7 @@ def search_papers(
             context_window=min(context_chunks, 3),
             filters=_build_chromadb_filters(year_min, year_max, chunk_types)
         )
+        r = _filter_live_results(r, live_doc_ids)
         r = _apply_text_filters(r, author, tag, collection)
         if required_terms:
             r = _apply_required_terms(r, required_terms)
@@ -106,10 +152,10 @@ def search_papers(
         top_results = _merge_results_by_chunk(all_results[0], all_results[1], min(top_k, 50))
 
     logger.debug(f"search_papers: {time.perf_counter() - start:.3f}s")
-    return [_result_to_dict(r) for r in top_results]
+    return [_result_to_dict(r, verbosity=verbosity) for r in top_results]
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "search"))
 def search_topic(
     query: Annotated[str, Field(description="Natural language topic description")],
     num_papers: Annotated[int, Field(description="Number of distinct papers to return", ge=1, le=50)] = 10,
@@ -121,8 +167,18 @@ def search_topic(
     chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
     section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Paper-level topic discovery. Returns one entry per paper sorted by avg composite score. Use for 'what do I have on X' surveys."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
 
     # Validate chunk_types if provided
@@ -149,24 +205,30 @@ def search_topic(
     retriever = _get_retriever()
     reranker = _get_reranker()
     _config = _get_config()
+    live_doc_ids = _current_pdf_doc_ids()
 
     queries = [query]
 
-    # Fetch more chunks than papers requested; double if text filters active
+    # Topic discovery needs multiple chunks per paper, but not full passage-search fanout.
+    # Use a lower ceiling than passage search and only modestly expand for text filters.
     base_fetch = min(
-        num_papers * _config.oversample_topic_factor * _config.oversample_multiplier,
-        600
+        num_papers * _config.oversample_topic_factor * max(_config.oversample_multiplier - 1, 1),
+        400,
     )
-    fetch_k = base_fetch * 2 if _has_text_filters(author, tag, collection) else base_fetch
+    if _has_text_filters(author, tag, collection):
+        fetch_k = min(base_fetch + (num_papers * _config.oversample_topic_factor), 500)
+    else:
+        fetch_k = base_fetch
 
     all_chunks: list = []
     for q in queries:
         r = retriever.search(
             query=q,
             top_k=fetch_k,
-            context_window=1,
+            context_window=0,
             filters=_build_chromadb_filters(year_min, year_max, chunk_types)
         )
+        r = _filter_live_results(r, live_doc_ids)
         r = _apply_text_filters(r, author, tag, collection)
         if _config.rerank_enabled:
             r = reranker.rerank(r, section_weights, journal_weights)
@@ -210,40 +272,50 @@ def search_topic(
 
         paper_results.append({
             "doc_id": doc_id,
-            "item_key": doc_id,
             "doc_title": best_hit.doc_title,
-            "authors": best_hit.authors,
             "year": best_hit.year,
-            "citation_key": best_hit.citation_key,
-            "publication": best_hit.publication,
-            "journal_quartile": best_hit.journal_quartile,
-            # Raw similarity scores
-            "avg_score": round(sum(h.score for h in hits) / len(hits), 3),
-            "best_chunk_score": round(best_hit.score, 3),
-            # Composite scores
             "avg_composite_score": round(avg_composite, 3),
             "best_composite_score": round(best_composite, 3),
-            "best_passage_section": best_hit.section,
-            "best_passage_section_confidence": round(best_hit.section_confidence, 2),
             "num_relevant_chunks": len(hits),
-            "best_passage": best_hit.text,
             "best_passage_page": best_hit.page_num,
-            "best_passage_context": best_hit.full_context(),
-            "tags": best_hit.tags,
-            "collections": best_hit.collections,
+            "best_passage_chunk_index": best_hit.chunk_index,
+            "best_passage_section": best_hit.section,
         })
+
+        if verbosity in {"standard", "full"}:
+            paper_results[-1].update({
+                "best_passage": best_hit.text,
+                "authors": best_hit.authors,
+                "citation_key": best_hit.citation_key,
+                "publication": best_hit.publication,
+                "journal_quartile": best_hit.journal_quartile,
+                # Raw similarity scores
+                "avg_score": round(sum(h.score for h in hits) / len(hits), 3),
+                "best_chunk_score": round(best_hit.score, 3),
+                "best_passage_section_confidence": round(best_hit.section_confidence, 2),
+            })
+
+        if verbosity == "full":
+            paper_results[-1].update({
+                "tags": best_hit.tags,
+                "collections": best_hit.collections,
+            })
 
     paper_results.sort(key=lambda p: p["avg_composite_score"], reverse=True)
     logger.debug(f"search_topic: {time.perf_counter() - start:.3f}s")
     return paper_results[:num_papers]
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("extended", "search"))
 def search_boolean(
     query: Annotated[str, Field(description="Space-separated search terms (case-insensitive)")],
     operator: Annotated[str, Field(description="AND (all terms required) or OR (any term)")] = "AND",
     year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
     year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Full-text keyword search via Zotero's word index (not semantic). No stemming, no phrase matching. Best for author names, acronyms, exact terms."""  # noqa: E501
     zotero = _get_zotero()
@@ -263,30 +335,36 @@ def search_boolean(
             continue
 
         # Apply year filters
-        if year_min and (item.year is None or item.year < year_min):
+        if year_min is not None and (item.year is None or item.year < year_min):
             continue
-        if year_max and (item.year is None or item.year > year_max):
+        if year_max is not None and (item.year is None or item.year > year_max):
             continue
 
         results.append({
-            "item_key": item.item_key,
             "doc_id": item.item_key,
             "title": item.title,
-            "authors": item.authors,
             "year": item.year,
-            "publication": item.publication,
-            "citation_key": item.citation_key,
-            "tags": item.tags,
-            "collections": item.collections,
-            "doi": item.doi,
+            "authors": item.authors,
         })
+
+        if verbosity in {"standard", "full"}:
+            results[-1].update({
+                "citation_key": item.citation_key,
+                "publication": item.publication,
+                "doi": item.doi,
+            })
+
+        if verbosity == "full":
+            results[-1].update({
+                "tags": item.tags,
+                "collections": item.collections,
+            })
 
     # Sort by year descending
     results.sort(key=lambda x: x.get("year") or 0, reverse=True)
     return results
 
 
-@mcp.tool()
 def search_tables(
     query: Annotated[str, Field(description="Search query for table content")],
     top_k: Annotated[int, Field(description="Number of tables to return", ge=1, le=30)] = 10,
@@ -296,8 +374,18 @@ def search_tables(
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Search table content (headers, cells, captions) semantically. For mixed content, use search_papers with chunk_types=["table"]."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
 
     # Validate journal_weights if provided
@@ -310,6 +398,7 @@ def search_tables(
     store = _get_store()
     reranker = _get_reranker()
     _config = _get_config()
+    live_doc_ids = _current_pdf_doc_ids()
 
     # Build filters: chunk_type=table + year range (ChromaDB-native operators only)
     type_filter = {"chunk_type": {"$eq": "table"}}
@@ -321,6 +410,7 @@ def search_tables(
     fetch_k = base_fetch * 2 if _has_text_filters(author, tag, collection) else base_fetch
 
     results = store.search(query=query, top_k=fetch_k, filters=filters)
+    results = [r for r in results if r.metadata.get("doc_id", "") in live_doc_ids]
     results = _apply_text_filters(results, author, tag, collection)
 
     # Apply reranking (or bypass if disabled)
@@ -346,12 +436,9 @@ def search_tables(
         meta = original.metadata if original else {}
 
         output.append({
+            "doc_id": r.doc_id,
             "doc_title": r.doc_title,
-            "authors": r.authors,
             "year": r.year,
-            "citation_key": r.citation_key,
-            "publication": r.publication,
-            "journal_quartile": r.journal_quartile,
             "page": r.page_num,
             "table_index": meta.get("table_index", 0),
             "caption": meta.get("table_caption", ""),
@@ -360,14 +447,20 @@ def search_tables(
             "num_cols": meta.get("table_num_cols", 0),
             "relevance_score": round(r.score, 3),
             "composite_score": round(r.composite_score, 3) if r.composite_score is not None else None,
-            "doc_id": r.doc_id,
         })
+
+        if verbosity in {"standard", "full"}:
+            output[-1].update({
+                "authors": r.authors,
+                "citation_key": r.citation_key,
+                "publication": r.publication,
+                "journal_quartile": r.journal_quartile,
+            })
 
     logger.debug(f"search_tables: {time.perf_counter() - start:.3f}s")
     return output
 
 
-@mcp.tool()
 def search_figures(
     query: Annotated[str, Field(description="Search query for figure captions")],
     top_k: Annotated[int, Field(description="Number of figures to return", ge=1, le=30)] = 10,
@@ -376,11 +469,22 @@ def search_figures(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
 ) -> list[dict]:
     """Search figure captions semantically. Returns image paths. Orphan figures (no caption) included with generic descriptions."""  # noqa: E501
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
     start = time.perf_counter()
     top_k = max(1, min(top_k, 30))
     store = _get_store()
+    live_doc_ids = _current_pdf_doc_ids()
 
     # Build filters: chunk_type=figure + year range (ChromaDB-native operators only)
     type_filter = {"chunk_type": {"$eq": "figure"}}
@@ -392,6 +496,7 @@ def search_figures(
     fetch_k = base_fetch * 2 if _has_text_filters(author, tag, collection) else base_fetch
 
     results = store.search(query=query, top_k=fetch_k, filters=filters)
+    results = [r for r in results if r.metadata.get("doc_id", "") in live_doc_ids]
     results = _apply_text_filters(results, author, tag, collection)
 
     output = []
@@ -400,10 +505,7 @@ def search_figures(
         output.append({
             "doc_id": meta.get("doc_id", ""),
             "doc_title": meta.get("doc_title", ""),
-            "authors": meta.get("authors", ""),
             "year": meta.get("year"),
-            "citation_key": meta.get("citation_key", ""),
-            "publication": meta.get("publication", ""),
             "page_num": meta.get("page_num", 0),
             "figure_index": meta.get("figure_index", 0),
             "caption": meta.get("caption", ""),
@@ -411,19 +513,31 @@ def search_figures(
             "relevance_score": round(r.score, 3),
         })
 
+        if verbosity in {"standard", "full"}:
+            output[-1].update({
+                "authors": meta.get("authors", ""),
+                "citation_key": meta.get("citation_key", ""),
+                "publication": meta.get("publication", ""),
+            })
+
     logger.debug(f"search_figures: {time.perf_counter() - start:.3f}s")
     return output
 
 
-@mcp.tool()
+@mcp.tool(tags=tool_tags("core", "search"))
 def advanced_search(
-    conditions: Annotated[list[dict], Field(description='[{field, op, value}]. Fields: title, author, year, tag, collection, publication, doi. Ops: contains, is, isNot, beginsWith, gt, lt.')],  # noqa: E501
+    conditions: Annotated[str | list[dict], Field(description='[{field, op, value}]. Fields: title, author, year, tag, collection, publication, doi. Ops: contains, is, isNot, beginsWith, gt, lt.')],  # noqa: E501
     match: Annotated[Literal["all", "any"], Field(description="all=AND, any=OR")] = "all",
     sort_by: Annotated[str | None, Field(description="Sort: year, title, dateAdded")] = None,
     sort_dir: Annotated[Literal["asc", "desc"], Field(description="Sort direction")] = "desc",
     limit: Annotated[int, Field(description="Max results", ge=1, le=500)] = 50,
 ) -> list[dict]:
     """Multi-condition metadata search. Works without indexing. Use for precise filters by year/author/tag/etc."""
+    if isinstance(conditions, str):
+        try:
+            conditions = json.loads(conditions)
+        except Exception:
+            raise ToolError("conditions must be a JSON array of {field, op, value} dicts")
     try:
         return _get_zotero().advanced_search(
             conditions=conditions,

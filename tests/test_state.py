@@ -1,19 +1,41 @@
 """Tests for shared state helpers in zotpilot.state."""
+import ast
+import re
 import threading
-import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from zotpilot.models import RetrievalResult
 from zotpilot.state import (
-    _build_chromadb_filters,
-    _apply_text_filters,
-    _has_text_filters,
+    _MCP_INSTRUCTIONS,
     _apply_required_terms,
-    _result_to_dict,
+    _apply_text_filters,
+    _build_chromadb_filters,
+    _has_text_filters,
     _merge_results_by_chunk,
+    _result_to_dict,
 )
 
+
+def _registered_tool_names() -> set[str]:
+    tools_dir = Path(__file__).resolve().parents[1] / "src" / "zotpilot" / "tools"
+    registered: set[str] = set()
+    for path in tools_dir.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        for node in tree.body:
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute):
+                    if (
+                        isinstance(decorator.func.value, ast.Name)
+                        and decorator.func.value.id == "mcp"
+                        and decorator.func.attr == "tool"
+                    ):
+                        registered.add(node.name)
+                        break
+    return registered
 
 # ---------------------------------------------------------------------------
 # _build_chromadb_filters
@@ -155,6 +177,60 @@ class TestResultToDict:
         assert d["doc_id"] == "DOC1"
         assert d["chunk_index"] == 1
         assert "full_context" in d
+        assert "item_key" not in d
+
+    def test_result_to_dict_minimal_omits_metadata_and_empty_context(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_chunk_0001",
+            text="Some passage text",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2021,
+            page_num=3,
+            chunk_index=1,
+            citation_key="smith2021",
+            publication="Nature",
+            section="results",
+            section_confidence=0.9,
+            journal_quartile="Q1",
+            composite_score=0.78,
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+        assert d["doc_id"] == "DOC1"
+        assert d["passage"] == "Some passage text"
+        assert "authors" not in d
+        assert "citation_key" not in d
+        assert "context_before" not in d
+        assert "full_context" not in d
+
+    def test_result_to_dict_minimal_hides_context_even_if_present(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_chunk_0001",
+            text="Some passage text",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2021,
+            page_num=3,
+            chunk_index=1,
+            citation_key="smith2021",
+            publication="Nature",
+            section="results",
+            section_confidence=0.9,
+            journal_quartile="Q1",
+            composite_score=0.78,
+            context_before=["Before text"],
+            context_after=["After text"],
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+        assert "context_before" not in d
+        assert "context_after" not in d
+        assert "full_context" not in d
 
 
 # ---------------------------------------------------------------------------
@@ -202,13 +278,12 @@ class TestThreadSafety:
 
         mock_config = MagicMock()
         original_config = state_mod._config
-        original_lock = state_mod._init_lock
 
         try:
             # Reset to force initialization
             state_mod._config = None
 
-            with patch("zotpilot.state.Config.load", return_value=mock_config):
+            with patch("zotpilot.state.resolve_runtime_config", return_value=mock_config):
                 results = [None] * 10
                 def worker(idx):
                     results[idx] = state_mod._get_config()
@@ -223,3 +298,44 @@ class TestThreadSafety:
                 assert all(r is results[0] for r in results)
         finally:
             state_mod._config = original_config
+
+
+class TestMCPInstructions:
+    def test_registered_tool_surface_matches_expected_set(self):
+        registered = _registered_tool_names()
+
+        expected = {
+            "advanced_search",
+            "browse_library",
+            "create_note",
+            "get_annotations",
+            "get_citations",
+            "get_index_stats",
+            "get_notes",
+            "get_paper_details",
+            "get_passage_context",
+            "index_library",
+            "ingest_by_identifiers",
+            "manage_collections",
+            "manage_tags",
+            "profile_library",
+            "search_academic_databases",
+            "search_boolean",
+            "search_papers",
+            "search_topic",
+        }
+
+        assert registered == expected
+
+    def test_instructions_reference_only_registered_tools(self):
+        registered = _registered_tool_names()
+
+        referenced = {
+            name
+            for name in re.findall(r"`([a-z_][a-z0-9_]*)`", _MCP_INSTRUCTIONS)
+            if "_" in name
+        }
+        non_tool_tokens = {"best_passage_context", "doc_id"}
+
+        assert "add_paper_by_identifier" not in referenced
+        assert (referenced - non_tool_tokens) <= registered

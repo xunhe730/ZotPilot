@@ -41,8 +41,8 @@ class Retriever:
             # Get adjacent chunks
             if context_window > 0:
                 adjacent = self.store.get_adjacent_chunks(
-                    hit.metadata["doc_id"],
-                    hit.metadata["chunk_index"],
+                    hit.metadata.get("doc_id", "unknown"),
+                    hit.metadata.get("chunk_index", -1),
                     window=context_window
                 )
             else:
@@ -51,10 +51,10 @@ class Retriever:
             # Separate into before/after
             context_before = []
             context_after = []
-            center_idx = hit.metadata["chunk_index"]
+            center_idx = hit.metadata.get("chunk_index", -1)
 
             for adj in adjacent:
-                adj_idx = adj.metadata["chunk_index"]
+                adj_idx = adj.metadata.get("chunk_index", -1)
                 if adj_idx < center_idx:
                     context_before.append(adj.text)
                 elif adj_idx > center_idx:
@@ -68,12 +68,12 @@ class Retriever:
                 chunk_id=hit.id,
                 text=hit.text,
                 score=hit.score,
-                doc_id=hit.metadata["doc_id"],
-                doc_title=hit.metadata["doc_title"],
-                authors=hit.metadata["authors"],
-                year=hit.metadata["year"] or None,
-                page_num=hit.metadata["page_num"],
-                chunk_index=hit.metadata["chunk_index"],
+                doc_id=hit.metadata.get("doc_id", "unknown"),
+                doc_title=hit.metadata.get("doc_title", "Unknown"),
+                authors=hit.metadata.get("authors", ""),
+                year=hit.metadata.get("year") or None,
+                page_num=hit.metadata.get("page_num", 0),
+                chunk_index=hit.metadata.get("chunk_index", -1),
                 citation_key=hit.metadata.get("citation_key", ""),
                 publication=hit.metadata.get("publication", ""),
                 tags=hit.metadata.get("tags", ""),

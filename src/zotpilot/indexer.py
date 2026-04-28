@@ -10,6 +10,13 @@ from tqdm import tqdm
 
 from .config import Config
 from .embeddings import create_embedder
+from .index_authority import (
+    IndexJournal,
+    mark_committed,
+    mark_in_progress,
+    reconcile_orphaned_index_docs,
+    record_table_failure,
+)
 from .journal_ranker import JournalRanker
 from .models import ZoteroItem
 from .pdf import extract_document
@@ -18,6 +25,8 @@ from .vector_store import VectorStore
 from .zotero_client import ZoteroClient
 
 logger = logging.getLogger(__name__)
+
+_VISION_ESTIMATED_COST_PER_TABLE_USD = 0.01
 
 
 def _config_hash(config: Config) -> str:
@@ -69,6 +78,7 @@ class Indexer:
         self.journal_ranker = JournalRanker()
         self._empty_docs_path = config.chroma_db_path / "empty_docs.json"
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
+        self.journal: IndexJournal | None = None
         if config.vision_enabled and config.anthropic_api_key:
             from .feature_extraction.vision_api import VisionAPI
             cost_log_path = config.chroma_db_path.parent / "vision_costs.json"
@@ -92,6 +102,10 @@ class Indexer:
 
     def _save_empty_docs(self, mapping: dict[str, str]) -> None:
         self._empty_docs_path.write_text(json.dumps(mapping, indent=2))
+
+    def _estimate_vision_cost_usd(self, pending_tables: int) -> float:
+        """Return a rough upper-bound estimate for batch vision cost."""
+        return round(pending_tables * _VISION_ESTIMATED_COST_PER_TABLE_USD, 6)
 
     @staticmethod
     def _pdf_hash(path: Path) -> str:
@@ -134,9 +148,11 @@ class Indexer:
         force_reindex: bool = False,
         limit: int | None = None,
         item_key: str | None = None,
+        item_keys: list[str] | None = None,
         title_pattern: str | None = None,
         max_pages: int = 0,
         batch_size: int | None = None,
+        journal: IndexJournal | None = None,
     ) -> dict:
         """
         Index all PDFs in Zotero library.
@@ -148,12 +164,28 @@ class Indexer:
             title_pattern: If provided, only index items matching this regex pattern
             max_pages: Skip PDFs longer than N pages (0 = no limit)
             batch_size: Process at most N items per call (None/0 = all at once)
+            journal: Optional IndexJournal for commit tracking
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
         """
         items = self.zotero.get_all_items_with_pdfs()
-        items = [i for i in items if i.pdf_path and i.pdf_path.exists()]
+        skipped_no_pdf: list[dict] = []
+        kept_items: list = []
+        for i in items:
+            if i.pdf_path and i.pdf_path.exists():
+                kept_items.append(i)
+            else:
+                skipped_no_pdf.append({
+                    "item_key": i.item_key,
+                    "title": getattr(i, "title", None) or "",
+                    "reason": "no_pdf_attachment",
+                })
+        items = kept_items
+        if skipped_no_pdf:
+            logger.info(
+                "Indexer: skipped %d item(s) without PDF attachments", len(skipped_no_pdf)
+            )
         # Deduplicate by item_key (defensive: SQL should already deduplicate)
         seen_keys: set[str] = set()
         unique_items: list[ZoteroItem] = []
@@ -164,6 +196,13 @@ class Indexer:
         if len(unique_items) < len(items):
             logger.info(f"Deduplicated {len(items) - len(unique_items)} duplicate item(s)")
         items = unique_items
+        current_doc_ids = {item.item_key for item in items}
+        reconciliation = reconcile_orphaned_index_docs(self.store, current_doc_ids)
+        if reconciliation["deleted_count"] > 0:
+            logger.info(
+                "Indexer: removed %d orphaned indexed document(s) not present in the current Zotero PDF library",
+                reconciliation["deleted_count"],
+            )
         logger.info(f"Discovered {len(items)} papers with PDFs in Zotero library")
 
         # Apply filters
@@ -171,7 +210,19 @@ class Indexer:
             items = [i for i in items if i.item_key == item_key]
             if not items:
                 logger.error(f"No item found with key: {item_key}")
-                return {"results": [], "indexed": 0, "failed": 0, "empty": 0, "skipped": 0, "already_indexed": 0}
+                return {
+                    "results": [], "indexed": 0, "failed": 0, "empty": 0,
+                    "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
+                }
+
+        if item_keys:
+            items = [i for i in items if i.item_key in item_keys]
+            if not items:
+                logger.error("No items found matching item_keys")
+                return {
+                    "results": [], "indexed": 0, "failed": 0, "empty": 0,
+                    "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
+                }
 
         if title_pattern:
             import re
@@ -184,9 +235,18 @@ class Indexer:
             items = [i for i in items if pattern.search(i.title)]
             logger.info(f"Title filter: {len(items)} papers match '{title_pattern}'")
 
+        if journal is not None and journal.in_progress:
+            in_progress_first = set(journal.in_progress.keys())
+            items = sorted(items, key=lambda item: (item.item_key not in in_progress_first, item.item_key))
+
         if limit:
             items = items[:limit]
             logger.info(f"Limit applied: processing at most {limit} papers")
+
+        deferred_by_batch = False
+        if batch_size is not None and batch_size > 0 and len(items) > batch_size:
+            deferred_by_batch = True
+            items = items[:batch_size]
 
         if force_reindex:
             indexed_ids = set()
@@ -207,16 +267,19 @@ class Indexer:
                 "Run with --force to re-index, otherwise results may be inconsistent."
             )
 
+        # Store journal reference for use in indexing pipeline
+        self.journal = journal
+
         results: list[IndexResult] = []
         to_index: list[ZoteroItem] = []
         reindex_reasons: dict[str, str] = {}
-
         for item in items:
-            if item.item_key in indexed_ids:
+            if journal is not None and item.item_key in journal.in_progress and item.item_key in indexed_ids:
+                reindex_reasons[item.item_key] = "stale_in_progress"
+                logger.info(f"Reindexing {item.item_key}: stale in-progress journal entry")
+            elif item.item_key in indexed_ids:
                 needs_reindex, reason = self._needs_reindex(item)
                 if needs_reindex:
-                    self.store.delete_document(item.item_key)
-                    indexed_ids.discard(item.item_key)
                     reindex_reasons[item.item_key] = reason
                     logger.info(f"Reindexing {item.item_key}: {reason}")
                 else:
@@ -258,8 +321,17 @@ class Indexer:
 
         # Batch slicing: record total before cutting
         total_to_index = len(to_index)
-        if batch_size is not None and batch_size > 0:
-            to_index = to_index[:batch_size]
+
+        keys_requiring_delete = {
+            item.item_key
+            for item in to_index
+            if reindex_reasons.get(item.item_key) in {"changed", "no_hash"}
+        }
+        if journal is not None and journal.in_progress:
+            keys_requiring_delete |= {
+                item.item_key for item in to_index
+                if item.item_key in journal.in_progress and item.item_key in indexed_ids
+            }
 
         # Deferred force_reindex deletion: only delete docs in current batch
         if force_reindex:
@@ -267,6 +339,10 @@ class Indexer:
             keys_to_delete = {item.item_key for item in to_index}
             for doc_id in keys_to_delete & existing:
                 self.store.delete_document(doc_id)
+        else:
+            for doc_id in keys_requiring_delete:
+                self.store.delete_document(doc_id)
+                indexed_ids.discard(doc_id)
 
         reindex_count = len(reindex_reasons)
         n_skipped = sum(1 for r in results if r.status == "skipped")
@@ -277,7 +353,7 @@ class Indexer:
             f"{n_skipped} skipped (empty/unchanged)"
         )
         if not to_index:
-            logger.info("Nothing to index — all papers are up to date")
+            logger.info("Nothing to index \u2014 all papers are up to date")
 
         quality_distribution: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0, "F": 0}
         aggregated_extraction_stats = {
@@ -299,6 +375,8 @@ class Indexer:
         for i, item in enumerate(tqdm(to_index, desc="Extracting"), 1):
             t0 = time.perf_counter()
             try:
+                if self.journal is not None and item.item_key in reindex_reasons:
+                    mark_in_progress(self.journal, item.item_key)
                 logger.debug(
                     f"Starting extraction {item.item_key}: "
                     f"title={item.title!r}, pdf={item.pdf_path}"
@@ -319,6 +397,7 @@ class Indexer:
 
             elapsed = time.perf_counter() - t0
             extraction_times.append(elapsed)
+            logger.info("Extraction timing [%s]: total=%.1fs", item.item_key, elapsed)
 
             if i % log_interval == 0 or i == total_to_extract:
                 avg_time = sum(extraction_times) / len(extraction_times)
@@ -341,33 +420,64 @@ class Indexer:
             )
 
         # ---- Phase 2: Resolve vision batch (one API call for all papers) ----
+        vision_pending_tables = 0
+        vision_estimated_cost_usd = 0.0
+        vision_budget_skipped = False
+        vision_skip_reason = ""
         if self._vision_api and doc_extractions:
-            from .pdf.extractor import resolve_pending_vision
+            from .pdf.extractor import _finalize_document_no_tables, resolve_pending_vision
             pending_count = sum(
                 len(v[1].pending_vision.specs)
                 for v in doc_extractions.values()
                 if v[1].pending_vision is not None and v[1].pending_vision.specs
             )
+            vision_pending_tables = pending_count
+            vision_estimated_cost_usd = self._estimate_vision_cost_usd(pending_count)
             pending_docs = sum(
                 1 for v in doc_extractions.values()
                 if v[1].pending_vision is not None and v[1].pending_vision.specs
+            )
+            over_table_cap = (
+                self.config.vision_max_tables_per_run is not None
+                and pending_count > self.config.vision_max_tables_per_run
+            )
+            over_cost_cap = (
+                self.config.vision_max_cost_usd is not None
+                and vision_estimated_cost_usd > self.config.vision_max_cost_usd
             )
             if pending_count > 0:
                 logger.info(
                     f"Vision: {pending_count} tables across {pending_docs} papers "
                     f"queued for Batch API (up to 3 waves, est. 10-30min per wave)"
                 )
-            phase2_start = time.perf_counter()
-            resolve_pending_vision(
-                {k: v[1] for k, v in doc_extractions.items()},
-                self._vision_api,
-            )
-            phase2_elapsed = time.perf_counter() - phase2_start
-            if pending_count > 0:
-                logger.info(
-                    f"Vision complete: {pending_count} tables in "
-                    f"{phase2_elapsed / 60:.1f}min ({phase2_elapsed / max(pending_count, 1):.1f}s avg/table)"
+            if pending_count > 0 and (over_table_cap or over_cost_cap):
+                reasons = []
+                if over_table_cap:
+                    reasons.append(f"table cap {self.config.vision_max_tables_per_run}")
+                if over_cost_cap:
+                    reasons.append(
+                        "estimated cost "
+                        f"${vision_estimated_cost_usd:.2f} exceeds cap "
+                        f"${self.config.vision_max_cost_usd:.2f}"
+                    )
+                vision_budget_skipped = True
+                vision_skip_reason = "; ".join(reasons)
+                logger.warning("Skipping vision batch: %s", vision_skip_reason)
+                for _item, extraction in doc_extractions.values():
+                    if extraction.pending_vision is not None:
+                        _finalize_document_no_tables(extraction)
+            else:
+                phase2_start = time.perf_counter()
+                resolve_pending_vision(
+                    {k: v[1] for k, v in doc_extractions.items()},
+                    self._vision_api,
                 )
+                phase2_elapsed = time.perf_counter() - phase2_start
+                if pending_count > 0:
+                    logger.info(
+                        f"Vision complete: {pending_count} tables in "
+                        f"{phase2_elapsed / 60:.1f}min ({phase2_elapsed / max(pending_count, 1):.1f}s avg/table)"
+                    )
 
         # ---- Phase 3: Index each document (chunk, store, etc.) ----
         total_to_store = len(doc_extractions)
@@ -379,7 +489,9 @@ class Indexer:
         for idx, (item_key, (item, extraction)) in enumerate(doc_extractions.items(), 1):
             t0 = time.perf_counter()
             try:
-                n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction(item, extraction)
+                n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction(
+                    item, extraction, self.journal
+                )
 
                 # Aggregate extraction stats
                 for key in ["total_pages", "text_pages", "ocr_pages", "empty_pages"]:
@@ -436,6 +548,7 @@ class Indexer:
             "extraction_stats": aggregated_extraction_stats,
         }
 
+        counts["skipped_no_pdf"] = skipped_no_pdf
         counts["skipped_long"] = len(long_items)
         counts["long_documents"] = [
             {"item_key": item.item_key, "title": item.title, "pages": pages}
@@ -445,11 +558,32 @@ class Indexer:
         # Batch metadata
         counts["total_to_index"] = total_to_index
         counts["batch_size"] = batch_size
-        counts["has_more"] = total_to_index > len(to_index) if batch_size else False
+        counts["has_more"] = deferred_by_batch or (total_to_index > len(to_index) if batch_size else False)
+        counts["vision_pending_tables"] = vision_pending_tables
+        counts["vision_estimated_cost_usd"] = vision_estimated_cost_usd
+        counts["vision_budget_skipped"] = vision_budget_skipped
+        if vision_skip_reason:
+            counts["vision_skip_reason"] = vision_skip_reason
 
         # Save config hash after successful indexing
         if counts["indexed"] > 0 or counts["already_indexed"] > 0:
             self._config_hash_path.write_text(config_hash)
+
+        # Deletions can land in Zotero while a long indexing run is already in
+        # progress. Reconcile once more at the end so a document that was still
+        # visible at startup but moved to trash during this run is removed from
+        # Chroma immediately, without requiring a second index_library call.
+        final_current_doc_ids = {
+            item.item_key
+            for item in self.zotero.get_all_items_with_pdfs()
+            if item.pdf_path and item.pdf_path.exists()
+        }
+        final_reconciliation = reconcile_orphaned_index_docs(self.store, final_current_doc_ids)
+        if final_reconciliation["deleted_count"] > 0:
+            logger.info(
+                "Indexer: removed %d orphaned indexed document(s) after refresh of Zotero library state",
+                final_reconciliation["deleted_count"],
+            )
 
         return {"results": results, **counts}
 
@@ -473,18 +607,43 @@ class Indexer:
 
         # Resolve vision for this single document
         if extraction.pending_vision is not None and self._vision_api:
-            from .pdf.extractor import resolve_pending_vision
-            resolve_pending_vision({item.item_key: extraction}, self._vision_api)
+            from .pdf.extractor import _finalize_document_no_tables, resolve_pending_vision
 
-        return self._index_extraction(item, extraction)
+            pending_count = len(extraction.pending_vision.specs)
+            estimated_cost = self._estimate_vision_cost_usd(pending_count)
+            over_table_cap = (
+                self.config.vision_max_tables_per_run is not None
+                and pending_count > self.config.vision_max_tables_per_run
+            )
+            over_cost_cap = (
+                self.config.vision_max_cost_usd is not None
+                and estimated_cost > self.config.vision_max_cost_usd
+            )
+            if pending_count > 0 and (over_table_cap or over_cost_cap):
+                _finalize_document_no_tables(extraction)
+            else:
+                resolve_pending_vision({item.item_key: extraction}, self._vision_api)
 
-    def _index_extraction(self, item: ZoteroItem, extraction) -> tuple[int, int, str, dict, str]:
+        return self._index_extraction(item, extraction, self.journal)
+
+    def _index_extraction(
+        self,
+        item: ZoteroItem,
+        extraction,
+        journal: IndexJournal | None = None,
+    ) -> tuple[int, int, str, dict, str]:
         """
         Index a pre-extracted document (vision already resolved).
 
         Returns:
             (n_chunks, n_tables, reason, extraction_stats, quality_grade)
         """
+        item_key = item.item_key
+
+        # Mark in_progress before any persistence
+        if journal is not None:
+            mark_in_progress(journal, item_key)
+
         if not extraction.pages:
             return 0, 0, "PDF has 0 pages (corrupt or unreadable)", extraction.stats, "F"
 
@@ -503,11 +662,13 @@ class Indexer:
             return 0, 0, f"{len(extraction.pages)} pages but no text", extraction.stats, quality_grade
 
         # Chunk using the new interface
+        chunk_started = time.perf_counter()
         chunks = self.chunker.chunk(
             extraction.full_markdown,
             extraction.pages,
             extraction.sections,
         )
+        chunk_elapsed = time.perf_counter() - chunk_started
         if not chunks:
             return 0, 0, f"{len(extraction.pages)} pages, {total_chars} chars but no chunks created", extraction.stats, quality_grade  # noqa: E501
         logger.debug(f"  Created {len(chunks)} chunks")
@@ -529,7 +690,20 @@ class Indexer:
             "pdf_hash": self._pdf_hash(item.pdf_path),
             "quality_grade": quality_grade,
         }
+        store_started = time.perf_counter()
         self.store.add_chunks(item.item_key, doc_meta, chunks)
+        store_elapsed = time.perf_counter() - store_started
+
+        # Mark committed after text-chunk persistence
+        if journal is not None:
+            mark_committed(journal, item_key)
+        logger.info(
+            "Index timings [%s]: chunk=%.1fs store=%.1fs chunks=%d",
+            item_key,
+            chunk_elapsed,
+            store_elapsed,
+            len(chunks),
+        )
 
         # Build reference map for table/figure placement
         from .pdf.reference_matcher import match_references
@@ -563,8 +737,13 @@ class Indexer:
         real_tables = [t for t in extraction.tables if not t.artifact_type]
         n_artifacts = len(extraction.tables) - len(real_tables)
         if real_tables:
-            self.store.add_tables(item.item_key, doc_meta, real_tables, ref_map=ref_map)
-            n_tables = len(real_tables)
+            try:
+                self.store.add_tables(item_key, doc_meta, real_tables, ref_map=ref_map)
+                n_tables = len(real_tables)
+            except Exception as e:
+                logger.warning(f"Table storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"table storage: {e}")
         if n_artifacts:
             logger.debug(f"  Skipped {n_artifacts} artifact table(s)")
         logger.debug(f"  Extracted {n_tables} tables")
@@ -573,11 +752,13 @@ class Indexer:
         n_figures = 0
         if extraction.figures:
             try:
-                self.store.add_figures(item.item_key, doc_meta, extraction.figures, ref_map=ref_map)
+                self.store.add_figures(item_key, doc_meta, extraction.figures, ref_map=ref_map)
                 n_figures = len(extraction.figures)
                 logger.debug(f"  Extracted {n_figures} figures")
             except Exception as e:
-                logger.warning(f"Figure storage failed for {item.item_key}: {e}")
+                logger.warning(f"Figure storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"figure storage: {e}")
 
         logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
         return len(chunks), n_tables, "", extraction.stats, quality_grade
@@ -597,8 +778,9 @@ class Indexer:
 
     def get_stats(self) -> dict:
         """Get index statistics."""
-        doc_ids = self.store.get_indexed_doc_ids()
-        total_chunks = self.store.count()
+        current_doc_ids = {item.item_key for item in self.zotero.get_all_items_with_pdfs() if item.pdf_path and item.pdf_path.exists()}  # noqa: E501
+        doc_ids = self.store.get_indexed_doc_ids() & current_doc_ids
+        total_chunks = self.store.count_chunks_for_doc_ids(doc_ids)
         return {
             "total_documents": len(doc_ids),
             "total_chunks": total_chunks,

@@ -1,9 +1,7 @@
 """Tests for switch_library tool and get_libraries."""
 import sqlite3
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from zotpilot.config import Config
 from zotpilot.zotero_client import ZoteroClient
 
 
@@ -25,10 +23,25 @@ def _create_lib_db(tmp_path, with_groups=False):
 
     if with_groups:
         conn.executescript("""
-            CREATE TABLE libraries (libraryID INTEGER PRIMARY KEY, type TEXT NOT NULL, editable INT NOT NULL DEFAULT 1, filesEditable INT NOT NULL DEFAULT 1, version INT NOT NULL DEFAULT 0, storageVersion INT NOT NULL DEFAULT 0, lastSync INT NOT NULL DEFAULT 0, archived INT NOT NULL DEFAULT 0);
+            CREATE TABLE libraries (
+                libraryID INTEGER PRIMARY KEY,
+                type TEXT NOT NULL,
+                editable INT NOT NULL DEFAULT 1,
+                filesEditable INT NOT NULL DEFAULT 1,
+                version INT NOT NULL DEFAULT 0,
+                storageVersion INT NOT NULL DEFAULT 0,
+                lastSync INT NOT NULL DEFAULT 0,
+                archived INT NOT NULL DEFAULT 0
+            );
             INSERT INTO libraries VALUES (1, 'user', 1, 1, 0, 0, 0, 0);
             INSERT INTO libraries VALUES (2, 'group', 1, 1, 0, 0, 0, 0);
-            CREATE TABLE groups (groupID INTEGER PRIMARY KEY, libraryID INT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', version INT NOT NULL DEFAULT 0);
+            CREATE TABLE groups (
+                groupID INTEGER PRIMARY KEY,
+                libraryID INT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                version INT NOT NULL DEFAULT 0
+            );
             INSERT INTO groups VALUES (100, 2, 'Lab Group', '', 0);
         """)
         # Add an item in the group library
@@ -185,3 +198,19 @@ class TestResetSingletons:
         assert state._retriever is None
         assert state._store is None
         assert state._reranker is None
+
+    def test_reset_runs_registered_callbacks(self):
+        import zotpilot.state as state
+
+        called = []
+
+        def callback():
+            called.append(True)
+
+        state.register_reset_callback(callback)
+        try:
+            state._reset_singletons()
+        finally:
+            state._reset_callbacks.remove(callback)
+
+        assert called == [True]

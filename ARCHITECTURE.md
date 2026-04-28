@@ -87,7 +87,7 @@ User query
 |--------|-------|---------------|
 | `state.py` | ~200 | FastMCP instance, lazy singletons, shared helpers |
 | `server.py` | ~15 | Entry point, imports tools for registration |
-| `tools/*.py` | ~1600 | 24 MCP tool implementations |
+| `tools/*.py` | ~2000 | MCP tool implementations plus ingestion helper modules |
 | `pdf/extractor.py` | ~1600 | PDF text/table/figure extraction |
 | `pdf/chunker.py` | ~90 | Text chunking with overlap |
 | `config.py` | ~100 | Configuration loading with migration |

@@ -23,7 +23,13 @@ data/
 
 # Plans and ops records (local only)
 .omc/
-docs/superpowers/
+docs/*
+!docs/e2e-scenarios/
+!docs/e2e-scenarios/**
+docs/test-runs/
+
+# Playwright MCP logs
+.playwright-mcp/
 
 # IDE
 .idea/
@@ -34,3 +40,23 @@ docs/superpowers/
 # OS
 .DS_Store
 Thumbs.db
+
+# Connector (browser extension)
+connector/node_modules/
+connector/build/
+connector/dist/
+connector/build.log
+connector/cert/
+connector/config.sh
+
+# Local debug logs (per-session /ztp-research traces, not for repo)
+ztp-research-*.md
+
+# Local AI agent config — project-specific instructions, not for public repo
+CLAUDE.md
+AGENTS.md
+
+# OMC / oh-my-claudecode runtime state (local only)
+.omx/
+.sisyphus/
+MagicMock/

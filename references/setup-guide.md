@@ -55,6 +55,8 @@ If auto-detection of Zotero fails, add `--zotero-dir /path/to/Zotero`.
 
 ### 2. Configure Zotero Web API (for write operations)
 
+Interactive `zotpilot setup` now asks this directly. This section is the explicit fallback path for scripted/non-interactive installs.
+
 Ask the user: "Do you want to be able to tag and organize papers from AI? If yes, you'll need a Zotero API key."
 
 If yes:
@@ -63,31 +65,43 @@ If yes:
 3. Click **"Create new private key"**, check "Allow library access" + "Allow write access", save
 4. Copy the generated key
 
-Save credentials (recommended — works for all MCP clients):
+Store the shared, non-secret part in ZotPilot config:
 ```bash
 zotpilot config set zotero_user_id 12345678
-zotpilot config set zotero_api_key YOUR_KEY
+```
+
+Store the secret in ZotPilot's secure credential store, then sync detected clients:
+```bash
+zotpilot config set zotero_api_key <key>
+python3 scripts/run.py register
+```
+
+Only for migration/automation compatibility, you can still pass it directly at registration:
+```bash
+python3 scripts/run.py register --zotero-api-key <key> --zotero-user-id 12345678
 ```
 
 If no, skip — search/read tools will still work without it.
 
 ### 3. Register MCP server
 
-**Preferred: set environment variables first** (avoids keys in shell history):
+**Preferred:** configure via `setup` or `config set`, then register:
 
 ```bash
-export GEMINI_API_KEY=<key>          # or DASHSCOPE_API_KEY for DashScope
-export ZOTERO_API_KEY=<key>          # optional, for write operations
-export ZOTERO_USER_ID=<numeric-id>   # optional, for write operations
+python3 scripts/run.py setup --non-interactive --provider gemini
+# or afterwards:
+zotpilot config set gemini_api_key <key>
+zotpilot config set zotero_api_key <key>
+zotpilot config set zotero_user_id <numeric-id>
 ```
 
-Then register without key flags — keys from env are auto-detected:
+Then register:
 
 ```bash
 python3 scripts/run.py register
 ```
 
-**Alternative: pass keys as CLI flags** (convenient but leaves keys in shell history):
+**Compatibility path:** pass keys as CLI flags (supported for automation / migration, not recommended for interactive use):
 
 ```bash
 python3 scripts/run.py register \
@@ -96,18 +110,11 @@ python3 scripts/run.py register \
   --zotero-user-id <numeric-id>
 ```
 
-This auto-detects the user's AI agent platform(s) and registers accordingly. Supports Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, and Windsurf.
+This auto-detects the user's AI agent platform(s) and registers accordingly. Currently supported: Claude Code, Codex CLI, and OpenCode.
 
-**IDE platform note (Cursor, Windsurf):** These platforms may not inherit shell environment variables. Use `--gemini-key` flag during registration, or use `zotpilot config set` to persist keys in the config file.
+**Important:** registration no longer writes embedded secrets into client config. The client only stores the ZotPilot MCP command; ZotPilot reads secrets from its secure store at runtime.
 
 **Specify platform explicitly:** `python3 scripts/run.py register --platform claude-code`
-
-**General `--platform` examples:**
-```bash
-python3 scripts/run.py register --platform cursor
-python3 scripts/run.py register --platform windsurf
-python3 scripts/run.py register --platform gemini
-```
 
 ### 4. Restart
 

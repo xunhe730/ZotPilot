@@ -1,510 +1,424 @@
 <div align="center">
-  <h2>🧭 Your AI Pilot for Zotero</h2>
+  <h2>🧭 ZotPilot</h2>
   <img src="assets/banner.jpg" alt="ZotPilot" width="100%">
 
   <p>
-    <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-32_Tools-00B265?style=flat-square" alt="MCP">
-    <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
+    <a href="https://www.zotero.org/">
+      <img src="https://img.shields.io/badge/Zotero-CC2936?style=for-the-badge&logo=zotero&logoColor=white" alt="Zotero">
+    </a>
+    <a href="https://claude.ai/code">
+      <img src="https://img.shields.io/badge/Claude_Code-6849C3?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code">
+    </a>
+    <a href="https://github.com/openai/codex">
+      <img src="https://img.shields.io/badge/Codex-74AA9C?style=for-the-badge&logo=openai&logoColor=white" alt="Codex">
+    </a>
+    <a href="https://modelcontextprotocol.io/">
+      <img src="https://img.shields.io/badge/MCP-0175C2?style=for-the-badge&logoColor=white" alt="MCP">
+    </a>
+    <a href="https://pypi.org/project/zotpilot/">
+      <img src="https://img.shields.io/pypi/v/zotpilot?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI">
+    </a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
-    <img src="https://img.shields.io/badge/Linux-supported-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-    <img src="https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+    <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+    <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
+    <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
   </p>
+
+  <p><b>让 AI 读懂你的 Zotero 文献库，论文数据不离家。</b></p>
 
   <p>
     <a href="#快速开始">快速开始</a> &bull;
-    <a href="#和其他方案的区别">对比</a> &bull;
-    <a href="#工作原理">架构</a> &bull;
-    <a href="#如何更新">更新</a> &bull;
-    <a href="#常见问题">FAQ</a> &bull;
+    <a href="#能做什么">能做什么</a> &bull;
+    <a href="#使用模式与示例">使用模式与示例</a> &bull;
+    <a href="#工作原理">工作原理</a> &bull;
+    <a href="#更新">更新</a> &bull;
+    <a href="#faq">FAQ</a> &bull;
     <a href="README_EN.md">English</a>
   </p>
 </div>
 
 ---
 
-## 这是什么
+## v0.5.0 — 调研工作流
 
-ZotPilot 是一个 MCP server，给你的 Zotero 文献库加上语义搜索、引用图谱查询和 AI 辅助整理功能。附带 Agent Skill 提供安装引导和使用指南。
+这个版本的核心变化：agent 现在能真正帮你收集论文，而不只是搜索已有的库。
 
-具体来说，它在你本地的 Zotero 数据上建了一套向量索引，然后通过 MCP 协议暴露 32 个工具给 AI agent。AI 可以按意思搜论文（不是关键词匹配）、定位到具体章节段落、查谁引了谁、帮你打标签分类、读写笔记和批注。论文数据不离开你的电脑。支持 No-RAG 模式——不配置 embedding 也能使用元数据搜索、笔记、标签等基础功能。
+新增的 **Connector 浏览器扩展**让 agent 通过你自己的 Chrome 会话保存论文。好处是实际的：机构订阅的 PDF 也能一起拿到。你挂着学校 VPN 或者在校园网，把一批 DOI 或 arXiv 号交给 agent，它帮你全部存进 Zotero，连带 PDF，不用一篇一篇手动操作。
 
----
+完整的调研工作流用 `/ztp-research` 触发：OpenAlex 搜索候选 → 确认名单 → Connector 入库 → 自动打标签、分集合 → 逐篇报告，全程由 agent 推进。
 
-## 为什么要做这个
-
-写 Related Work 的时候，你记得读过一篇关于"睡眠纺锤波与记忆巩固"的研究，但在 Zotero 里搜不到。因为你记的是概念，Zotero 只匹配原文词汇。搜 "memory consolidation during sleep" 找不到写 "sleep spindle-dependent replay" 的论文，虽然说的是一回事。
-
-除了搜索，还有几个问题 Zotero 解决不了：
-
-- "哪些论文的 Results 里报告了 N400 效应？"——只能逐篇打开 PDF 翻
-- 你知道某篇论文有个准确率对比表，但搜不到表格内容
-- "谁引用了这篇？他们怎么评价？"——要手动去 Google Scholar 查
-- 按主题给 200 篇论文打标签、分类到集合——纯体力活
+这个版本还把 MCP 工具从 33 个精简到 18 个，修了一批边界 bug，并加固了增量索引，让它在中断后能从断点正确恢复。
 
 ---
 
 ## 快速开始
 
-### 方式一：让 agent 帮你装
-
-把这段话复制给你的 AI agent：
-
-> 帮我安装 ZotPilot skill：clone https://github.com/xunhe730/ZotPilot.git 到我的 skills 目录，然后帮我配置 Zotero 文献库。
-
-Agent 会 clone 仓库、装 CLI、配好 Zotero、注册 MCP 服务器。重启一次就能用。
-
-**Skills 目录（clone 目标）：**
-
-| 平台 | 目标路径 |
-|------|----------|
-| Claude Code | `~/.claude/skills/zotpilot` |
-| Codex CLI | `~/.agents/skills/zotpilot` |
-| OpenCode | `~/.config/opencode/skills/zotpilot` |
-| Gemini CLI | `~/.gemini/skills/zotpilot` |
-| Cursor | `~/.cursor/skills/zotpilot` |
-| Windsurf | `~/.codeium/windsurf/skills/zotpilot` |
-
-### 方式二：手动装
-
-**1. Clone 到 skills 目录（Tier 1 平台，有 Skill 支持）：**
-
 ```bash
-# Claude Code
-git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-
-# Codex CLI
-git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
-
-# OpenCode
-git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
-
-# Gemini CLI
-git clone https://github.com/xunhe730/ZotPilot.git ~/.gemini/skills/zotpilot
-
-# Cursor
-git clone https://github.com/xunhe730/ZotPilot.git ~/.cursor/skills/zotpilot
-
-# Windsurf
-git clone https://github.com/xunhe730/ZotPilot.git ~/.codeium/windsurf/skills/zotpilot
+pip install zotpilot
+zotpilot setup                 # 交互式配置 + 自动部署 skills + 注册 MCP
+# 重启你的 AI 客户端
 ```
 
-**2. 注册 MCP 服务器：**
+然后跟 agent 说「搜我库里关于 X 的论文」或「帮我调研 Y 方向」。它会按流程把 18 个 MCP 工具和 4 个 packaged skill 串起来完成任务。
 
-> **Windows 用户**：将下方命令中的 `python3` 替换为 `python`
+**前置**：[Zotero 8](https://www.zotero.org/download/)（已安装并至少启动过一次）· Python 3.10+ · 支持的 AI Agent 客户端（Claude Code / Codex / OpenCode）。入库工作流还需要 [Connector 浏览器扩展](#安装详情)。
 
-有两种方式传 API key 给 MCP 服务器：
-
-**方式 A（推荐）：设环境变量。** 在 shell profile 里 `export GEMINI_API_KEY=<key>`，服务器启动时自动读取。key 不进 shell history，不写入配置文件。适合 Claude Code / Codex / Gemini CLI 等从终端启动的客户端。
-
-**方式 B（兼容性备选）：注册时通过 CLI 参数传入。** `register` 会把 key 写进 MCP 客户端配置文件，客户端启动时注入给服务器。所有 MCP 客户端都支持（包括 Cursor / Windsurf 等不继承 shell 环境变量的 IDE）。注意：key 会留在 shell history 和配置文件明文中。
-
-```bash
-# 推荐：先设环境变量，再注册
-export GEMINI_API_KEY=<key>
-python3 scripts/run.py register          # Tier 1（源码安装）
-zotpilot register                        # Tier 2（pip/uv 安装）
-
-# 兼容性备选：通过 CLI 参数传 key（IDE 客户端可能需要）
-python3 scripts/run.py register --gemini-key <key>    # Tier 1
-zotpilot register --gemini-key <key>                  # Tier 2
-
-# 指定平台：
-python3 scripts/run.py register --platform claude-code  # 或: zotpilot register --platform claude-code
-```
-
-支持：Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf。
-
-**3. 重启你的 AI agent。**
-
-**4.（可选）启用写操作** — 搜索和引用装好就能用，打标签、建集合需要 Zotero Web API 密钥：
-
-1. 打开 [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
-2. 记下页面顶部的 **数字 User ID**（例如 `12345678`，不是用户名）
-3. 点 **"Create new private key"**，勾上 "Allow library access" 和 "Allow write access"，复制 key
-
-<img src="assets/zotero-api-key.png" alt="Zotero API Key 页面" width="100%">
-
-4. 保存凭证（**推荐：写入 config 文件，对所有 MCP 客户端生效**）：
-
-```bash
-zotpilot config set zotero_user_id 12345678   # 数字 ID，不是用户名
-zotpilot config set zotero_api_key YOUR_KEY
-```
-
-> ⚠️ Key 以明文存储在 `~/.config/zotpilot/config.json`（Windows: `%APPDATA%\zotpilot\config.json`）。
-> 确保该目录不被 git 追踪。
-
-验证配置：
-
-```bash
-zotpilot doctor   # 应显示 [source: config file] ✓
-```
-
-<details>
-<summary>其他配置方式</summary>
-
-**环境变量（仅对当前 shell session 有效）：**
-
-```bash
-export ZOTERO_USER_ID=12345678
-export ZOTERO_API_KEY=YOUR_KEY
-```
-
-环境变量优先级高于 config 文件。在 `.zshrc` / `.bashrc` 里 export 可持久化，但 IDE 客户端（Cursor/Windsurf）可能读不到 shell 环境变量。
-
-**通过 `register` 注册时写入 MCP 配置（旧方式）：**
-
-```bash
-# Tier 1（源码安装）— 重新注册时带上所有已有的 key，否则会丢失：
-python3 scripts/run.py register --gemini-key <gemini密钥> --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
-# Tier 2（pip/uv 安装）：
-zotpilot register --gemini-key <gemini密钥> --zotero-api-key <zotero密钥> --zotero-user-id <用户ID>
-```
-
-> **注意**：`register` 会整体替换 MCP 配置中的 ZotPilot 条目。如果之前注册时带了 `--gemini-key`，重新注册时也要带上，否则会丢失嵌入 API 密钥。推荐改用 `config set` 避免此问题。
-
-</details>
-
-不配也行，搜索和引用照常用，只有标签和集合管理需要。
-
-### 第一次用会发生什么
-
-你说"搜我的 Zotero"时，Skill 会走一遍安装流程：
-
-1. 检测到缺少 `zotpilot` 命令，自动安装（优先 `uv tool install`，失败则 fallback 到 `pip install`）
-2. 检测 Zotero 数据目录，问你选哪个嵌入模型
-3. 注册 MCP 服务器（如果还没注册的话）
-4. 你重启一次，MCP 工具生效
-5. 索引论文，每篇 2-5 秒
-6. 之后直接问就行
-
-**嵌入模型有三个选项：**
-
-| 模型 | API Key | 质量 | 离线 | 默认维度 |
-|------|:---:|------|:---:|------|
-| Gemini [`gemini-embedding-001`](https://ai.google.dev/gemini-api/docs/embeddings) | 是（[免费额度](https://aistudio.google.com/apikey)） | [MTEB 68.32](https://huggingface.co/spaces/mteb/leaderboard) | 否 | 768 |
-| DashScope [`text-embedding-v4`](https://help.aliyun.com/zh/model-studio/embedding) | 是（[免费额度](https://bailian.console.aliyun.com/)） | [MTEB 68.36 / C-MTEB 70.14](https://huggingface.co/spaces/mteb/leaderboard) | 否 | 1024 |
-| Local [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) | 本地部署（免费） | [MTEB ~56](https://huggingface.co/spaces/mteb/leaderboard) | 是 | 384 |
-
-注意：选了之后不好换。三个模型的向量维度不一样，换模型要 `zotpilot index --force` 全部重新索引。先想好再选。
+ZotPilot 会把 Codex packaged skills 部署到 `~/.agents/skills`。旧的 `$CODEX_HOME/skills`（默认通常是 `~/.codex/skills`）只是 Codex 兼容路径；如果你的 Codex 桌面环境显示该路径，它不是 ZotPilot 的部署目标。
 
 ---
 
-## 实际用起来是什么样
+## 能做什么
 
-**语义搜索：**
+ZotPilot 由三部分组成：
 
-> "sleep spindle 与记忆巩固的关系"
+| 组件 | 作用 |
+|------|------|
+| **MCP Server** | 18 个原子工具：语义搜索、引用图谱、入库、标签 / 集合 / 笔记管理 |
+| **Connector** | Chrome 扩展。agent 通过你的浏览器会话保存论文，保留机构订阅 PDF |
+| **Agent Skills** | 把工具串成完整研究流程，不只是单次调用 |
 
-返回 3 篇论文，虽然原文用的是 "spindle-dependent replay"。Zotero 搜不到这个。
+### 4 个 skill 覆盖研究流程
 
-**按章节定位：**
+| Skill | 做什么 |
+|-------|--------|
+| `ztp-research` | 本地库 + OpenAlex 检索 → 候选确认 → Connector 入库 → 自动打标签 / 分集合 → 逐篇报告 |
+| `ztp-review` | 基于库内论文做综述、聚类、比较、初稿整理 |
+| `ztp-profile` | 分析文献库主题分布、期刊层次、时间跨度、标签使用 |
+| `ztp-setup` | 指导 agent 调用 `zotpilot setup` / `upgrade` / `doctor` 做安装、更新、排错。它不是 CLI 命令本身 |
 
-> "哪些论文的 Results 里报告了 N400 效应？"
+### 5 个核心能力
 
-只返回 Results 章节的段落，带 `[Author2022, p.12]` 引用。Introduction 和 References 里随口提到的不会出现在结果里。Q1 期刊的结果排前面。
-
-**批量整理：**
-
-> "给所有深度学习论文打标签，移到 DL Methods 集合"
-
-语义搜索匹配到 28 篇，自动打标签、建集合、同步回 Zotero。超过 5 篇会先问你确认。
-
-**引用探索：**
-
-> "谁引用了 Wang 2022？他们怎么评价局限性？"
-
-通过 OpenAlex 找到 15 篇引用论文，在里面搜批评段落。
-
-**搜表格：**
-
-> "找比较不同模型准确率的表格"
-
-搜 PDF 里提取出来的表头、单元格数据、表标题。
+| 能力 | 不一样在哪 |
+|------|--------|
+| **语义搜索** | 按意思搜，不只关键词匹配。结果精确到章节段落 |
+| **一步入库** | DOI / arXiv / URL 混合输入 → Connector 浏览器保存 → 验证 → 必要时回退 |
+| **引用图谱** | OpenAlex 查引用链，并在引用论文里搜特定观点 |
+| **批量整理** | 语义匹配 → 打标签、分集合、写笔记，同步回 Zotero |
+| **学术检索** | OpenAlex 全参数检索，可直接喂给入库流程 |
 
 ---
 
 ## 和其他方案的区别
 
-| 方案 | 语义搜索 | 知道章节结构 | 能帮你整理 | 引用图谱 | 安装耗时 |
+| | 语义搜索 | 章节定位 | 入库 + 整理 | 引用图谱 | 安装 |
 |------|:-:|:-:|:-:|:-:|--------|
-| Zotero 自带搜索 | 否 | 否 | 否 | 否 | 无 |
-| 把 PDF 喂给 AI | 是 | 否（章节信息丢了） | 否 | 否 | 手动，受 token 限制 |
-| 自己搭 RAG | 是 | 看你怎么搭 | 否 | 否 | 几小时起步 |
-| ZotPilot | 是 | 是 | 是 | 是（OpenAlex） | 约 5 分钟 |
+| Zotero 原生 | ✗ | ✗ | ✗ | ✗ | — |
+| 把 PDF 喂给 AI | ✓ | ✗ | ✗ | ✗ | 手动 |
+| 自己搭 RAG | ✓ | 看实现 | ✗ | ✗ | 数小时 |
+| [zotero-mcp](https://github.com/54yyyu/zotero-mcp) | ✓ | ✗ | 部分 | ✗ | ~5 min |
+| **ZotPilot** | ✓ | ✓ | ✓（Connector） | ✓ | ~5 min |
 
-和自建 RAG 比，ZotPilot 的区别在于搜到之后它知道这段话在 Results 还是 Methods 里，发在 Q1 期刊还是 workshop，据此调整排序。排序公式是 `相似度^0.7 × 章节权重 × 期刊质量`。加上表格搜索、引用图谱和 Zotero 写操作，基本覆盖了文献研究的主要流程。
-
----
-
-## 常用命令
-
-| 你说什么 | 发生什么 |
-|---------|---------|
-| "搜索我的论文，关于 X" | 语义搜索所有已索引论文 |
-| "我有哪些关于 X 的文献？" | 按主题返回论文列表 |
-| "找某作者关于 Y 的论文" | 精确词匹配 + 论文详情 |
-| "展示比较 X 的表格" | 搜索 PDF 里提取的表格内容 |
-| "谁引用了这篇论文？" | 通过 OpenAlex 查引用 |
-| "给这些论文打上 X 标签" | 通过 Zotero Web API 加标签 |
-| "创建一个叫 X 的集合" | 创建 Zotero 文件夹 |
-| "索引了多少论文？" | 索引状态检查 |
+不一样的地方主要在于：入库走真实浏览器会话和 Zotero translator，机构订阅的 PDF 也能一起拿到；引用数据来自 OpenAlex；排序和重排细节放在下面的工作原理里。
 
 ---
 
-## 如何更新
+## 安装详情
 
-**v0.3.0+ 用户**（推荐）：
+<details>
+<summary><b>嵌入模型 provider 选择</b></summary>
+
+| Provider | 体验 | 离线 | 获取 API Key |
+|----------|------|:---:|-------------|
+| Gemini | 高质量默认 | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
+| DashScope | 适合中国网络环境 | ✗ | [阿里云百炼](https://bailian.console.aliyun.com/) |
+| Local | 基本够用 | ✓ | 不需要 |
+
+> 选定后不建议换。向量维度不同，换模型要 `zotpilot index --force` 重建。
+> 选 `local` 只把 ZotPilot 切到本地嵌入模式；本地模型在首次实际调用 embeddings 时才下载，不在 `setup` 阶段预下载。
+
+非交互式（agent 驱动）：
+
 ```bash
-zotpilot update
+zotpilot setup --non-interactive --provider gemini   # 或 dashscope / local
 ```
-自动探测你的安装方式（uv / pip / editable），同时更新 CLI 和所有平台的 skill 目录。
 
-| 标志 | 用途 |
-|------|------|
-| `--check` | 只查是否有新版本，不安装 |
-| `--dry-run` | 预览所有操作，不执行任何更改 |
-| `--cli-only` | 只更新 CLI，跳过 skill 目录 |
-| `--skill-only` | 只更新 skill 目录，跳过 CLI |
+</details>
 
-Skill 目录升级前会自动检查：符号链接、脏工作树、非 ZotPilot 仓库会被跳过并打印警告，不会误操作。
+<details>
+<summary><b>API Key 与环境变量</b></summary>
 
-**v0.2 及更早版本用户**（手动升级到最新版）：
+配置模型分两层：
+
+- `zotpilot setup` 写共享本地配置到 macOS / Linux 的 `~/.config/zotpilot/config.json`，或 Windows 的 `%APPDATA%\zotpilot\config.json`，并自动部署 skills / 注册 MCP
+- `zotpilot config set` 管理共享配置；API key 也会写入同一个 `config.json`
+- `zotpilot upgrade` 升级 CLI，并刷新 packaged skills / 同步 MCP runtime
+- API key 不写入 Claude / Codex / OpenCode 的客户端配置
+
+环境变量仍可作为临时 override，优先级高于 `config.json`：
+
 ```bash
-# pip / uv 安装
-uv tool upgrade zotpilot
+export GEMINI_API_KEY=<your-key>           # 或 DASHSCOPE_API_KEY
+export ANTHROPIC_API_KEY=<your-key>        # 可选：复杂表格视觉提取
+```
+
+`config.json` 可能包含 API key。不要提交、公开粘贴或同步到不可信位置；共享机器上优先用交互式 `zotpilot setup` 输入密钥，避免把 key 留在 shell history。
+
+推荐顺序：
+
+```bash
+zotpilot setup                         # 交互式：会询问 embedding key 以及 Zotero User ID / API key（可跳过）
 # 或
-pip install --upgrade zotpilot
-
-# git clone 安装（skill 目录）
-# 进入你的 skill 目录（各平台路径见"快速开始"章节）
-cd <your-skill-dir>/zotpilot
-git pull
+zotpilot setup --non-interactive --provider gemini
 ```
+
+之后如果需要修改配置：
+
+```bash
+zotpilot config set gemini_api_key <key>
+zotpilot config set zotero_user_id <id>
+zotpilot config set zotero_api_key <key>
+zotpilot setup
+```
+
+可选：`openalex_email` 不是密钥，只是 OpenAlex 联系邮箱。配置后 OpenAlex 相关搜索 / 引文查询能走 polite pool（约 10 req/s；未配置通常约 1 req/s）：
+
+```bash
+zotpilot config set openalex_email you@example.com
+```
+
+</details>
+
+<details>
+<summary><b>Connector 浏览器扩展</b></summary>
+
+入库工作流默认只说明 Chrome：
+
+1. 打开 [最新 Release](https://github.com/xunhe730/ZotPilot/releases/latest)，下载 `zotpilot-connector-v*.zip` 并解压
+2. Chrome 地址栏打开 `chrome://extensions/`
+3. 打开右上角**开发者模式**
+4. 点击**加载已解压的扩展程序**
+5. 选择包含 `manifest.json` 的目录
+6. 工具栏出现 Zotero 图标即安装成功
+
+> ZotPilot Connector 是官方 Zotero Connector 的 fork。两者可共存：官方扩展处理手动保存，ZotPilot Connector 处理 agent 调用。
+
+Connector 升级：
+
+1. 重新下载最新 Release zip
+2. 打开 `chrome://extensions/`
+3. 在已加载的 ZotPilot Connector 上点刷新
+
+</details>
+
+<details>
+<summary><b>启用写操作（标签 / 集合 / 笔记）</b></summary>
+
+搜索和引用无需额外凭据。写操作需要 Zotero Web API 密钥：
+
+1. 打开 [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
+2. 记下页面顶部的**数字 User ID**
+3. 创建 private key，勾选 "Allow library access" + "Allow write access"
+
+```bash
+zotpilot config set zotero_user_id 12345678
+zotpilot config set zotero_api_key YOUR_KEY
+zotpilot setup
+zotpilot doctor
+```
+
+迁移旧的客户端内嵌 secret：
+
+```bash
+zotpilot config migrate-secrets
+```
+
+</details>
+
+<details>
+<summary><b>验证安装</b></summary>
+
+```bash
+zotpilot doctor     # 诊断配置 / 环境 / MCP 注册
+zotpilot status     # 索引状态
+```
+
+MCP 工具或 Skill 没出现？重新运行 `zotpilot setup` 并重启 agent。高级用户如果只想刷新 agent 集成，可用 `zotpilot install`。
+
+</details>
 
 ---
 
-## 32 个 MCP 工具
+## 使用模式与示例
 
-<details>
-<summary>搜索（7 个）</summary>
+### 直接自然语言交互
 
-| 工具 | 说明 |
-|------|------|
-| `search_papers` | 语义搜索，可以按章节、期刊加权 |
-| `search_topic` | 按主题找论文，结果按文档去重 |
-| `search_boolean` | 精确词匹配（AND/OR） |
-| `advanced_search` | 多条件元数据搜索（年份/作者/标签/集合等），无需索引 |
-| `search_tables` | 搜表格内容 |
-| `search_figures` | 搜图表标题 |
-| `get_passage_context` | 展开某个结果的上下文 |
+适合简单、单步、目标清晰的任务，直接对 agent 说即可：
 
-</details>
+- “搜我库里关于 X 的论文”
+- “哪些论文的 Results 里提到 Y？”
+- “谁引用了这篇？”
+- “索引了多少论文？”
 
-<details>
-<summary>浏览（9 个）</summary>
+这类请求通常会直接调用单个或少量 MCP 工具完成。
 
-| 工具 | 说明 |
-|------|------|
-| `get_library_overview` | 列出所有论文和索引状态 |
-| `get_paper_details` | 看一篇论文的完整元数据 |
-| `list_collections` | 列出所有文件夹 |
-| `get_collection_papers` | 看某个文件夹里的论文 |
-| `list_tags` | 列出所有标签 |
-| `get_index_stats` | 索引状态：多少篇、多少 chunk |
-| `get_notes` | 读取和搜索笔记 |
-| `get_feeds` | 列出 RSS 订阅或获取订阅条目 |
-| `get_annotations` | 读取高亮和评论（需要 ZOTERO_API_KEY） |
+常见例子：
 
-</details>
+| 你说 | agent 做 |
+|------|---------|
+| 「搜我的论文，关于 X」 | 语义搜索已索引论文 |
+| 「哪些论文的 Results 里提到 Y？」 | 按章节 + 关键词定位段落 |
+| 「找比较模型准确率的表格」 | 搜 PDF 提取的表格内容 |
+| 「谁引用了这篇？怎么评价？」 | OpenAlex 查引用 → 搜观点段落 |
+| 「索引了多少论文？」 | 索引状态检查 |
 
-<details>
-<summary>写操作（7 个）</summary>
+### `ztp-*` workflow
 
-| 工具 | 说明 |
-|------|------|
-| `add_item_tags` / `remove_item_tags` | 加/删标签（单篇） |
-| `set_item_tags` | 替换全部标签（单篇） |
-| `add_to_collection` / `remove_from_collection` | 移进/移出文件夹（单篇） |
-| `create_collection` | 建文件夹 |
-| `create_note` | 给论文添加笔记（需要 ZOTERO_API_KEY） |
-| `batch_tags(action="add\|set\|remove")` | 批量标签操作（最多 100 篇） |
-| `batch_collections(action="add\|remove")` | 批量文件夹操作（最多 100 篇） |
+适合多阶段、容易跑偏、需要 agent 按顺序推进的任务，建议显式触发 workflow：
 
-</details>
+- `ztp-research`
+  - “/ztp-research 帮我调研 X 方向最近的重要论文，并把值得收的入到 Zotero 里”
+- `ztp-review`
+  - “/ztp-review 基于我库里的论文整理一版关于 X 的综述框架”
+- `ztp-profile`
+  - “/ztp-profile 看看我这个库主要在研究什么，再决定怎么整理”
+- `ztp-setup`
+  - “/ztp-setup 检查 ZotPilot 配置”
 
-<details>
-<summary>引用（3 个）</summary>
-
-| 工具 | 说明 |
-|------|------|
-| `find_citing_papers` | 谁引了这篇（OpenAlex） |
-| `find_references` | 这篇引了谁 |
-| `get_citation_count` | 被引次数 |
-
-</details>
-
-<details>
-<summary>管理（5 个）</summary>
-
-| 工具 | 说明 |
-|------|------|
-| `index_library` | 索引新论文（增量，支持分批：`batch_size=20`，循环调用直到 `has_more=false`） |
-| `get_index_stats` | 查看索引状态（文档数、分块数） |
-| `switch_library` | 列出/切换文献库（支持群组库） |
-| `get_reranking_config` | 看排序权重 |
-| `get_vision_costs` | 看视觉 API 用量 |
-
-</details>
-
+这类任务更适合让 agent 显式进入 skill 工作流，因为它们通常涉及搜索、筛选、入库、整理、汇报等多个阶段。
 ---
 
 ## 工作原理
 
-ZotPilot 的核心是一个 MCP server，通过 [SKILL.md](SKILL.md) 提供安装和使用指导，[scripts/run.py](scripts/run.py) 负责自动安装和跨平台注册。AI agent 加载后会启动 MCP server，暴露 32 个工具。
-
-```
+```text
 索引（跑一次）
 Zotero SQLite ──→ PDF 提取 ──→ 分块 + 章节分类 ──→ 向量嵌入 ──→ ChromaDB
 
-使用（每次查询）
-AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ ChromaDB ──→ 重排序 ──→ 结果
-                               ├── 引用图谱 ──→ OpenAlex
-                               ├── 文献浏览 ──→ Zotero SQLite
-                               └── 写操作   ──→ Zotero Web API ──→ 同步回 Zotero
+查询（每次）
+Agent ──→ MCP 工具 ───┬── 语义搜索 ──→ ChromaDB ──→ 章节感知重排序
+                      ├── 引用图谱 ──→ OpenAlex
+                      ├── 文献浏览 ──→ Zotero SQLite（只读）
+                      ├── 写操作   ──→ Zotero Web API ──→ 同步回 Zotero
+                      └── 入库     ──→ Bridge + Connector ──→ Zotero Desktop
 ```
 
-**索引阶段：** 从 Zotero SQLite（只读）读元数据，用 PyMuPDF 提取 PDF 全文、表格和图表，按学术章节（Abstract / Methods / Results / …）分块，生成向量嵌入存入 ChromaDB。
+- **索引**：SQLite 以 `mode=ro&immutable=1` 只读打开；PyMuPDF 提取 PDF 全文、表格、图表；按学术章节分块；嵌入存入 ChromaDB。增量索引会跳过已完成项目。
+- **搜索**：查询向量化 → ChromaDB 余弦相似度 → 章节感知重排序 + 期刊质量加权。
+- **入库**：Agent → 本地 bridge (127.0.0.1:2619) → Chrome Connector → Zotero Desktop。
+- **写操作**：标签 / 集合 / 笔记通过 Zotero Web API（Pyzotero），自动同步回客户端。
 
-**检索阶段：** 查询文本向量化后在 ChromaDB 做余弦相似度搜索，结果经过章节感知重排序（Results 比 References 权重高）和期刊质量加权（SCImago Q1 期刊排前面）。
+<details>
+<summary><b>MCP 工具列表（18 个）</b></summary>
 
-**写操作：** 标签和集合管理通过 Zotero 官方 Web API（Pyzotero），变更自动同步回 Zotero 客户端。
+| 类别 | 工具 |
+|------|------|
+| 搜索 | `search_papers`、`search_topic`、`search_boolean`、`advanced_search` |
+| 阅读 | `get_passage_context`、`get_paper_details`、`get_notes`、`get_annotations`、`browse_library`、`profile_library` |
+| 发现 | `search_academic_databases` |
+| 入库 | `ingest_by_identifiers` |
+| 整理 | `manage_tags`、`manage_collections`、`create_note` |
+| 引用 | `get_citations` |
+| 索引 | `index_library`、`get_index_stats` |
 
-**引用图谱：** 通过 OpenAlex API 查被引和参考文献关系。
+`search_papers` 支持 `section_type` 参数搜表格 / 图表。`ingest_by_identifiers` 接受 DOI / arXiv ID / URL 混合输入。
 
-几个设计上的选择：
+</details>
 
-- Zotero SQLite 用 `mode=ro&immutable=1` 打开，只读。Zotero 开着也没事。
-- 论文数据不外传，唯一的网络请求是嵌入 API（选 Local 模型连这个都没有）。
-- 文档和查询用不同编码（Gemini 的 `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`），检索质量比用同一种编码好。
-- SKILL.md 不只暴露工具接口，还告诉 AI 什么场景用哪个工具、怎么组合。
+<details>
+<summary><b>文件结构 & 数据位置</b></summary>
 
-### 文件结构
+```text
+PyPI 安装的 zotpilot（wheel 内含 skills + references）
+├── src/zotpilot/skills/
+├── references/
+└── connector/
 
-```
-~/.claude/skills/zotpilot/          # 或 ~/.agents/skills/zotpilot/（Codex）
-├── SKILL.md                        # 决策树：安装 → 索引 → 研究
-├── scripts/run.py                  # 引导脚本：自动安装 CLI + 委托执行
-├── references/                     # 参考文档
-│   ├── tool-guide.md               # 工具参数详解
-│   ├── troubleshooting.md          # 常见问题
-│   └── setup-guide.md            # 安装配置指南
-└── src/zotpilot/                   # MCP 服务器源码
-```
-
-### 数据存储
-
-```
-# Linux
+# 配置 / 索引位置
+# macOS / Linux
 ~/.config/zotpilot/config.json
 ~/.local/share/zotpilot/chroma/
-
-# macOS
-~/Library/Application Support/zotpilot/config.json
-~/Library/Application Support/zotpilot/chroma/
 
 # Windows
 %APPDATA%\zotpilot\config.json
 %APPDATA%\zotpilot\chroma\
 ```
 
+</details>
+
 ---
 
-## 常见问题
+## 更新
+
+```bash
+zotpilot upgrade
+```
+
+升级当前 ZotPilot CLI、刷新 packaged skill 文件、同步 MCP runtime 配置。
 
 <details>
-<summary>会不会改我的 Zotero 数据库？</summary>
+<summary><b>常用更新命令</b></summary>
 
-不会。SQLite 用 `mode=ro&immutable=1` 打开，物理上写不进去。标签和集合的修改走 Zotero 官方 Web API v3，变更正常同步回 Zotero 客户端。
+| 命令 / 选项 | 用途 |
+|------|------|
+| `upgrade` 或 `update`（不带参数） | 升级 CLI + 刷新 skills + 同步 runtime |
+| `--check` | 只检查版本（始终 exit 0） |
+| `--dry-run` | 预览 runtime drift 和更新动作 |
+| `--cli-only` | 只升级 CLI 包 |
+| `--skill-only` | 只刷新 skills 和 runtime 注册 |
+| `--re-register` | 即使没有 drift，也强制刷新客户端注册 |
+| `--migrate-secrets` | 同步 runtime 前，迁移旧客户端内嵌 secrets |
+
+</details>
+
+---
+
+## FAQ
+
+<details>
+<summary><b>会改我的 Zotero 数据库吗？</b></summary>
+
+不会。SQLite 用 `mode=ro&immutable=1` 打开，物理上写不进去。标签 / 集合 / 笔记走 Zotero 官方 Web API，变更正常同步回客户端。
 
 </details>
 
 <details>
-<summary>Zotero 开着能用吗？</summary>
+<summary><b>Zotero 开着能用吗？</b></summary>
 
 能，只读模式不冲突。
 
 </details>
 
 <details>
-<summary>支持哪些 agent？</summary>
+<summary><b>支持哪些 agent？</b></summary>
 
-**Tier 1（Skill + MCP）：** Claude Code、Codex CLI、OpenCode、Gemini CLI、Cursor、Windsurf — 完整支持，Skill 提供使用指导 + MCP 提供工具。
-
-只要支持 MCP 协议的 AI agent 都可以接入 ZotPilot 的搜索和管理工具。
+Claude Code、Codex、OpenCode。这三家是我们官方支持的客户端，Skill 部署、MCP 注册、升级同步都针对它们做了适配。
 
 </details>
 
 <details>
-<summary>Gemini 嵌入花多少钱？</summary>
+<summary><b>嵌入模型花多少钱？</b></summary>
 
-免费额度大概 1,000 请求/天。一篇 10 页的论文大约用 1 次请求（每 32 个文本块算 1 次），搜索每次也是 1 次。免费额度够索引几百篇。超出后 $0.15/百万 token，基本可以忽略。Local 模型不花钱。
-
-</details>
-
-<details>
-<summary>DashScope/百炼怎么样？</summary>
-
-阿里云百炼的 `text-embedding-v4`，1024 维，MTEB 68.36 / C-MTEB 70.14。国内不用翻墙，¥0.0005/千 token，新用户 100 万 token 免费额度。装的时候选 `--provider dashscope`，key 在 https://bailian.console.aliyun.com/ 拿。
+Gemini 免费额度约 1,000 请求/天，够索引几百篇；超出后 $0.15/百万 token。DashScope 新用户 100 万 token 免费。Local 模型完全离线免费。
 
 </details>
 
 <details>
-<summary>本地模型怎么样？</summary>
+<summary><b>索引多久？</b></summary>
 
-`all-MiniLM-L6-v2`，80MB 左右，第一次用自动下载，之后不联网。MTEB 约 56 分（Gemini 68、DashScope 68），几百篇以内的库够用。
-
-</details>
-
-<details>
-<summary>索引多久？占多大空间？</summary>
-
-每篇 2-5 秒，300 篇大概 15 分钟。索引大小约 1MB / 100 篇。`--limit 10` 可以先试试。跑过的不会重复跑。
+每篇 2–5 秒，300 篇约 15 分钟。用 `zotpilot index --limit 10` 先试试，跑过的自动跳过。
 
 </details>
 
 <details>
-<summary>扫描版 PDF / 图表 / 特别长的书怎么办？</summary>
+<summary><b>扫描版 PDF / 超长文献？</b></summary>
 
-- 扫描版：自动 OCR 回退——当 PyMuPDF 提取文本过少时，自动用 Tesseract 全页 OCR 重新提取。需要安装 Tesseract：macOS `brew install tesseract tesseract-lang`，Ubuntu/Debian `sudo apt install tesseract-ocr tesseract-ocr-chi-sim`，Windows 从 [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki) 下载安装
-- 图表：提取的是标题文字和上下文段落，不是图片本身。图片 PNG 存在本地
-- 超长文献：默认跳过 40 页以上的（`--max-pages` 可以调），也可以用 `--item-key` 单独索引某一篇
-- 分批索引：MCP 默认每次处理 20 篇（`batch_size=20`），Agent 循环调用直到 `has_more=false`。CLI 默认一次全跑
-- 表格修复：可选功能，用 Claude Haiku 重新提取复杂表格，需要 `ANTHROPIC_API_KEY`
+- 扫描版自动 OCR（需装 Tesseract：macOS `brew install tesseract tesseract-lang`，Ubuntu `sudo apt install tesseract-ocr`）
+- 超过 40 页默认跳过（`--max-pages` 可调），`--item-key` 可单独索引
+- 可选：Claude Haiku 修复复杂表格（需 `ANTHROPIC_API_KEY`）
 
 </details>
 
 <details>
-<summary>能不用任何 API key 吗？</summary>
+<summary><b>能完全离线用吗？</b></summary>
 
-能。选 `--provider local` 就行，全部本地跑。
-
-</details>
-
-<details>
-<summary>Vision 表格提取是什么？</summary>
-
-可选功能。用 Claude Haiku（通过 Batch API）重新提取 PDF 表格，修复 PyMuPDF 可能搞乱的合并单元格和多级表头。需要 `ANTHROPIC_API_KEY`。不设就自动跳过，不影响文本搜索。成本记录在 `vision_costs.json` 里。
+能。嵌入选 `--provider local`，不配写操作 key，全部本地跑。搜索、浏览、索引都不需要网络。
 
 </details>
 
 <details>
-<summary>引用数据从哪来？知网论文行吗？</summary>
+<summary><b>引用数据从哪来？</b></summary>
 
-用的是 [OpenAlex](https://openalex.org/)，覆盖大约 2.5 亿篇文献，通过 DOI 查。有 DOI 的知网论文可以查，没 DOI 的查不了引用，但语义搜索和标签管理不需要 DOI，照常用。
+[OpenAlex](https://openalex.org/)。没 DOI 的论文无法查引用，但语义搜索和标签管理不受影响。
 
 </details>
 
@@ -514,39 +428,49 @@ AI Agent ──→ 32 个 MCP 工具 ──┬── 语义搜索 ──→ Chro
 
 | 症状 | 怎么办 |
 |------|------|
-| 找不到 Skill | 确认 clone 到了正确的 skills 目录：Claude Code `~/.claude/skills/`、Codex `~/.agents/skills/`、OpenCode `~/.config/opencode/skills/`、Gemini `~/.gemini/skills/`、Cursor `~/.cursor/skills/`、Windsurf `~/.codeium/windsurf/skills/` |
-| `zotpilot: command not found` | `python3 scripts/run.py status`（会自动装）；Windows 用 `python`。Windows 用户还需将 `%APPDATA%\Python\PythonXYY\Scripts` 加入 PATH |
-| MCP 工具没出来 | 重新注册 MCP 服务器然后重启 |
-| 搜出来是空的 | 先跑 `zotpilot index`，或者换个更宽泛的搜索词 |
-| `GEMINI_API_KEY not set` | 设环境变量，或 `zotpilot setup --non-interactive --provider local` 换本地模型 |
-| 不知道哪出了问题 | 跑 `zotpilot doctor` |
+| 找不到 Skill | `zotpilot setup` 然后重启 agent |
+| `zotpilot: command not found` | 先 `pip install zotpilot` |
+| MCP 工具没出来 | `zotpilot setup` 然后重启 agent |
+| 搜出来是空的 | 先跑 `zotpilot index` |
+| `GEMINI_API_KEY not set` | `export GEMINI_API_KEY=<key>` 或改用 `setup --provider local` |
+| 不知道哪出了问题 | `zotpilot doctor` |
 
-更多见 [references/troubleshooting.md](references/troubleshooting.md)。
+更多见 [troubleshooting.md](references/troubleshooting.md)。
 
 ---
 
 <details>
-<summary>开发 / 贡献</summary>
+<summary><b>开发 / 贡献</b></summary>
 
 ```bash
 git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
-uv sync --extra dev
-uv run pytest              # 177 个测试
-uv run ruff check src/
+pip install -e ".[dev]"
+
+zotpilot setup
+python -m pytest
+python -m ruff check src/ tests/
 ```
 
-欢迎贡献，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+Connector 开发：
+
+```bash
+cd connector
+npm install
+./build.sh -d
+```
 
 </details>
 
 ---
 
 <div align="center">
-  <p>
-    <a href="https://github.com/xunhe730/ZotPilot/issues">报告问题</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/issues">功能建议</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/discussions">讨论</a>
-  </p>
+  <code>pip install zotpilot &amp;&amp; zotpilot setup</code>
+  <br><br>
+  <sub>Claude Code &middot; Codex &middot; OpenCode</sub>
+  <br><br>
+  <a href="https://github.com/xunhe730/ZotPilot/issues">报告问题</a> &middot;
+  <a href="https://github.com/xunhe730/ZotPilot/discussions">讨论</a>
+  <br>
   <sub>MIT License &copy; 2026 xunhe</sub>
 </div>

@@ -1,7 +1,8 @@
 """Tests for Zotero SQLite client."""
 import sqlite3
+
 import pytest
-from pathlib import Path
+
 from zotpilot.zotero_client import ZoteroClient
 
 
@@ -50,6 +51,7 @@ def zotero_db(tmp_path):
         INSERT INTO fields VALUES (3, 'publicationTitle');
         INSERT INTO fields VALUES (4, 'DOI');
         INSERT INTO fields VALUES (5, 'abstractNote');
+        INSERT INTO fields VALUES (6, 'extra');
 
         -- Insert a test item (itemTypeID 2 = journalArticle)
         INSERT INTO items (itemID, itemTypeID, key) VALUES (1, 2, 'ITEM001');
@@ -87,7 +89,8 @@ def zotero_db(tmp_path):
         INSERT INTO itemTags VALUES (1, 1);
 
         -- Collection
-        INSERT INTO collections (collectionID, collectionName, parentCollectionID, key) VALUES (1, 'AI Papers', NULL, 'COL001');
+        INSERT INTO collections (collectionID, collectionName, parentCollectionID, key)
+            VALUES (1, 'AI Papers', NULL, 'COL001');
         INSERT INTO collectionItems VALUES (1, 1);
 
         -- Fulltext
@@ -104,6 +107,16 @@ def zotero_db(tmp_path):
     (storage / "test.pdf").write_bytes(b"%PDF-1.4 test")
 
     return tmp_path
+
+
+def _insert_item_with_extra(db_dir, *, item_id: int, item_type_id: int, key: str, value_id: int, extra: str):
+    conn = sqlite3.connect(str(db_dir / "zotero.sqlite"))
+    conn.executescript(f"""
+        INSERT INTO items (itemID, itemTypeID, key) VALUES ({item_id}, {item_type_id}, '{key}');
+        INSERT INTO itemDataValues VALUES ({value_id}, '{extra}');
+        INSERT INTO itemData VALUES ({item_id}, 6, {value_id});
+    """)
+    conn.close()
 
 
 class TestZoteroClient:
@@ -153,3 +166,50 @@ class TestZoteroClient:
     def test_db_not_found(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             ZoteroClient(tmp_path / "nonexistent")
+
+    def test_get_item_key_by_doi(self, zotero_db):
+        client = ZoteroClient(zotero_db)
+        assert client.get_item_key_by_doi("https://doi.org/10.1234/test") == "ITEM001"
+
+    def test_get_item_key_by_arxiv_id_direct_match(self, zotero_db):
+        _insert_item_with_extra(
+            zotero_db,
+            item_id=3,
+            item_type_id=2,
+            key="ITEMARXIV",
+            value_id=6,
+            extra="arXiv:2301.00001 [cs.CL]",
+        )
+
+        client = ZoteroClient(zotero_db)
+        assert client.get_item_key_by_arxiv_id("2301.00001") == "ITEMARXIV"
+
+    def test_get_item_key_by_arxiv_id_version_suffix_stripped(self, zotero_db):
+        _insert_item_with_extra(
+            zotero_db,
+            item_id=3,
+            item_type_id=2,
+            key="ITEMARXIV",
+            value_id=6,
+            extra="arXiv:2301.00001 [cs.CL]",
+        )
+
+        client = ZoteroClient(zotero_db)
+        assert client.get_item_key_by_arxiv_id("2301.00001v2") == "ITEMARXIV"
+
+    def test_get_item_key_by_arxiv_id_no_match(self, zotero_db):
+        client = ZoteroClient(zotero_db)
+        assert client.get_item_key_by_arxiv_id("2301.00001") is None
+
+    def test_get_item_key_by_arxiv_id_excludes_attachments(self, zotero_db):
+        _insert_item_with_extra(
+            zotero_db,
+            item_id=3,
+            item_type_id=14,
+            key="ATTARXIV",
+            value_id=6,
+            extra="arXiv:2301.00001 [cs.CL]",
+        )
+
+        client = ZoteroClient(zotero_db)
+        assert client.get_item_key_by_arxiv_id("2301.00001") is None

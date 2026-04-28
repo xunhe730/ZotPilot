@@ -1,6 +1,6 @@
 """Tests for get_collection_items (key-based SQL query)."""
 import sqlite3
-import pytest
+
 from zotpilot.zotero_client import ZoteroClient
 
 

@@ -1,13 +1,16 @@
 """Health-check diagnostics for ZotPilot environment."""
 from __future__ import annotations
 
-import os
+import json
 import sqlite3
+import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Config, _default_config_dir
+from .config import _default_config_dir
+from .runtime_settings import SECRET_FIELDS, resolve_runtime_settings
+from .secret_store import describe_backend
 
 
 @dataclass(frozen=True)
@@ -33,6 +36,35 @@ def _check_config_exists(config_path: Path) -> CheckResult:
     if config_path.exists():
         return CheckResult("config_file", "pass", str(config_path))
     return CheckResult("config_file", "fail", f"Not found: {config_path}")
+
+
+def _check_config_permissions(config_path: Path) -> CheckResult:
+    has_config_secret = False
+    if config_path.exists():
+        try:
+            raw_data = json.loads(config_path.read_text(encoding="utf-8"))
+            has_config_secret = any(raw_data.get(field) for field in SECRET_FIELDS)
+        except (json.JSONDecodeError, OSError):
+            return CheckResult("config_permissions", "warn", "config file is unreadable or malformed")
+    else:
+        return CheckResult("config_permissions", "warn", "config file missing")
+    if sys.platform == "win32":
+        if has_config_secret:
+            return CheckResult(
+                "config_permissions",
+                "warn",
+                "config.json contains API keys; Windows ACL hardening is not enforced by ZotPilot v1",
+            )
+        return CheckResult("config_permissions", "pass", "no API keys stored in config.json")
+    mode = stat.S_IMODE(config_path.stat().st_mode)
+    if mode == 0o600:
+        return CheckResult("config_permissions", "pass", "0600")
+    status = "fail" if has_config_secret else "warn"
+    return CheckResult(
+        "config_permissions",
+        status,
+        f"{oct(mode)}; expected 0o600{' because config.json contains API keys' if has_config_secret else ''}",
+    )
 
 
 def _check_zotero_data(config) -> CheckResult:
@@ -76,16 +108,34 @@ def _check_embedding_api_key(config) -> CheckResult:
     return CheckResult("embedding_api_key", "fail", f"Unknown provider: {provider}")
 
 
+def _check_secret_backend(config=None, sources: dict[str, str] | None = None) -> CheckResult:
+    backend = describe_backend()
+    uses_legacy_backend = any(
+        source.startswith("legacy-") for source in (sources or {}).values()
+    )
+    if backend.available:
+        detail = backend.name if not backend.path else f"{backend.name} ({backend.path})"
+        return CheckResult("legacy_secret_backend", "pass", detail)
+    if not uses_legacy_backend:
+        detail = backend.detail or "no legacy backend configured"
+        return CheckResult("legacy_secret_backend", "pass", f"unused ({detail})")
+    return CheckResult("legacy_secret_backend", "warn", backend.detail or "No legacy secret backend available")
+
+
 def _check_chromadb_index(config) -> CheckResult:
     """Check ChromaDB index health."""
     try:
         from .embeddings import create_embedder
+        from .index_authority import authoritative_indexed_doc_ids, current_library_pdf_doc_ids
         from .vector_store import VectorStore
+        from .zotero_client import ZoteroClient
 
         embedder = create_embedder(config)
         store = VectorStore(config.chroma_db_path, embedder)
-        doc_ids = store.get_indexed_doc_ids()
-        total = store.count()
+        zotero = ZoteroClient(config.zotero_data_dir)
+        current_doc_ids = current_library_pdf_doc_ids(zotero)
+        doc_ids = authoritative_indexed_doc_ids(store, current_doc_ids)
+        total = store.count_chunks_for_doc_ids(doc_ids)
         doc_count = len(doc_ids)
 
         if doc_count > 0:
@@ -100,14 +150,10 @@ def _check_chromadb_index(config) -> CheckResult:
         return CheckResult("chromadb_index", "fail", f"Cannot open index: {exc}")
 
 
-def _check_zotero_web_api(config) -> CheckResult:
+def _check_zotero_web_api(config, sources: dict[str, str]) -> CheckResult:
     """Check Zotero Web API credentials presence and source."""
     api_key = config.zotero_api_key
     user_id = config.zotero_user_id
-
-    # Determine credential source for display
-    api_key_from_env = bool(os.environ.get("ZOTERO_API_KEY"))
-    user_id_from_env = bool(os.environ.get("ZOTERO_USER_ID"))
 
     if api_key and user_id:
         if not user_id.isdigit():
@@ -118,8 +164,8 @@ def _check_zotero_web_api(config) -> CheckResult:
                 f"not a username (got '{user_id}'). "
                 f"Fix: zotpilot config set zotero_user_id <numeric_id>",
             )
-        key_src = "env" if api_key_from_env else "config file"
-        id_src = "env" if user_id_from_env else "config file"
+        key_src = sources.get("zotero_api_key", "unset")
+        id_src = sources.get("zotero_user_id", "config")
         return CheckResult(
             "zotero_web_api",
             "pass",
@@ -134,8 +180,10 @@ def _check_zotero_web_api(config) -> CheckResult:
     return CheckResult(
         "zotero_web_api",
         "warn",
-        f"Missing: {', '.join(missing)} (write operations will not work). "
-        f"Run: zotpilot config set zotero_api_key <key>",
+        f"Missing: {', '.join(missing)}. This is optional until you need write operations "
+        "(ingest/tag/collections/notes). Store `zotero_user_id` in shared config with "
+        "`zotpilot config set zotero_user_id <numeric_id>`, store `zotero_api_key` with "
+        "`zotpilot config set zotero_api_key <key>`, or run `zotpilot setup` to configure both.",
     )
 
 
@@ -173,38 +221,35 @@ def run_checks(config_path: str | None = None, full: bool = False) -> list[Check
     # 1. Python version
     results.append(_check_python_version())
 
+    resolved = resolve_runtime_settings(config_path)
     # 2. Config file exists
     if config_path:
         resolved_config_path = Path(config_path).expanduser()
     else:
-        resolved_config_path = _default_config_dir() / "config.json"
+        candidate = _default_config_dir() / "config.json"
+        resolved_config_path = candidate if candidate.exists() else resolved.runtime_config_path
     results.append(_check_config_exists(resolved_config_path))
 
     # Load config (needed for remaining checks)
-    config = Config.load(config_path)
+    config = resolved.config
+    results.append(_check_config_permissions(resolved_config_path))
 
     # 3. Zotero data directory + sqlite
     results.append(_check_zotero_data(config))
 
-    # 4. Embedding API key
+    # 4. Legacy secret backend
+    results.append(_check_secret_backend(config, resolved.sources))
+
+    # 5. Embedding API key
     results.append(_check_embedding_api_key(config))
 
-    # 5. ChromaDB index
+    # 6. ChromaDB index
     results.append(_check_chromadb_index(config))
 
-    # 6. Zotero Web API credentials
-    results.append(_check_zotero_web_api(config))
+    # 7. Zotero Web API credentials
+    results.append(_check_zotero_web_api(config, resolved.sources))
 
-    # 7b. Semantic Scholar API key (warn if missing — rate-limited without key)
-    if not config.semantic_scholar_api_key:
-        results.append(CheckResult(
-            "semantic_scholar_key",
-            "warn",
-            "S2_API_KEY not set. Academic search rate-limited to 1 req/sec. "
-            "Set: zotpilot config set semantic_scholar_api_key <key>",
-        ))
-
-    # 7. Write connectivity (only with --full)
+    # 8. Write connectivity (only with --full)
     if full:
         results.append(_check_write_connectivity(config))
 

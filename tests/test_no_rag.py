@@ -1,7 +1,8 @@
 """Tests for No-RAG mode (embedding_provider='none')."""
-import pytest
-from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from zotpilot.config import Config
 
@@ -50,7 +51,10 @@ class TestConfigValidation:
             vision_enabled=False,
             vision_model="",
             anthropic_api_key=None,
+            vision_max_tables_per_run=None,
+            vision_max_cost_usd=None,
             max_pages=40,
+            preflight_enabled=True,
             zotero_api_key=None,
             zotero_user_id=None,
             zotero_library_type="user",
@@ -88,7 +92,10 @@ class TestConfigValidation:
             vision_enabled=False,
             vision_model="",
             anthropic_api_key=None,
+            vision_max_tables_per_run=None,
+            vision_max_cost_usd=None,
             max_pages=40,
+            preflight_enabled=True,
             zotero_api_key=None,
             zotero_user_id=None,
             zotero_library_type="user",
@@ -123,14 +130,17 @@ class TestGetIndexStats:
         assert result["mode"] == "no-rag"
 
 
-class TestGetRerankingConfig:
-    @patch("zotpilot.tools.admin._get_config")
-    def test_no_rag_returns_disabled(self, mock_config):
+class TestGetIndexStatsMergedConfig:
+    @patch("zotpilot.tools.indexing._get_config")
+    def test_no_rag_returns_disabled_reranking_config(self, mock_config):
         mock_config.return_value = _MockConfig()
-        from zotpilot.tools.admin import get_reranking_config
-        result = get_reranking_config()
-        assert result["enabled"] is False
+        from zotpilot.tools.indexing import get_index_stats
+
+        result = get_index_stats(include_config=True)
+
         assert result["mode"] == "no-rag"
+        assert result["reranking_config"]["enabled"] is False
+        assert result["reranking_config"]["mode"] == "no-rag"
 
 
 class TestGetPaperDetailsNoRag:
@@ -155,17 +165,17 @@ class TestGetPaperDetailsNoRag:
         mock_zotero.return_value = mock_client
 
         from zotpilot.tools.library import get_paper_details
-        result = get_paper_details("KEY1")
+        result = get_paper_details(doc_id="KEY1")
+        assert result["doc_id"] == "KEY1"
+        assert "key" not in result
         assert result["indexed"] is False
 
 
 class TestSearchPapersNoRag:
-    @patch("zotpilot.tools.search._get_config")
-    @patch("zotpilot.tools.search._get_retriever")
-    def test_raises_tool_error(self, mock_retriever, mock_config):
+    @patch("zotpilot.tools.search._get_store_optional")
+    def test_raises_tool_error(self, mock_store_optional):
         from fastmcp.exceptions import ToolError
-        mock_retriever.side_effect = ToolError("Semantic search requires indexing")
-        mock_config.return_value = _MockConfig()
+        mock_store_optional.side_effect = ToolError("Semantic search requires indexing")
 
         from zotpilot.tools.search import search_papers
         with pytest.raises(ToolError, match="Semantic search requires indexing"):
@@ -180,12 +190,17 @@ class TestCitationsNoRag:
         mock_store_opt.return_value = None  # No-RAG
         mock_item = MagicMock()
         mock_item.doi = ""  # no DOI
+        mock_item.item_key = "DOC1"
+        mock_item.pdf_path = MagicMock()
+        mock_item.pdf_path.exists.return_value = True
         mock_client = MagicMock()
         mock_client.get_item.return_value = mock_item
+        mock_client.get_all_items_with_pdfs.return_value = [mock_item]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.citations import _get_doi
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.citations import _get_doi
         with pytest.raises(ToolError, match="no DOI"):
             _get_doi("DOC1")
 
@@ -195,10 +210,12 @@ class TestCitationsNoRag:
         mock_store_opt.return_value = None
         mock_client = MagicMock()
         mock_client.get_item.return_value = None
+        mock_client.get_all_items_with_pdfs.return_value = []
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.citations import _get_doi
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.citations import _get_doi
         with pytest.raises(ToolError, match="Document not found"):
             _get_doi("MISSING")
 
@@ -207,8 +224,9 @@ class TestPassageContextNoRag:
     @patch("zotpilot.tools.context._get_config")
     def test_raises_tool_error(self, mock_config):
         mock_config.return_value = _MockConfig()
-        from zotpilot.tools.context import get_passage_context
         from fastmcp.exceptions import ToolError
+
+        from zotpilot.tools.context import get_passage_context
         with pytest.raises(ToolError, match="requires indexing"):
             get_passage_context("DOC1", 0)
 
@@ -222,8 +240,8 @@ class TestBasicToolsWorkInNoRag:
         mock_client.get_all_tags.return_value = [{"name": "ML", "count": 5}]
         mock_zotero.return_value = mock_client
 
-        from zotpilot.tools.library import list_tags
-        result = list_tags()
+        from zotpilot.tools.library import browse_library
+        result = browse_library(view="tags")
         assert len(result) == 1
         assert result[0]["name"] == "ML"
 
@@ -237,11 +255,15 @@ class TestBasicToolsWorkInNoRag:
         result = advanced_search([{"field": "year", "op": "gt", "value": "2020"}])
         assert len(result) == 1
 
+    @patch("zotpilot.tools.library._get_writer")
     @patch("zotpilot.tools.library._get_zotero")
-    def test_get_notes_works(self, mock_zotero):
+    def test_get_notes_works(self, mock_zotero, mock_get_writer):
+        from fastmcp.exceptions import ToolError
+
         mock_client = MagicMock()
         mock_client.get_notes.return_value = [{"key": "N1", "content": "note text"}]
         mock_zotero.return_value = mock_client
+        mock_get_writer.side_effect = ToolError("No API key")
 
         from zotpilot.tools.library import get_notes
         result = get_notes()

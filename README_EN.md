@@ -1,23 +1,38 @@
 <div align="center">
-  <h2>🧭 Your AI Pilot for Zotero</h2>
+  <h2>🧭 ZotPilot</h2>
   <img src="assets/banner.jpg" alt="ZotPilot" width="100%">
 
   <p>
-    <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-    <img src="https://img.shields.io/badge/MCP-32_Tools-00B265?style=flat-square" alt="MCP">
-    <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License">
+    <a href="https://www.zotero.org/">
+      <img src="https://img.shields.io/badge/Zotero-CC2936?style=for-the-badge&logo=zotero&logoColor=white" alt="Zotero">
+    </a>
+    <a href="https://claude.ai/code">
+      <img src="https://img.shields.io/badge/Claude_Code-6849C3?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code">
+    </a>
+    <a href="https://github.com/openai/codex">
+      <img src="https://img.shields.io/badge/Codex-74AA9C?style=for-the-badge&logo=openai&logoColor=white" alt="Codex">
+    </a>
+    <a href="https://modelcontextprotocol.io/">
+      <img src="https://img.shields.io/badge/MCP-0175C2?style=for-the-badge&logoColor=white" alt="MCP">
+    </a>
+    <a href="https://pypi.org/project/zotpilot/">
+      <img src="https://img.shields.io/pypi/v/zotpilot?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI">
+    </a>
   </p>
   <p>
-    <img src="https://img.shields.io/badge/macOS-supported-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
-    <img src="https://img.shields.io/badge/Linux-supported-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
-    <img src="https://img.shields.io/badge/Windows-supported-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
+    <img src="https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS">
+    <img src="https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux">
+    <img src="https://img.shields.io/badge/Windows-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows">
   </p>
+
+  <p><b>Give an AI agent your Zotero library. Your papers stay on your machine.</b></p>
 
   <p>
     <a href="#quick-start">Quick Start</a> &bull;
-    <a href="#compared-to-alternatives">Compare</a> &bull;
-    <a href="#how-it-works">Architecture</a> &bull;
-    <a href="#how-to-update">Update</a> &bull;
+    <a href="#what-it-does">What it does</a> &bull;
+    <a href="#usage-patterns-and-examples">Usage patterns and examples</a> &bull;
+    <a href="#how-it-works">How it works</a> &bull;
+    <a href="#update">Update</a> &bull;
     <a href="#faq">FAQ</a> &bull;
     <a href="README.md">简体中文</a>
   </p>
@@ -25,488 +40,396 @@
 
 ---
 
-## What is this
+## v0.5.0 — Research Workflow
 
-ZotPilot is an MCP server that adds semantic search, citation graph queries, and AI-assisted organization to your Zotero library. It ships with an Agent Skill for guided setup and usage.
+The main change in this release: agents can now actually collect papers for you, not just search what's already in your library.
 
-It builds a local vector index over your Zotero data, then exposes 32 tools to AI agents via MCP protocol. The AI can search your papers by meaning (not keywords), locate specific passages within paper sections, look up who cited what, help you tag and sort your collection, and read/write notes and annotations. Your papers stay on your machine. No-RAG mode available — metadata search, notes, tags, and collections work without an embedding API key.
+The new **Connector browser extension** lets the agent save papers through your own Chrome session. The practical benefit is straightforward: institutional PDFs come along. If you're on a campus network or VPN, hand the agent a list of DOIs or arXiv IDs and it gets them all into Zotero with PDFs attached. No manual one-by-one downloading.
 
----
+The full research workflow runs with `/ztp-research`: OpenAlex search, candidate confirmation, Connector ingestion, auto-tagging and filing, per-paper report. The agent handles each step in sequence.
 
-## Why this exists
-
-You're writing a Related Work section and you remember reading about "the relationship between sleep spindles and memory consolidation." But you can't find it in Zotero. You remember the concept; Zotero only matches exact words. Searching "memory consolidation during sleep" won't find a paper that says "sleep spindle-dependent replay," even though they describe the same thing.
-
-Beyond search, there are a few other things Zotero can't do:
-
-- "Which papers report N400 effects in their Results section?" — you have to open each PDF and look
-- You know a paper has an accuracy comparison table, but you can't search table contents
-- "Who cites this paper? What do they say about it?" — manual Google Scholar work
-- Tagging and sorting 200 papers by theme — drag-and-drop busywork
+This release also trims the tool count from 33 to 18, fixes a range of edge-case bugs, and hardens incremental indexing so it correctly resumes from where it stopped after an interruption.
 
 ---
 
-## What it looks like in practice
-
-**Semantic search:**
-
-> "relationship between sleep spindles and memory consolidation"
-
-Returns 3 papers, even though they use the phrase "spindle-dependent replay." Zotero wouldn't find these.
-
-**Section-level retrieval:**
-
-> "Which papers report N400 effects in their Results?"
-
-Returns passages from Results sections only, with `[Author2022, p.12]` citations. Passing mentions in Introduction or References don't show up. Q1 journal results rank higher.
-
-**Batch organization:**
-
-> "Tag all deep learning papers and move them to a DL Methods collection"
-
-Semantic search matches 28 papers, auto-tags them, creates the collection, syncs back to Zotero. Asks for confirmation if more than 5 papers are affected.
-
-**Citation exploration:**
-
-> "Who cites Wang 2022 and what do they say about the limitations?"
-
-Finds 15 citing papers via OpenAlex, searches them for critique passages.
-
-**Table search:**
-
-> "Find tables comparing model accuracy"
-
-Searches extracted table headers, cell data, and captions from PDFs.
-
----
-
-## Compared to alternatives
-
-| Approach | Semantic search | Knows paper structure | Organizes for you | Citation graph | Setup time |
-|----------|:-:|:-:|:-:|:-:|-------|
-| Zotero built-in search | No | No | No | No | None |
-| Feed PDFs to AI | Yes | No (section info lost) | No | No | Manual, token-limited |
-| Build your own RAG | Yes | Depends on implementation | No | No | Hours |
-| ZotPilot | Yes | Yes | Yes | Yes (OpenAlex) | ~5 min |
-
-The difference from DIY RAG: after finding a passage, ZotPilot knows whether it's from Results or Methods, from a Q1 journal or a workshop, and adjusts ranking accordingly. The scoring formula is `similarity^0.7 × section_weight × journal_quality`. Combined with table search, citation graph, and Zotero write operations, it covers most of the literature research workflow.
-
----
-
-## Quick start
-
-### Option 1: Let your agent install it
-
-Copy this to your AI agent:
-
-> Install the ZotPilot skill for me: clone https://github.com/xunhe730/ZotPilot.git into my skills directory, then help me set up my Zotero library.
-
-The agent clones the repo, installs the CLI, configures Zotero, and registers the MCP server. Restart once, then you're ready.
-
-**Skills directories (clone targets):**
-
-| Platform | Target path |
-|----------|-------------|
-| Claude Code | `~/.claude/skills/zotpilot` |
-| Codex CLI | `~/.agents/skills/zotpilot` |
-| OpenCode | `~/.config/opencode/skills/zotpilot` |
-| Gemini CLI | `~/.gemini/skills/zotpilot` |
-| Cursor | `~/.cursor/skills/zotpilot` |
-| Windsurf | `~/.codeium/windsurf/skills/zotpilot` |
-
-### Option 2: Manual install
-
-**1. Clone to your skills directory (Tier 1 platforms with Skill support):**
+## Quick Start
 
 ```bash
-# Claude Code
-git clone https://github.com/xunhe730/ZotPilot.git ~/.claude/skills/zotpilot
-
-# Codex CLI
-git clone https://github.com/xunhe730/ZotPilot.git ~/.agents/skills/zotpilot
-
-# OpenCode
-git clone https://github.com/xunhe730/ZotPilot.git ~/.config/opencode/skills/zotpilot
-
-# Gemini CLI
-git clone https://github.com/xunhe730/ZotPilot.git ~/.gemini/skills/zotpilot
-
-# Cursor
-git clone https://github.com/xunhe730/ZotPilot.git ~/.cursor/skills/zotpilot
-
-# Windsurf
-git clone https://github.com/xunhe730/ZotPilot.git ~/.codeium/windsurf/skills/zotpilot
+pip install zotpilot
+zotpilot setup                 # interactive config + skill deploy + MCP register
+# Restart your AI client
 ```
 
-**2. Register the MCP server:**
+Then tell your agent "search my library for X" or "survey recent papers on Y". It will chain 18 MCP tools and 4 packaged skills to complete the job.
 
-Two ways to pass API keys to the MCP server:
+**Prerequisites**: [Zotero 8](https://www.zotero.org/download/) installed and launched at least once · Python 3.10+ · a supported AI agent client (Claude Code / Codex / OpenCode). The ingestion workflow also needs the [Connector browser extension](#install-details).
 
-**Method A (recommended):** Set environment variables (`export GEMINI_API_KEY=<key>` in shell profile). The server reads them at startup. Keys stay out of shell history and config files. Works for terminal-based clients (Claude Code, Codex, Gemini CLI).
-
-**Method B (compatibility fallback):** Pass keys via CLI flags during registration. `register` writes them into the MCP client config (e.g. `settings.local.json`), which injects them at server startup. Works with all MCP clients, including IDE-based ones (Cursor, Windsurf) that may not inherit shell env vars. Note: keys appear in shell history and plaintext config files.
-
-```bash
-# Recommended: set env vars, then register
-export GEMINI_API_KEY=<key>
-python3 scripts/run.py register          # Tier 1 (source checkout)
-zotpilot register                        # Tier 2 (pip/uv install)
-
-# Compatibility fallback: pass keys as CLI flags (IDE clients may need this)
-python3 scripts/run.py register --gemini-key <key>    # Tier 1
-zotpilot register --gemini-key <key>                  # Tier 2
-
-# Specify platform:
-python3 scripts/run.py register --platform claude-code  # or: zotpilot register --platform claude-code
-```
-
-Supports: Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf.
-
-**3. Restart your AI agent.**
-
-### What happens on first use
-
-When you say "search my Zotero" the first time, the Skill walks through setup:
-
-1. Detects missing `zotpilot` CLI, installs it via `uv tool install`
-2. Finds your Zotero data directory, asks which embedding provider to use
-3. Registers the MCP server (if not done already)
-4. You restart once for MCP tools to load
-5. Indexes your papers, ~2-5 seconds each
-6. Ready to search after that
-
-**Three embedding options:**
-
-| Provider | API Key | Quality | Offline | Default Dimensions |
-|----------|:---:|------|:---:|------|
-| Gemini [`gemini-embedding-001`](https://ai.google.dev/gemini-api/docs/embeddings) | Yes ([free tier](https://aistudio.google.com/apikey)) | [MTEB 68.32](https://huggingface.co/spaces/mteb/leaderboard) | No | 768 |
-| DashScope [`text-embedding-v4`](https://help.aliyun.com/zh/model-studio/embedding) | Yes ([free tier](https://bailian.console.aliyun.com/)) | [MTEB 68.36 / C-MTEB 70.14](https://huggingface.co/spaces/mteb/leaderboard) | No | 1024 |
-| Local [`all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) | Local (free) | [MTEB ~56](https://huggingface.co/spaces/mteb/leaderboard) | Yes | 384 |
-
-Note: this choice is hard to change later. The three providers produce different vector dimensions, so switching requires `zotpilot index --force` to re-index everything. Pick before you index.
+ZotPilot deploys Codex packaged skills to `~/.agents/skills`. The old `$CODEX_HOME/skills` location, usually `~/.codex/skills` when `CODEX_HOME` is unset, is only a Codex compatibility path and is not ZotPilot's deployment target.
 
 ---
 
-## Common commands
+## What it does
 
-| What you say | What happens |
-|---|---|
-| "Search my papers for X" | Semantic search across all indexed papers |
-| "What do I have on X?" | Topic-level survey, papers grouped by relevance |
-| "Find the paper by Author about Y" | Exact-match search + paper details |
-| "Show me tables comparing X" | Searches extracted table content |
-| "Who cites this paper?" | Citation lookup via OpenAlex |
-| "Tag these papers as X" | Adds tags via Zotero Web API |
-| "Create a collection called X" | Creates a Zotero folder |
+ZotPilot has three parts:
+
+| Component | Role |
+|------|------|
+| **MCP Server** | 18 atomic tools for semantic search, citation graph, ingestion, and library management |
+| **Connector** | Chrome extension; the agent saves papers through your real browser session and keeps institution-access PDFs |
+| **Agent Skills** | Chain the tools into complete research workflows instead of isolated calls |
+
+### Four skills covering the research flow
+
+| Skill | What it does |
+|-------|--------------|
+| `ztp-research` | Local library + OpenAlex search → candidate confirmation → Connector ingest → auto tag & collection → per-paper report |
+| `ztp-review` | Review, cluster, compare, and draft from papers already in your library |
+| `ztp-profile` | Profile your library structure: topics, venue tiers, time span, tag usage |
+| `ztp-setup` | Guides the agent to call `zotpilot setup` / `upgrade` / `doctor` for installation, updates, and troubleshooting. It is not a CLI command |
+
+### Five core capabilities
+
+| Capability | What is special |
+|------|------|
+| **Semantic search** | Search by meaning, not just keywords; results are localized to section level |
+| **One-step ingestion** | Mixed DOI / arXiv / URL input → Connector save → validation → fallback when needed |
+| **Citation graph** | OpenAlex-powered citation lookup, including viewpoint search in citing papers |
+| **Batch organization** | Semantic match → tag, file, annotate, and sync back to Zotero |
+| **Academic discovery** | Full OpenAlex filter surface that feeds directly into ingestion |
+
+---
+
+## How it compares
+
+| | Semantic search | Section-aware | Ingest + organize | Citation graph | Install |
+|------|:-:|:-:|:-:|:-:|--------|
+| Native Zotero | ✗ | ✗ | ✗ | ✗ | — |
+| Feed PDFs to AI | ✓ | ✗ | ✗ | ✗ | Manual |
+| Roll-your-own RAG | ✓ | Depends | ✗ | ✗ | Hours |
+| [zotero-mcp](https://github.com/54yyyu/zotero-mcp) | ✓ | ✗ | Partial | ✗ | ~5 min |
+| **ZotPilot** | ✓ | ✓ | ✓ (Connector) | ✓ | ~5 min |
+
+What is different: ingestion uses a real browser session and Zotero translators, so institutional PDFs come along with the metadata. Citation data comes from OpenAlex. Ranking details live in the architecture section below.
+
+---
+
+## Install details
+
+<details>
+<summary><b>Embedding provider selection</b></summary>
+
+| Provider | Experience | Offline | Get API key |
+|----------|------|:---:|-------------|
+| Gemini | High-quality default | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
+| DashScope | Better fit for China networks | ✗ | [Alibaba Bailian](https://bailian.console.aliyun.com/) |
+| Local | Good enough baseline | ✓ | Not required |
+
+> Avoid switching after the first index. Dimensions differ, so a switch requires `zotpilot index --force`.
+> Selecting `local` only switches ZotPilot into local-embedding mode. The local model is downloaded on the first real embedding call, not during `setup`.
+
+Non-interactive (agent-driven):
+
+```bash
+zotpilot setup --non-interactive --provider gemini   # or dashscope / local
+```
+
+</details>
+
+<details>
+<summary><b>API keys and environment</b></summary>
+
+There are two layers:
+
+- `zotpilot setup` writes shared local config to `~/.config/zotpilot/config.json` on macOS / Linux, or `%APPDATA%\zotpilot\config.json` on Windows, and automatically deploys skills / registers MCP
+- `zotpilot config set` manages shared config; API keys are stored in the same `config.json`
+- `zotpilot upgrade` upgrades the CLI and refreshes packaged skills / MCP runtime
+- API keys are not embedded in Claude / Codex / OpenCode client config
+
+Environment variables remain available as temporary overrides and take precedence over `config.json`:
+
+```bash
+export GEMINI_API_KEY=<your-key>           # or DASHSCOPE_API_KEY
+export ANTHROPIC_API_KEY=<your-key>        # optional: complex-table vision extraction
+```
+
+`config.json` may contain API keys. Do not commit it, paste it publicly, or sync it to untrusted locations. On shared machines, prefer interactive `zotpilot setup` so keys are not left in shell history.
+
+Recommended order:
+
+```bash
+zotpilot setup                         # interactive: asks for embedding key and optional Zotero User ID / API key
+# or
+zotpilot setup --non-interactive --provider gemini
+```
+
+To change configuration later:
+
+```bash
+zotpilot config set gemini_api_key <key>
+zotpilot config set zotero_user_id <id>
+zotpilot config set zotero_api_key <key>
+zotpilot setup
+```
+
+Optional: `openalex_email` is not a secret. It is just a contact email for OpenAlex polite-pool access. With it, OpenAlex-backed search / citation tools can usually run at about 10 req/s instead of 1 req/s:
+
+```bash
+zotpilot config set openalex_email you@example.com
+```
+
+</details>
+
+<details>
+<summary><b>Connector browser extension</b></summary>
+
+This is how ingestion actually works. The default instructions only cover Chrome.
+
+1. Open the [latest release](https://github.com/xunhe730/ZotPilot/releases/latest), download `zotpilot-connector-v*.zip`, and extract it
+2. In Chrome, open `chrome://extensions/`
+3. Enable **Developer mode**
+4. Click **Load unpacked**
+5. Select the directory that contains `manifest.json`
+6. Confirm the Zotero icon appears in the toolbar
+
+> ZotPilot Connector is a fork of the official Zotero Connector. The two can coexist: the official extension handles manual saves, the fork handles agent-driven saves.
+
+Connector upgrades:
+
+1. Download the latest release zip again
+2. Open `chrome://extensions/`
+3. Click refresh on the unpacked ZotPilot Connector entry
+
+</details>
+
+<details>
+<summary><b>Enable write operations (tags / collections / notes)</b></summary>
+
+Search and citation lookup work without credentials. Write operations need a Zotero Web API key:
+
+1. Open [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
+2. Note the numeric **User ID**
+3. Create a private key with "Allow library access" + "Allow write access"
+
+```bash
+zotpilot config set zotero_user_id 12345678
+zotpilot config set zotero_api_key YOUR_KEY
+zotpilot setup
+zotpilot doctor
+```
+
+To migrate legacy client-embedded secrets:
+
+```bash
+zotpilot config migrate-secrets
+```
+
+</details>
+
+<details>
+<summary><b>Verify</b></summary>
+
+```bash
+zotpilot doctor
+zotpilot status
+```
+
+MCP tools or skills missing? Run `zotpilot setup` again and restart the agent. Advanced users can run `zotpilot install` to refresh only agent integration.
+
+</details>
+
+---
+
+## Usage patterns and examples
+
+### Direct natural-language interaction
+
+Use this for simple, single-step tasks with a clear target:
+
+- "Search my library for papers about X"
+- "Which papers mention Y in the Results section?"
+- "Who cites this paper?"
+- "How many papers have been indexed?"
+
+These usually map to one MCP tool or a small set of tools.
+
+Typical examples:
+
+| You say | Agent does |
+|---------|------------|
+| "Search my papers on X" | Semantic search over your indexed library |
+| "Which papers mention Y in Results?" | Section + keyword passage lookup |
+| "Find tables comparing model accuracy" | Search extracted PDF tables |
+| "Who cited this paper, and what did they say?" | OpenAlex lookup → search citing passages |
 | "How many papers are indexed?" | Index status check |
 
----
+### Explicit `ztp-*` workflows
 
-## How to update
+Use this for multi-step tasks that are easy to derail and need the agent to follow a full workflow:
 
-**v0.3.0+ users** (recommended):
-```bash
-zotpilot update
-```
-Auto-detects your installer (uv / pip / editable) and updates both the CLI and all platform skill directories.
+- `ztp-research`
+  - "/ztp-research survey the most important recent papers on X and ingest the worthwhile ones into Zotero"
+- `ztp-review`
+  - "/ztp-review draft a review outline about X from papers already in my library"
+- `ztp-profile`
+  - "/ztp-profile show what this library is mostly about before reorganizing it"
+- `ztp-setup`
+  - "/ztp-setup check my ZotPilot configuration"
 
-| Flag | Purpose |
-|------|---------|
-| `--check` | Check for a new version without installing |
-| `--dry-run` | Preview all actions without making changes |
-| `--cli-only` | Update CLI only, skip skill directories |
-| `--skill-only` | Update skill directories only, skip CLI |
+These tasks are better expressed as explicit skill workflows because they usually span discovery, filtering, ingestion, organization, and reporting.
 
-Skill directories are checked before updating — symlinks, dirty working trees, and non-ZotPilot repos are skipped automatically.
+Typical examples:
 
-**v0.2 and earlier** (manual upgrade to latest):
-```bash
-# pip / uv install
-uv tool upgrade zotpilot
-# or
-pip install --upgrade zotpilot
-
-# git clone install (skill directory)
-# navigate to your skill dir (see platform paths in Quick start)
-cd <your-skill-dir>/zotpilot
-git pull
-```
-
----
-
-## 32 MCP tools
-
-<details>
-<summary>Search (7)</summary>
-
-| Tool | What it does |
-|------|-------------|
-| `search_papers` | Semantic search with section/journal weighting |
-| `search_topic` | Topic-level paper discovery, deduplicated by document |
-| `search_boolean` | Exact word matching (AND/OR) |
-| `advanced_search` | Multi-condition metadata search (year/author/tag/collection etc.), works without indexing |
-| `search_tables` | Search table content |
-| `search_figures` | Search figure captions |
-| `get_passage_context` | Expand a result with surrounding text |
-
-</details>
-
-<details>
-<summary>Browse (9)</summary>
-
-| Tool | What it does |
-|------|-------------|
-| `get_library_overview` | List all papers with index status |
-| `get_paper_details` | Full metadata for one paper |
-| `list_collections` | All Zotero folders |
-| `get_collection_papers` | Papers in a specific folder |
-| `list_tags` | All tags |
-| `get_index_stats` | Index status: doc count, chunk count |
-| `get_notes` | Read and search notes |
-| `get_feeds` | List RSS feeds or get feed items |
-| `get_annotations` | Read highlights and comments (requires ZOTERO_API_KEY) |
-
-</details>
-
-<details>
-<summary>Write (7)</summary>
-
-| Tool | What it does |
-|------|-------------|
-| `add_item_tags` / `remove_item_tags` | Add/remove tags |
-| `set_item_tags` | Replace all tags |
-| `add_to_collection` / `remove_from_collection` | Move in/out of folders |
-| `create_collection` | Create a folder |
-| `create_note` | Add a note to a paper (requires ZOTERO_API_KEY) |
-| `batch_tags(action="add\|set\|remove")` | Batch tag operations (up to 100 items) |
-| `batch_collections(action="add\|remove")` | Batch folder operations (up to 100 items) |
-
-</details>
-
-<details>
-<summary>Citations (3)</summary>
-
-| Tool | What it does |
-|------|-------------|
-| `find_citing_papers` | Who cites this paper (OpenAlex) |
-| `find_references` | What this paper cites |
-| `get_citation_count` | Citation count |
-
-</details>
-
-<details>
-<summary>Admin (5)</summary>
-
-| Tool | What it does |
-|------|-------------|
-| `index_library` | Index new papers (incremental, supports batching: `batch_size=20`, loop until `has_more=false`) |
-| `get_index_stats` | Check index status (doc count, chunk count) |
-| `switch_library` | List/switch libraries (supports group libraries) |
-| `get_reranking_config` | View ranking weights |
-| `get_vision_costs` | Check vision API usage |
-
-</details>
+| You say | Agent does |
+|---------|------------|
+| "/ztp-research find recent papers on Z" | OpenAlex search → candidate confirmation → Connector ingest → organize |
+| "/ztp-review draft a review outline about X from papers already in my library" | Cluster, compare, extract findings, and draft a review outline |
+| "/ztp-profile show what this library is mostly about before reorganizing it" | Analyze themes, venue tiers, time span, and tag structure |
 
 ---
 
 ## How it works
 
-ZotPilot's core is an MCP server. [SKILL.md](SKILL.md) provides setup and usage guidance, and [scripts/run.py](scripts/run.py) handles auto-installation and cross-platform registration. Your AI agent loads the skill and launches the MCP server with 32 tools.
+```text
+Indexing (one-off)
+Zotero SQLite ──→ PDF extraction ──→ chunking + section classification ──→ embeddings ──→ ChromaDB
 
-```
-Indexing (run once)
-Zotero SQLite ──→ PDF extraction ──→ Chunking + sections ──→ Embeddings ──→ ChromaDB
-
-Usage (every query)
-AI Agent ──→ 32 MCP tools ──┬── Semantic search ──→ ChromaDB ──→ Reranking ──→ Results
-                             ├── Citation graph  ──→ OpenAlex
-                             ├── Library browse  ──→ Zotero SQLite
-                             └── Write ops       ──→ Zotero Web API ──→ Syncs to Zotero
-```
-
-**Indexing:** reads metadata from Zotero SQLite (read-only), extracts full text, tables, and figures from PDFs via PyMuPDF, classifies chunks by academic section (Abstract / Methods / Results / …), generates embeddings, stores in ChromaDB.
-
-**Retrieval:** query is vectorized, cosine similarity search in ChromaDB, results go through section-aware reranking (Results weighted higher than References) and journal quality weighting (SCImago Q1 papers rank higher).
-
-**Write operations:** tag and collection management via Zotero's official Web API (Pyzotero), changes sync back to Zotero automatically.
-
-**Citation graph:** forward and backward citation lookup via OpenAlex API.
-
-Design choices:
-
-- Zotero SQLite is opened with `mode=ro&immutable=1`. Read-only. Safe while Zotero is running.
-- Paper data stays local. The only network requests are embedding API calls (zero if using Local model).
-- Documents and queries use different encodings (Gemini's `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`), which improves retrieval quality over using the same encoding for both.
-- SKILL.md doesn't just expose tool interfaces; it tells the AI which tool to use in which scenario and how to combine them.
-
-### File structure
-
-```
-~/.claude/skills/zotpilot/          # or ~/.agents/skills/zotpilot/ (Codex)
-├── SKILL.md                        # Decision tree: setup → index → research
-├── scripts/run.py                  # Bootstrap: auto-installs CLI + delegates
-├── references/                     # Reference docs
-│   ├── tool-guide.md               # Tool parameter details
-│   ├── troubleshooting.md          # Common issues
-│   └── setup-guide.md            # Setup and configuration guide
-└── src/zotpilot/                   # MCP server source
+Queries (every call)
+Agent ──→ MCP tools ───┬── semantic search ──→ ChromaDB ──→ section-aware reranking
+                       ├── citation graph  ──→ OpenAlex
+                       ├── library browse  ──→ Zotero SQLite (read-only)
+                       ├── write ops       ──→ Zotero Web API ──→ sync back to Zotero
+                       └── ingestion       ──→ Bridge + Connector ──→ Zotero Desktop
 ```
 
-### Data storage
+- **Indexing**: SQLite is opened read-only with `mode=ro&immutable=1`; PyMuPDF extracts text, tables, and figures; chunks are labeled by academic section; embeddings are stored in ChromaDB. Incremental indexing skips previously indexed items.
+- **Retrieval**: query vector → ChromaDB cosine similarity → section-aware reranking + journal-quality weighting.
+- **Ingestion**: agent → local bridge (127.0.0.1:2619) → Chrome Connector → Zotero Desktop.
+- **Write ops**: tags / collections / notes go through Zotero's official Web API and sync back to the desktop client.
 
-```
-# Linux
+<details>
+<summary><b>MCP tool list (18)</b></summary>
+
+| Category | Tools |
+|------|------|
+| Search | `search_papers`, `search_topic`, `search_boolean`, `advanced_search` |
+| Read | `get_passage_context`, `get_paper_details`, `get_notes`, `get_annotations`, `browse_library`, `profile_library` |
+| Discover | `search_academic_databases` |
+| Ingest | `ingest_by_identifiers` |
+| Organize | `manage_tags`, `manage_collections`, `create_note` |
+| Citations | `get_citations` |
+| Index | `index_library`, `get_index_stats` |
+
+`search_papers` supports `section_type` for tables / figures. `ingest_by_identifiers` accepts mixed DOI / arXiv ID / URL input.
+
+</details>
+
+<details>
+<summary><b>File layout & data locations</b></summary>
+
+```text
+Installed zotpilot (wheel ships skills + references)
+├── src/zotpilot/skills/
+├── references/
+└── connector/
+
+# Config / index
+# macOS / Linux
 ~/.config/zotpilot/config.json
 ~/.local/share/zotpilot/chroma/
-
-# macOS
-~/Library/Application Support/zotpilot/config.json
-~/Library/Application Support/zotpilot/chroma/
 
 # Windows
 %APPDATA%\zotpilot\config.json
 %APPDATA%\zotpilot\chroma\
 ```
 
----
-
-## Enable write operations
-
-Search and citation tools work without extra setup. Tagging and collection management need a Zotero Web API key.
-
-1. Go to [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
-2. Note your **numeric User ID** at the top of the page (e.g. `12345678`, not your username)
-3. Click **"Create new private key"**, check "Allow library access" and "Allow write access", copy the key
-
-<img src="assets/zotero-api-key.png" alt="Zotero API Key page" width="100%">
-
-4. Save credentials (**recommended: write to config file, works for all MCP clients**):
-
-```bash
-zotpilot config set zotero_user_id 12345678   # numeric ID, not username
-zotpilot config set zotero_api_key YOUR_KEY
-```
-
-> ⚠️ Keys are stored in plaintext at `~/.config/zotpilot/config.json` (Windows: `%APPDATA%\zotpilot\config.json`).
-> Make sure this directory is not tracked by git.
-
-Verify configuration:
-
-```bash
-zotpilot doctor   # should show [source: config file] ✓
-```
-
-<details>
-<summary>Other configuration methods</summary>
-
-**Environment variables (only for current shell session):**
-
-```bash
-export ZOTERO_USER_ID=12345678
-export ZOTERO_API_KEY=YOUR_KEY
-```
-
-Environment variables take priority over config file. Add to `.zshrc` / `.bashrc` for persistence, but IDE clients (Cursor/Windsurf) may not inherit shell env vars.
-
-**Via `register` when registering MCP (legacy method):**
-
-```bash
-# Tier 1 (source checkout) — include ALL existing keys when re-registering:
-python3 scripts/run.py register --gemini-key <your-gemini-key> --zotero-api-key <your-zotero-key> --zotero-user-id <your-user-id>
-# Tier 2 (pip/uv install):
-zotpilot register --gemini-key <your-gemini-key> --zotero-api-key <your-zotero-key> --zotero-user-id <your-user-id>
-```
-
-> **Note:** `register` replaces the entire ZotPilot MCP entry. If you previously registered with `--gemini-key`, include it again or it will be removed from the config. Recommend using `config set` instead.
-
 </details>
 
-Without these credentials, search and citations still work. Only tag and collection management requires the key.
+---
+
+## Update
+
+```bash
+zotpilot upgrade
+```
+
+Upgrades the active ZotPilot CLI, refreshes skill files, and reconciles MCP runtime state.
+
+<details>
+<summary><b>Common update commands</b></summary>
+
+| Command / flag | Purpose |
+|------|---------|
+| `upgrade` or `update` (no flags) | Upgrade the CLI, refresh skills, and reconcile runtime state |
+| `--check` | Check only (always exit 0) |
+| `--dry-run` | Preview runtime drift and update actions |
+| `--cli-only` | Upgrade only the CLI package |
+| `--skill-only` | Refresh only skills and runtime registration |
+| `--re-register` | Force client registration refresh even if no drift is detected |
+| `--migrate-secrets` | Migrate legacy client-embedded secrets before reconciling runtime |
+
+> In editable/dev installs, `upgrade` reminds you to `git pull` for source updates but still reconciles runtime state.
+
+</details>
 
 ---
 
 ## FAQ
 
 <details>
-<summary>Does this modify my Zotero database?</summary>
+<summary><b>Does this modify my Zotero database directly?</b></summary>
 
-No. SQLite is opened with `mode=ro&immutable=1`, physically read-only. Tag and collection changes go through Zotero's official Web API v3 and sync back to the Zotero client normally.
-
-</details>
-
-<details>
-<summary>Safe to run while Zotero is open?</summary>
-
-Yes, read-only mode doesn't conflict.
+No. SQLite is opened with `mode=ro&immutable=1`, so writes are physically impossible. Tags / collections / notes go through Zotero's official Web API and sync back normally.
 
 </details>
 
 <details>
-<summary>Which agents are supported?</summary>
+<summary><b>Can Zotero stay open while ZotPilot is running?</b></summary>
 
-**Tier 1 (Skill + MCP):** Claude Code, Codex CLI, OpenCode, Gemini CLI, Cursor, Windsurf — full support with Skill-guided workflows + MCP tools.
-
-Any AI agent that supports MCP protocol can connect to ZotPilot's search and management tools.
+Yes. Read-only access does not conflict with the running Zotero client.
 
 </details>
 
 <details>
-<summary>Does Gemini embedding cost money?</summary>
+<summary><b>Which agents are supported?</b></summary>
 
-Free tier is about 1,000 requests/day. One 10-page paper uses about 1 request (32 text chunks per request), and each search query uses 1 request. Free tier is enough to index a few hundred papers. Beyond that, $0.15/million tokens. Local model costs nothing.
-
-</details>
-
-<details>
-<summary>What about DashScope/Bailian?</summary>
-
-Alibaba Cloud's `text-embedding-v4`, 1024 dimensions, MTEB 68.36 / C-MTEB 70.14. No VPN needed in China, ¥0.0005/1k tokens, 1M tokens free for new users. Use `--provider dashscope` during setup. Key at https://bailian.console.aliyun.com/.
+Claude Code, Codex, and OpenCode. These are the three officially supported clients. Skill deployment, MCP registration, and upgrade reconciliation are designed for them.
 
 </details>
 
 <details>
-<summary>Local embedding model?</summary>
+<summary><b>How much does indexing cost?</b></summary>
 
-`all-MiniLM-L6-v2`, about 80MB, auto-downloaded on first use. Fully offline after that. Lower quality than Gemini (384d vs 768d) but works fine for libraries under a few hundred papers.
-
-</details>
-
-<details>
-<summary>How long does indexing take? Disk space?</summary>
-
-2-5 seconds per paper, 300 papers takes about 15 minutes. Index size is roughly 1MB per 100 papers. `--limit 10` to test. Already-indexed papers are skipped.
+Gemini's free tier covers a few hundred papers for many users. DashScope also has a low-cost / free-tier path. Local mode is fully offline and free.
 
 </details>
 
 <details>
-<summary>Scanned PDFs / figures / long documents?</summary>
+<summary><b>How long does indexing take?</b></summary>
 
-- Scanned PDFs: automatic OCR fallback — when PyMuPDF extracts too little text, retries with Tesseract full-page OCR. Install Tesseract: macOS `brew install tesseract tesseract-lang`, Ubuntu/Debian `sudo apt install tesseract-ocr`, Windows from [UB Mannheim](https://github.com/UB-Mannheim/tesseract/wiki)
-- Figures: captions and surrounding text are indexed, not the image itself. PNG files saved locally
-- Long documents: skipped above 40 pages by default (`--max-pages` to adjust), `--item-key` to index specific ones
-- Batch indexing: MCP defaults to 20 items per call (`batch_size=20`), agent loops until `has_more=false`. CLI processes all at once by default
-- Table repair: optional, uses Claude Haiku to fix complex tables, requires `ANTHROPIC_API_KEY`
+About 2–5 seconds per paper, or roughly 15 minutes for 300 papers. Try `zotpilot index --limit 10` first.
 
 </details>
 
 <details>
-<summary>Can I use this with no API key at all?</summary>
+<summary><b>Scanned PDFs / long documents?</b></summary>
 
-Yes. Choose `--provider local` and everything runs offline.
-
-</details>
-
-<details>
-<summary>What about vision table extraction?</summary>
-
-Optional feature. Uses Claude Haiku (via Batch API) to re-extract PDF tables, fixing merged cells and multi-level headers that PyMuPDF sometimes garbles. Requires `ANTHROPIC_API_KEY`. Without it, the feature is silently skipped; text search still works. Costs are logged in `vision_costs.json`.
+- Scanned PDFs fall back to OCR if Tesseract is installed
+- Documents over 40 pages are skipped by default (`--max-pages` to override, `--item-key` to target)
+- Optional Claude Haiku repair can help with complex tables
 
 </details>
 
 <details>
-<summary>Where does citation data come from? Chinese papers?</summary>
+<summary><b>Can I run it fully offline?</b></summary>
 
-[OpenAlex](https://openalex.org/), covering about 250 million works. DOI-based lookup. Chinese papers with DOIs that OpenAlex indexes work fine. Papers without DOIs can't use citation tools, but semantic search and tag management don't need DOIs.
+Yes. Pick `--provider local`, skip write-operation keys, and search / browse / index all stay local.
+
+</details>
+
+<details>
+<summary><b>Where does citation data come from?</b></summary>
+
+[OpenAlex](https://openalex.org/). Papers without DOIs cannot get citation data, but semantic search and library management still work.
 
 </details>
 
@@ -514,41 +437,51 @@ Optional feature. Uses Claude Haiku (via Batch API) to re-extract PDF tables, fi
 
 ## Troubleshooting
 
-| Problem | Fix |
+| Symptom | Fix |
 |---------|-----|
-| Skill not found | Verify clone target: Claude Code `~/.claude/skills/`, Codex `~/.agents/skills/`, OpenCode `~/.config/opencode/skills/`, Gemini `~/.gemini/skills/`, Cursor `~/.cursor/skills/`, Windsurf `~/.codeium/windsurf/skills/` |
-| `zotpilot: command not found` | `python3 scripts/run.py status` (auto-installs); on Windows use `python`. Windows users may also need to add `%APPDATA%\Python\PythonXYY\Scripts` to PATH |
-| MCP tools not showing up | Re-register MCP server and restart |
-| Empty search results | Run `zotpilot index` first, or try a broader query |
-| `GEMINI_API_KEY not set` | Set the env var, or `zotpilot setup --non-interactive --provider local` |
-| Not sure what's wrong | Run `zotpilot doctor` |
+| Skills not showing up | `zotpilot setup`, then restart the agent |
+| `zotpilot: command not found` | Install first: `pip install zotpilot` |
+| MCP tools missing | `zotpilot setup`, then restart the agent |
+| Search returns empty | Run `zotpilot index` first |
+| `GEMINI_API_KEY not set` | `export GEMINI_API_KEY=<key>` or switch to `setup --provider local` |
+| Unsure what failed | `zotpilot doctor` |
 
-More at [references/troubleshooting.md](references/troubleshooting.md).
+Deeper guidance lives in [troubleshooting.md](references/troubleshooting.md).
 
 ---
 
 <details>
-<summary>Development / Contributing</summary>
+<summary><b>Development / contributing</b></summary>
 
 ```bash
 git clone https://github.com/xunhe730/ZotPilot.git
 cd ZotPilot
-uv sync --extra dev
-uv run pytest              # 131 tests
-uv run ruff check src/
+pip install -e ".[dev]"
+
+zotpilot setup
+python -m pytest
+python -m ruff check src/ tests/
 ```
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Connector development:
+
+```bash
+cd connector
+npm install
+./build.sh -d
+```
 
 </details>
 
 ---
 
 <div align="center">
-  <p>
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Report a bug</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/issues">Request a feature</a> &middot;
-    <a href="https://github.com/xunhe730/ZotPilot/discussions">Discussions</a>
-  </p>
+  <code>pip install zotpilot &amp;&amp; zotpilot setup</code>
+  <br><br>
+  <sub>Claude Code &middot; Codex &middot; OpenCode</sub>
+  <br><br>
+  <a href="https://github.com/xunhe730/ZotPilot/issues">Report an issue</a> &middot;
+  <a href="https://github.com/xunhe730/ZotPilot/discussions">Discussions</a>
+  <br>
   <sub>MIT License &copy; 2026 xunhe</sub>
 </div>

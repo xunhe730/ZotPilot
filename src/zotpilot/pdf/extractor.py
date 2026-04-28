@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pymupdf
-import pymupdf.layout  # noqa: F401 — activates layout engine, MUST be before pymupdf4llm
+
+try:
+    import pymupdf.layout  # noqa: F401
+except ImportError:
+    _HAS_LAYOUT = False
+else:
+    _HAS_LAYOUT = True
 import pymupdf4llm
 
 from ..feature_extraction.captions import find_all_captions
@@ -50,6 +56,22 @@ _CAP_PATTERNS = (_TABLE_CAPTION_RE, _TABLE_CAPTION_RE_RELAXED, _TABLE_LABEL_ONLY
 
 # Prefix for synthetic captions assigned to orphan tables/figures
 SYNTHETIC_CAPTION_PREFIX = "Uncaptioned "
+
+
+def _should_run_full_document_ocr(
+    *,
+    total_chars: int,
+    page_count: int,
+    near_empty_pages: int,
+    min_chars_per_page: int = 50,
+    near_empty_page_ratio_threshold: float = 0.8,
+) -> bool:
+    """Return True only for genuinely scan-like low-text documents."""
+    if page_count <= 0:
+        return False
+    low_text_overall = total_chars < min_chars_per_page * page_count
+    mostly_near_empty = (near_empty_pages / page_count) >= near_empty_page_ratio_threshold
+    return low_text_overall and mostly_near_empty
 
 
 # ---------------------------------------------------------------------------
@@ -259,14 +281,52 @@ def extract_document(
         ocr_language=ocr_language,
     )
 
+    t0 = pymupdf.TOOLS.mupdf_warnings()
+    _ = t0  # silence lint about access-only side effect
+    import time
+
+    markdown_started = time.perf_counter()
     page_chunks: list[dict] = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
+    markdown_elapsed = time.perf_counter() - markdown_started
 
     # If too little text extracted, retry with PyMuPDF's built-in full-page OCR
     # (pymupdf4llm's should_ocr_page() skips "photo-like" pages in scanned PDFs)
     _OCR_MIN_CHARS_PER_PAGE = 50
     total_chars = sum(len(chunk.get("text", "").strip()) for chunk in page_chunks)
-    if len(page_chunks) > 0 and total_chars < _OCR_MIN_CHARS_PER_PAGE * len(page_chunks):
+    native_text_lengths: list[int] = []
+    native_scan_started = time.perf_counter()
+    try:
+        native_doc = pymupdf.open(str(pdf_path))
+        for page in native_doc:
+            native_text_lengths.append(len(page.get_text().strip()))
+        native_doc.close()
+    except Exception as e:
+        logger.warning("Native text scan failed for %s: %s", pdf_path.name, e)
+        native_text_lengths = []
+    native_scan_elapsed = time.perf_counter() - native_scan_started
+
+    near_empty_pages = sum(1 for n in native_text_lengths if n < 20)
+    page_count = len(page_chunks)
+    should_run_ocr = _should_run_full_document_ocr(
+        total_chars=total_chars,
+        page_count=page_count,
+        near_empty_pages=near_empty_pages,
+        min_chars_per_page=_OCR_MIN_CHARS_PER_PAGE,
+    )
+    logger.info(
+        "extract_document[%s]: to_markdown=%.1fs native_scan=%.1fs chars=%d pages=%d "
+        "near_empty_pages=%d ocr_fallback=%s",
+        pdf_path.name,
+        markdown_elapsed,
+        native_scan_elapsed,
+        total_chars,
+        page_count,
+        near_empty_pages,
+        "yes" if should_run_ocr else "no",
+    )
+    if should_run_ocr:
         try:
+            ocr_started = time.perf_counter()
             doc = pymupdf.open(str(pdf_path))
             ocr_texts: list[str] = []
             for page in doc:
@@ -274,6 +334,13 @@ def extract_document(
                 ocr_texts.append(page.get_text(textpage=tp))
             doc.close()
             ocr_total = sum(len(t.strip()) for t in ocr_texts)
+            logger.info(
+                "extract_document[%s]: ocr_elapsed=%.1fs chars_before=%d chars_after=%d",
+                pdf_path.name,
+                time.perf_counter() - ocr_started,
+                total_chars,
+                ocr_total,
+            )
             if ocr_total > total_chars:
                 # OCR produced more text — rebuild chunks with new dicts
                 page_chunks = [

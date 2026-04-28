@@ -2,176 +2,197 @@
 
 ## 如何更新 / How to Update
 
-**推荐：一条命令更新 CLI 和 skill · Recommended: one command**
 ```bash
-zotpilot update
-```
-自动探测安装方式（uv / pip），同时更新所有平台的 skill 目录。
-Detects your installer (uv / pip) and updates all skill directories automatically.
-
-```bash
-zotpilot update --check      # 检查是否有新版本，不安装 / check only, no install
-zotpilot update --dry-run    # 预览操作，不执行 / preview actions, no changes
-zotpilot update --cli-only   # 只更新 CLI / CLI only
-zotpilot update --skill-only # 只更新 skill 目录 / skill dirs only
+zotpilot update              # 自动探测安装方式，更新 CLI + skill 目录
+zotpilot update --check      # 只查版本，不安装
+zotpilot update --dry-run    # 预览操作，不执行
 ```
 
-**手动更新 · Manual**
+手动更新：`uv tool upgrade zotpilot` 或 `pip install --upgrade zotpilot`
+
+---
+
+## [0.5.0] - 2026-04-28
+
+**架构重构 / Architectural Refactor** — 重新设计入库流程、精简工具层、新增浏览器扩展。
+
+### ✨ Highlights
+- **Connector 浏览器扩展**：AI agent 可通过你的浏览器保存论文到 Zotero，自动带上机构订阅的 PDF
+- **一步入库**：给 agent 一组 DOI / arXiv ID / URL，它帮你全部存进 Zotero 并验证 PDF
+- **18 个精简工具**（原 33 个）：合并冗余，每个工具做一件事
+- **Research 工作流**：4 个声明式 Skill 引导 agent 完成"搜索 → 入库 → 整理 → 报告"全流程
+- **索引可靠性大修**（Issue #7）：增量索引、中断恢复、不再丢失已完成的索引数据
+
+### Added
+- **`zotpilot install` 命令别名** — 与 `zotpilot register` 等价，用作统一的多平台安装/注册入口
+- **Connector 浏览器扩展** — 基于 Zotero Connector fork，加入 AI agent 调用路径。Agent 通过本地 bridge 触发浏览器保存，带机构权限下载 PDF。从 [GitHub Release](https://github.com/xunhe730/ZotPilot/releases) 下载 zip，加载到 Chrome 即可
+- **`ingest_by_identifiers` 工具** — 给 DOI / arXiv ID / URL 即可入库，自动去重、验证 PDF、失败时走 API fallback。返回每篇论文的最终状态（`saved_with_pdf` / `saved_metadata_only` / `duplicate` / `failed`）
+- **`profile_library` 工具** — 分析文献库的主题分布、期刊结构、时间跨度，帮助 agent 理解你的研究方向
+- **`search_academic_databases` 全参数搜索** — OpenAlex 检索支持 `min_citations`、`concepts`、`institutions`、`source` 等 filter，cursor-based 分页
+- **`zotpilot update` 命令** — 一键升级 CLI + skill 目录
+- **版本漂移检测** — MCP server 启动时检查已部署 skill 版本，不匹配时提示更新
+- **增量索引** — 基于 PDF hash 跳过已索引文档，中断后从断点恢复，不重复处理
+- **索引并发保护** — 防止多个 agent 同时索引导致重复数据
+- **入库即时验证** — Connector 保存后通过本地 Zotero API 验证 itemType + title，自动识别并清理出版商 translator 产生的网页快照垃圾 item，失败时走 DOI API fallback
+
+### Changed
+- **安装/注册用户入口收敛** — 推荐入口统一为 `zotpilot setup`（首次配置）和 `zotpilot install` / `zotpilot register`（重注册 / 修复 drift），不再向终端用户暴露 `register --dev`
+- **多平台注册失败传播** — `update` / `sync` 遇到部分平台注册失败时会显式失败并列出平台，不再假成功
+- **Claude Code 注册语法修正** — stdio 注册改为 `claude mcp add ... -- <command>`，兼容 `uv run --directory ...`
+- **AGENTS.md / CLAUDE.md** — 同步到 v0.5.0 三 Agent 协作模型（Claude / OpenCode / Codex），更新架构描述和文档维护规则
+- **MCP 工具从 33 个精简到 18 个**：
+  - `search_papers` 新增 `section_type` 参数，可搜表格和图表（替代 `search_tables` / `search_figures`）
+  - `ingest_by_identifiers` 支持 URL 输入（替代 `save_urls`）
+  - `manage_collections` 支持 `action="create"`（替代 `create_collection`）
+  - `index_library` 支持 `item_keys` 参数局部重索引（替代 `reindex_degraded`）
+- **入库流程同步化** — 不再需要轮询状态或多步确认，一次调用返回完整结果
+- **Skill 系统** — 4 个声明式 skill（`ztp-research` / `ztp-review` / `ztp-profile` / `ztp-setup`）替代旧的路由器模式，由平台原生机制自动选择
+- **平台支持收敛到 3 个** — Claude Code / Codex CLI / OpenCode 为官方支持平台（Gemini CLI / Cursor / Windsurf 不再维护适配，MCP 工具仍可用但不保证）
+
+### Removed
+- **状态机工具** — `confirm_candidates` / `approve_ingest` / `get_batch_status` 等 7 个多步确认工具，被 `ingest_by_identifiers` 一步替代
+- **`switch_library`** — 多文献库切换推迟到未来版本
+- **旧工具别名** — `search_tables`、`search_figures`、`save_urls`、`create_collection`、`reindex_degraded` 等已合并到对应工具
+
+### Fixed
+- **Bridge 认证改为 Origin 白名单** — 原 `X-ZotPilot-Token` 方案存在根本缺陷：`/status`
+  公开下发 token + `Access-Control-Allow-Origin: *` 导致任意网页都能两步拿到 token
+  并调用 `/enqueue`。同时扩展与 bridge 的 token 契约跨仓库未同步（`f0d8c96` 只改了
+  主仓库，发布用的 fork 仓库扩展从未跟进），造成 v0.5.0 内测期所有 Connector 保存
+  全部 401。改为 Origin 白名单：浏览器强制附加不可伪造的 `Origin` header，bridge 只
+  放行 `chrome-extension://` / `moz-extension://` / `safari-web-extension://` 前缀
+  和无 Origin（CLI/MCP）的请求，其他一律 403。安全上真正防住了"恶意网页调用 bridge
+  写入 Zotero"的攻击面；架构上无共享 secret，扩展与 bridge 可独立升级
+- **Preflight 真正阻塞 + 分级 blocking** — 检测到反爬页面时阻塞整个批次要求用户介入，不再悄然降级为 API fallback；分级策略：`anti_bot_detected` / `subscription_required` 封 publisher 域，`preflight_timeout` / `preflight_failed` 只封单 URL（不误伤 IEEE / Springer SPA 慢 hydration 的无关条目）
+- **DOI suffix 接受 `.` 字符** — `identifier_resolver._DOI_RE` 从 `[^\s\)\"\',;\.\?]+` 改为 `\S+`，不再误拒 Elsevier / IEEE 风格 DOI（如 `10.1016/j.jcp.2022.111902`、`10.1109/jas.2023.123537`）。与上游 `search.is_doi_query` 对齐
+- **OpenAlex SSL 首连重试** — `_request` 现在捕获 `httpx.RequestError` 并按现有 backoff 重试（原代码仅 429 走重试路径，TLS 首连抖动会直接挂）
+- **`state._init_lock` 自死锁** — `_get_library_override()` 去掉无意义的 lock acquire（持有者二次 acquire 非 `RLock` 导致 MCP `tools/call` 永不返回）
+- **active_candidates 对象一致性** — `run_preflight_check` 接收 `active_candidates` 引用，保证 preflight 操作的对象与后续处理的对象为同一实例
+- **ArXiv API 改用 HTTPS** — `identifier_resolver` 中 ArXiv API 端点从 `http://` 改为 `https://`
+- **代码质量（P0–P2）** — 修复 `section_type` 验证、`chunk_index` 边界保护、`year_min=0` 过滤异常、消除死代码赋值
+- **Issue #7：索引中断丢数据** — 增量索引基于 PDF hash，中断后自动从断点恢复；清理 ChromaDB 中的 stale 孤儿记录
+- **arXiv DOI 路由** — `10.48550/arXiv.xxx` 格式的 DOI 正确路由到 arXiv API（CrossRef 不索引这类 DOI）
+- **PDF 提取冷启动** — 硬化 PDF fallback 链，修复首次索引时的提取失败
+- **API 密钥不再写入配置文件** — `config save()` 跳过所有 API key 字段
+- **MCP 配置文件权限** — Unix 上自动设为 0600，防止其他用户读取
+- **OpenAlex 请求限流** — 添加 rate limiter 和 429 重试，避免触发 API 封禁
+
+### 从 v0.4 升级 / Upgrading from v0.4
 
 ```bash
-# pip / uv 安装 · pip or uv install
-uv tool upgrade zotpilot
-# or / 或
-pip install --upgrade zotpilot
-
-# git clone 安装（editable / skill 目录）· git clone install
-cd ~/.claude/skills/zotpilot   # 替换为你的实际路径 / replace with your path
-git pull
+pip install --upgrade zotpilot     # 或 uv tool upgrade zotpilot
+zotpilot install                   # 必须：工具签名变了，需重新注册
 ```
+
+Connector 浏览器扩展是 Research 工作流的核心组件，从 [GitHub Release](https://github.com/xunhe730/ZotPilot/releases) 下载安装到 Chrome。没有 Connector，入库功能降级为 metadata-only（无 PDF），纯 URL 入库会失败。搜索、引用、整理功能不受影响。
+
+如果你之前通过 `register --gemini-key` 传入 API 密钥，升级后改用 `zotpilot config set gemini_api_key <key>` 保存（更安全，不进 shell history）。
+
+---
+
+## [0.4.0] - 2026-03-24
+
+### Added
+- `bridge` CLI 子命令：`zotpilot bridge [--port N]` 手动启动 HTTP bridge 服务（为后续浏览器扩展集成做基础设施准备）
+
+### Fixed
+- pyzotero `url_params` 泄漏
+- Zotero API `qmode` 参数修复
 
 ---
 
 ## [0.3.1] - 2026-03-23
 
-### 新功能 / New Features
-- **`status --json` 新增 version 字段**：方便脚本和 agent 获取当前版本号
-  **`status --json` adds version field**: Makes it easy for scripts and agents to check the installed version
-- **`--version` flag**：`zotpilot --version` 输出版本号
-  **`--version` flag**: `zotpilot --version` prints the version
-- **Cursor / Windsurf 升级为 Tier 1**：支持 Skill 目录安装，与 Claude Code / Codex / Gemini CLI 同级
-  **Cursor / Windsurf upgraded to Tier 1**: Skill directory support, on par with Claude Code / Codex / Gemini CLI
+### Added
+- `status --json` 新增 version 字段
+- `--version` flag
+- Cursor / Windsurf 升级为 Tier 1
 
-### 修复 / Fixes
-- **Windows 升级友好提示**：`zotpilot update` 在 Windows 遇到文件锁定（MCP server 运行中）时，输出清晰的提示而非原始错误
-  **Windows upgrade friendly error**: `zotpilot update` shows a clear message when the executable is locked by a running MCP server
-- **收窄异常类型**：`_detect_cli_installer` 中 `except Exception` 改为 `except (KeyError, TypeError)`
-  **Narrower exception handling**: `_detect_cli_installer` catches specific exceptions instead of bare `Exception`
-- **路径比较安全性**：改用 `Path.is_relative_to()` 替代字符串前缀匹配，避免误判
-  **Safer path comparison**: Uses `Path.is_relative_to()` instead of string prefix matching
-- **文件编码显式指定**：所有 `open()` 调用统一加 `encoding="utf-8"`，修复 Windows 非 UTF-8 locale 问题
-  **Explicit file encoding**: All `open()` calls now specify `encoding="utf-8"` for Windows compatibility
-- **ruff lint 全部修复**，CI green
-  **All ruff lint errors fixed**, CI green
-- **mypy 类型检查通过**（per-module overrides 抑制历史问题）
-  **mypy type checking passes** (per-module overrides suppress legacy issues)
-
-### 文档 / Docs
-- **SKILL.md 重构**：精简主文件至 ~120 行，安装配置内容迁移至 `references/setup-guide.md`；新增 ingestion 工具和文献库分类建议 workflow
-  **SKILL.md refactor**: Concise main file (~120 lines), setup content moved to `references/setup-guide.md`; added ingestion tools and library classification advisor workflow
-- **README 中英文对齐**：统一 Write 工具分组、Admin 工具计数、写操作配置流程、skills 目录表、数据存储路径
-  **README zh/en alignment**: Unified write tool grouping, admin tool count, write ops config flow, skills directory table, data storage paths
-- **Windows PATH 提示**：Troubleshooting 表格新增 Windows PATH 配置说明
-  **Windows PATH hint**: Troubleshooting table adds Windows PATH configuration info
+### Fixed
+- Windows `zotpilot update` 文件锁定时输出友好提示
+- 收窄异常类型、路径比较安全性、文件编码显式指定
+- ruff lint / mypy 全部通过
 
 ---
 
 ## [0.3.0] - 2026-03-23
 
-### 新功能 / New Features
-- **一键更新命令**：新增 `zotpilot update` 子命令，自动探测安装方式（uv / pip / editable）并完成 CLI 和所有平台 skill 目录的升级
-  **One-command update**: New `zotpilot update` subcommand — auto-detects your installer (uv / pip / editable) and upgrades the CLI and all platform skill directories in one step
-- 支持 `--check`（查版本不安装）、`--dry-run`（预览不执行）、`--cli-only`、`--skill-only` 四个标志
-  Supports `--check` (version check only), `--dry-run` (preview without changes), `--cli-only`, `--skill-only`
-- Skill 目录升级前自动检查：跳过符号链接、脏工作树、非 ZotPilot 仓库，不会误操作非相关目录
-  Skill dir upgrade safety: automatically skips symlinks, dirty trees, and non-ZotPilot repos before running `git pull`
+### Added
+- `zotpilot update` 一键更新命令，自动探测安装方式（uv / pip / editable），同时更新 CLI 和所有平台 skill 目录
+- `--check` / `--dry-run` / `--cli-only` / `--skill-only` 标志
+- Skill 目录升级安全检查：跳过符号链接、脏工作树、非 ZotPilot 仓库
 
 ---
 
 ## [0.2.1] - 2026-03-23
 
-### 新功能 / New Features
-- **论文摄取**：新增从 Semantic Scholar 搜索并一键导入 Zotero 的工具，自动获取元数据和开放获取 PDF
-  **Paper Ingestion**: New tools to search Semantic Scholar and import papers directly into Zotero with metadata and open-access PDFs (`search_academic_databases`, `add_paper_by_identifier`, `ingest_papers`)
-- **配置管理命令**：新增 `zotpilot config set/get/list/unset/path` 子命令，无需手动编辑 JSON 文件
-  **Config CLI**: New `zotpilot config set/get/list/unset/path` subcommands — no more manual JSON editing
-- **Semantic Scholar API key 支持**：设置 `S2_API_KEY` 环境变量可提升请求频率限制
-  **Semantic Scholar API key**: Set `S2_API_KEY` env var for higher rate limits
-
-### 修复 / Fixes
-- **API key 优先级修正**：环境变量现在优先于配置文件（更安全，推荐通过环境变量传递 key）
-  **API key priority fix**: Environment variables now take precedence over config file (more secure)
-
----
-
-## [0.2.1] - 2026-03-19 (pre-release)
-
 ### Added
-- `switch_library` tool — list available libraries (user + groups) or switch active library context
-- `get_annotations` tool — read highlights and comments via Zotero Web API (requires ZOTERO_API_KEY)
-- `_get_api_reader()` singleton in state.py for annotation reads
-- Tool count: 30 → 32
+- 论文摄取：`search_academic_databases`、`add_paper_by_identifier`、`ingest_papers`（Semantic Scholar 搜索 + Zotero 导入）
+- `config` CLI 子命令：`set` / `get` / `list` / `unset` / `path`
+- Semantic Scholar API key 支持（`S2_API_KEY`）
+- `switch_library` 工具：切换用户/群组文献库
+- `get_annotations` 工具：读取高亮和评论
+
+### Fixed
+- API key 优先级：环境变量现在优先于配置文件
 
 ---
 
 ## [0.2.0] - 2026-03-19
 
-### 新功能 / New Features
-- **No-RAG 模式**：将 `embedding_provider` 设为 `"none"` 可在不配置 embedding 的情况下使用元数据搜索、笔记、标签等基础功能
-  **No-RAG mode**: Set `embedding_provider: "none"` to use metadata search, notes, and tags without configuring an embedding provider
-
-### Added (technical)
-- `_get_store_optional()` pattern in state.py for graceful degradation
-- Citation tools fall back to SQLite for DOI lookup when vector store unavailable
+### Added
+- No-RAG 模式：`embedding_provider: "none"` 可在不配置 embedding 的情况下使用元数据搜索、笔记、标签等基础功能
 
 ---
 
 ## [0.1.5] - 2026-03-19
 
 ### Added
-- `get_feeds` tool — list RSS feeds or get feed items (SQLite, no API key needed)
-- Tool count: 29 → 30
+- `get_feeds` 工具：列出 RSS 订阅或获取订阅条目
 
 ---
 
 ## [0.1.4] - 2026-03-19
 
-### 新功能 / New Features
-- **笔记工具**：新增读取笔记（`get_notes`）和创建笔记（`create_note`，需要 ZOTERO_API_KEY）
-  **Notes tools**: Added `get_notes` (read) and `create_note` (write, requires ZOTERO_API_KEY)
-- **高级元数据搜索**：新增 `advanced_search`，支持按年份、作者、标签、集合等多条件筛选，无需建索引
-  **Advanced search**: New `advanced_search` tool — filter by year, author, tag, collection, DOI, etc. Works without indexing
-
-### Added (technical)
-- Tool count: 26 → 29
+### Added
+- `get_notes` / `create_note` 笔记工具
+- `advanced_search` 高级元数据搜索（年份/作者/标签/集合等，无需索引）
 
 ---
 
 ## [0.1.3] - 2026-03-19
 
 ### Changed
-- Batch tools consolidated: `batch_tags(action="add|set|remove")` and `batch_collections(action="add|remove")` — tool count 29 → 26
-- All tool docstrings slimmed significantly for faster LLM context usage
+- 批量工具合并：`batch_tags(action="add|set|remove")`、`batch_collections(action="add|remove")`，工具数 29 → 26
+- 所有工具 docstring 精简
 
 ---
 
 ## [0.1.2] - 2026-03-19
 
-### 新功能 / New Features
-- **查询缓存**：相同查询不再重复调用 embedding API，搜索更快
-  **Query cache**: Identical queries no longer call the embedding API twice — faster search
-- **批量操作工具**：支持批量打标签、批量加入/移出集合（最多 100 条）
-  **Batch write tools**: Bulk tag and collection operations (up to 100 items)
+### Added
+- 查询缓存：相同查询不再重复调用 embedding API
+- 批量写操作工具（最多 100 条）
 
 ### Removed
-- Built-in Chinese→English query translation removed — bilingual search is now the Agent's responsibility
+- 内置中英翻译（改由 Agent 负责）
 
 ---
 
 ## [0.1.1] - 2026-03-19
 
-### 修复 / Fixes
-- Thread safety: all singleton initializers use double-checked locking
-- ReDoS vulnerability in title_pattern regex fixed
-- API key no longer printed to terminal during setup
-- Collection cache now invalidated after write operations
+### Fixed
+- 线程安全：所有单例初始化使用双重检查锁
+- ReDoS 漏洞修复
+- API key 不再打印到终端
+- Collection 缓存在写操作后正确失效
 
 ---
 
 ## [0.1.0] - 2026-03-16
 
-### 新功能 / New Features
-- **初始版本**：ZotPilot 首次发布，提供 26 个 MCP 工具，支持语义搜索、索引、引用图谱和文献库管理
-  **Initial release**: 26 MCP tools for semantic search, indexing, citations, and library management
-- Gemini and local embedding providers
-- Section-aware reranking with journal quality weighting
-- PDF extraction with table, figure, and OCR support
+### Added
+- 初始版本：26 个 MCP 工具
+- Gemini / Local 嵌入提供方
+- 章节感知重排序 + 期刊质量加权
+- PDF 提取（文本 + 表格 + 图表 + OCR）

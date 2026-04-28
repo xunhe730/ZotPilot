@@ -16,6 +16,7 @@ import pymupdf
 
 from .vision_api import TableVisionSpec
 from .vision_extract import (
+    VISION_COMPACT_SYSTEM,
     VISION_FIRST_SYSTEM,
     AgentResponse,
     build_common_ctx,
@@ -56,12 +57,13 @@ class LocalVisionAPI:
         base_url: str = "http://localhost:8118/v1",
         model: str = "Qwen/Qwen2-VL-2B-Instruct",
         api_key: str = "EMPTY",
-        max_tokens: int = 2048,
+        max_tokens: int = 1536,
         max_workers: int = 4,
         timeout: float = 120.0,
+        prompt_mode: str = "compact",
     ) -> None:
         try:
-            import openai as _openai
+            import openai as _openai  # type: ignore[import-not-found]  # no stubs available
         except ImportError:
             raise ImportError(
                 "openai package required for LocalVisionAPI: "
@@ -74,6 +76,7 @@ class LocalVisionAPI:
         self._max_tokens = max_tokens
         self._max_workers = max_workers
         self._timeout = timeout
+        self._prompt_mode = prompt_mode
 
         self._client = _openai.OpenAI(
             base_url=self._base_url,
@@ -83,6 +86,12 @@ class LocalVisionAPI:
 
         self._total_input_tokens = 0
         self._total_output_tokens = 0
+
+    def _system_prompt(self) -> str:
+        """Return the configured system prompt variant."""
+        if self._prompt_mode == "full":
+            return VISION_FIRST_SYSTEM
+        return VISION_COMPACT_SYSTEM
 
     # ------------------------------------------------------------------
     # Token accounting (no USD cost — local inference)
@@ -138,7 +147,7 @@ class LocalVisionAPI:
             })
 
         return [
-            {"role": "system", "content": VISION_FIRST_SYSTEM},
+            {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": user_content},
         ]
 

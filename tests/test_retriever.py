@@ -1,9 +1,8 @@
 """Tests for Retriever search and context expansion."""
-import pytest
 from unittest.mock import MagicMock
 
+from zotpilot.models import RetrievalResult, StoredChunk
 from zotpilot.retriever import Retriever
-from zotpilot.models import StoredChunk, RetrievalResult
 
 
 def _make_stored_chunk(

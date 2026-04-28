@@ -1,6 +1,6 @@
 [project]
 name = "zotpilot"
-version = "0.3.1"
+version = "0.5.0"
 description = "AI-powered Zotero research assistant — MCP server + agent skill"
 requires-python = ">=3.10"
 license = "MIT"
@@ -51,6 +51,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/zotpilot"]
 
+[tool.hatch.build]
+include = [
+    "src/zotpilot/**/*.py",
+    "src/zotpilot/skills/*.md",
+    "references/*.md",
+    "src/zotpilot/data/**/*",
+    "src/zotpilot/py.typed",
+]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 120
@@ -98,3 +107,4 @@ ignore_errors = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=zotpilot --cov-report=term-missing --cov-fail-under=29"
+markers = ["benchmark: external API benchmark, slow"]
