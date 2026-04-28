@@ -20,7 +20,7 @@ from zotpilot._platforms import (
     _uv_bin_dir,
     deploy_skills,
 )
-from zotpilot.cli import _is_zotpilot_skill_repo, cmd_update
+from zotpilot.cli import cmd_update
 
 
 def _make_args(**kwargs):
@@ -215,33 +215,6 @@ class TestGetLatestPypi:
 # ---------------------------------------------------------------------------
 # TestIsZotpilotSkillRepo
 # ---------------------------------------------------------------------------
-
-
-class TestIsZotpilotSkillRepo:
-    def test_skill_identity_check_no_skill_md(self, tmp_path):
-        """No SKILL.md → False."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_skill_identity_check_wrong_skill_name(self, tmp_path):
-        """SKILL.md with name: other → False."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        (tmp_path / "SKILL.md").write_text("---\nname: other-tool\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_skill_identity_check_missing_signature_file(self, tmp_path):
-        """SKILL.md with name: zotpilot but no scripts/run.py → False."""
-        (tmp_path / "SKILL.md").write_text("---\nname: zotpilot\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is False
-
-    def test_valid_skill_repo_returns_true(self, tmp_path):
-        """Valid SKILL.md + scripts/run.py → True."""
-        (tmp_path / "scripts").mkdir()
-        (tmp_path / "scripts" / "run.py").touch()
-        (tmp_path / "SKILL.md").write_text("---\nname: zotpilot\n---\n")
-        assert _is_zotpilot_skill_repo(tmp_path) is True
 
 
 # ---------------------------------------------------------------------------

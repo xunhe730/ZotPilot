@@ -655,12 +655,8 @@ def _skill_source_files() -> list[Path]:
 
 
 def _skill_name_for_file(skill_file: Path) -> str:
-    """Map source filename to deployed directory name.
-
-    SKILL.md → zotpilot (routing shell)
-    ztp-research.md → ztp-research
-    """
-    return "zotpilot" if skill_file.name == "SKILL.md" else skill_file.stem
+    """Map source filename to deployed directory name (e.g. ztp-research.md → ztp-research)."""
+    return skill_file.stem
 
 
 def _skill_targets_for_platform(
@@ -671,7 +667,6 @@ def _skill_targets_for_platform(
     """Each skill file gets its own directory with SKILL.md inside.
 
     Deployed structure:
-        skills_dir/zotpilot/SKILL.md      (routing shell)
         skills_dir/ztp-research/SKILL.md
         skills_dir/ztp-setup/SKILL.md
         skills_dir/ztp-review/SKILL.md
@@ -737,7 +732,9 @@ def _migrate_legacy_bundle(skills_dir: Path) -> None:
         print(f"    migrated: removed legacy bundle directory {legacy}")
         return
 
-    # Single SKILL.md inside zotpilot/ → already flat layout, keep it
+    # Single SKILL.md inside zotpilot/ → routing shell from v0.5.0-beta, now removed
+    shutil.rmtree(legacy)
+    print(f"    migrated: removed legacy routing shell directory {legacy}")
 
 
 def _should_skip_deploy(target: Path, version: str, skill_files: list[Path]) -> tuple[bool, str]:
@@ -1149,16 +1146,19 @@ def _get_latest_pypi_version() -> "str | None":
         return None
 
 def _get_skill_dirs() -> list[SkillDir]:
-    """Collect and deduplicate zotpilot skill directories across all platforms."""
+    """Collect and deduplicate deployed ztp-* skill directories across all platforms."""
 
     candidates: list[Path] = []
     for info in PLATFORMS.values():
         skills_dir = info.get("skills_dir")
         if not skills_dir:
             continue
-        path = Path(skills_dir).expanduser() / "zotpilot"
-        if path.is_symlink() or path.exists():
-            candidates.append(path)
+        base = Path(skills_dir).expanduser()
+        if not base.exists():
+            continue
+        for path in base.iterdir():
+            if path.name.startswith("ztp-") and (path.is_dir() or path.is_symlink()):
+                candidates.append(path)
 
     # Dedup by realpath: group entries by resolved path
     # Broken symlinks use path itself as key

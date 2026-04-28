@@ -822,37 +822,6 @@ def cmd_config(args):
 
 
 
-def _is_zotpilot_skill_repo(path: Path) -> bool:
-    """Check if path is a valid ZotPilot skill repo.
-
-    Requires: SKILL.md exists + frontmatter name: zotpilot + scripts/run.py exists.
-    """
-    try:
-        skill_md = path / "SKILL.md"
-        if not skill_md.exists():
-            return False
-        if not (path / "scripts" / "run.py").exists():
-            return False
-        # Parse frontmatter
-        content = skill_md.read_text(encoding="utf-8")
-        lines = content.splitlines()
-        if not lines or lines[0].strip() != "---":
-            return False
-        name_matched = False
-        for line in lines[1:]:
-            if line.strip() == "---":
-                break
-            if line.startswith("name:"):
-                name = line[len("name:"):].strip()
-                if name == "zotpilot":
-                    name_matched = True
-                    break
-        return name_matched
-    except Exception:
-        return False
-
-
-
 
 
 
