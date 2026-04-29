@@ -40,7 +40,10 @@ def _config_hash(config: Config) -> str:
         f"{config.embedding_provider}:"
         f"{config.embedding_dimensions}:"
         f"{config.embedding_model}:"
-        f"{config.ocr_language}"
+        f"{config.ocr_language}:"
+        f"{getattr(config, 'vision_enabled', True)}:"
+        f"{getattr(config, 'vision_provider', 'anthropic')}:"
+        f"{getattr(config, 'vision_model', '')}"
     )
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
@@ -79,7 +82,17 @@ class Indexer:
         self._empty_docs_path = config.chroma_db_path / "empty_docs.json"
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
         self.journal: IndexJournal | None = None
-        if config.vision_enabled and config.anthropic_api_key:
+        vision_provider = getattr(config, "vision_provider", "anthropic")
+        if vision_provider not in ("anthropic", "dashscope"):
+            vision_provider = "anthropic"
+
+        if config.vision_enabled and vision_provider == "dashscope" and config.dashscope_api_key:
+            from .feature_extraction.dashscope_vision_api import DashScopeVisionAPI
+            self._vision_api = DashScopeVisionAPI(
+                api_key=config.dashscope_api_key,
+                model=config.vision_model,
+            )
+        elif config.vision_enabled and config.anthropic_api_key:
             from .feature_extraction.vision_api import VisionAPI
             cost_log_path = config.chroma_db_path.parent / "vision_costs.json"
             self._vision_api = VisionAPI(
