@@ -416,8 +416,12 @@ def cmd_status(args):
             "zotero_dir_valid": config.zotero_data_dir.exists()
                 and (config.zotero_data_dir / "zotero.sqlite").exists(),
             "embedding_provider": config.embedding_provider,
+            "dashscope_embedding_endpoint": config.dashscope_embedding_endpoint,
             "gemini_key_set": bool(config.gemini_api_key),
             "dashscope_key_set": bool(config.dashscope_api_key),
+            "vision_enabled": config.vision_enabled,
+            "vision_provider": config.vision_provider,
+            "vision_model": config.vision_model,
             "secret_backend": resolved.secret_backend,
             "legacy_secret_backend": resolved.secret_backend,
             "write_ops_ready": bool(config.zotero_api_key and config.zotero_user_id),
@@ -471,12 +475,16 @@ def cmd_status(args):
     print(f"  Zotero data dir:    {config.zotero_data_dir}")
     print(f"  ChromaDB path:      {config.chroma_db_path}")
     print(f"  Embedding provider: {config.embedding_provider}")
+    if config.embedding_provider == "dashscope":
+        print(f"  DashScope endpoint:  {config.dashscope_embedding_endpoint}")
     print(f"  Legacy secret backend: {resolved.secret_backend}")
     print(f"  Write ops ready:    {'yes' if (config.zotero_api_key and config.zotero_user_id) else 'no'}")
     print(f"  Embedding model:    {config.embedding_model}")
     print(f"  Embedding dims:     {config.embedding_dimensions}")
     print(f"  Reranking enabled:  {config.rerank_enabled}")
     print(f"  Vision enabled:     {config.vision_enabled}")
+    print(f"  Vision provider:    {config.vision_provider}")
+    print(f"  Vision model:       {config.vision_model}")
     print("\n  Client integration:")
     detected = deployment["detected_platforms"]
     print(f"    Detected:   {', '.join(detected) if detected else 'none'}")

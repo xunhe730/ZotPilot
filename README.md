@@ -128,6 +128,7 @@ ZotPilot 由三部分组成：
 
 > 选定后不建议换。向量维度不同，换模型要 `zotpilot index --force` 重建。
 > 选 `local` 只把 ZotPilot 切到本地嵌入模式；本地模型在首次实际调用 embeddings 时才下载，不在 `setup` 阶段预下载。
+> DashScope 默认使用 OpenAI-compatible embedding endpoint；如需 DashScope 原生 `document` / `query` 非对称检索语义，可运行 `zotpilot config set dashscope_embedding_endpoint native`，然后 `zotpilot index --force` 重建索引。
 
 非交互式（agent 驱动）：
 

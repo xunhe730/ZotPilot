@@ -23,11 +23,18 @@ def create_embedder(config):
             max_retries=config.embedding_max_retries,
         )
     elif config.embedding_provider == "dashscope":
-        logger.info(f"Using DashScope embeddings ({config.embedding_model}, {config.embedding_dimensions} dimensions)")
+        dashscope_endpoint = getattr(config, "dashscope_embedding_endpoint", "compatible")
+        if not isinstance(dashscope_endpoint, str):
+            dashscope_endpoint = "compatible"
+        logger.info(
+            f"Using DashScope embeddings ({config.embedding_model}, "
+            f"{config.embedding_dimensions} dimensions, endpoint={dashscope_endpoint})"
+        )
         return DashScopeEmbedder(
             model=config.embedding_model,
             dimensions=config.embedding_dimensions,
             api_key=config.dashscope_api_key,
+            endpoint=dashscope_endpoint,
             timeout=config.embedding_timeout,
             max_retries=config.embedding_max_retries,
         )

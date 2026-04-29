@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from . import _platforms
 from .config import Config, _default_config_dir, _old_config_path
@@ -32,13 +33,14 @@ def _config_path(path: Path | str | None = None) -> Path:
     return Path(path).expanduser() if path is not None else (_default_config_dir() / "config.json")
 
 
-def _read_json_if_exists(path: Path) -> dict:
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _legacy_config_candidates(config_path: Path) -> dict[str, str]:

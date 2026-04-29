@@ -16,20 +16,6 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Platform-specific Zotero profile directories
-_PROFILE_DIRS: dict[str, list[Path]] = {
-    "Darwin": [Path.home() / "Library" / "Application Support" / "Zotero"],
-    "Linux": [Path.home() / ".zotero" / "zotero"],
-    "Windows": [Path.home() / "AppData" / "Roaming" / "Zotero" / "Zotero"],
-}
-
-# Platform-specific default data directories
-_DATA_DIRS: dict[str, list[Path]] = {
-    "Darwin": [Path.home() / "Zotero"],
-    "Linux": [Path.home() / "Zotero"],
-    "Windows": [Path.home() / "Zotero"],
-}
-
 # Regex to extract dataDir from prefs.js
 _DATADIR_RE = re.compile(
     r'user_pref\("extensions\.zotero\.dataDir",\s*"([^"]+)"\);'
@@ -37,6 +23,24 @@ _DATADIR_RE = re.compile(
 _USE_DATADIR_RE = re.compile(
     r'user_pref\("extensions\.zotero\.useDataDir",\s*true\);'
 )
+
+
+def _profile_dirs(system: str) -> list[Path]:
+    home = Path.home()
+    return {
+        "Darwin": [home / "Library" / "Application Support" / "Zotero"],
+        "Linux": [home / ".zotero" / "zotero"],
+        "Windows": [home / "AppData" / "Roaming" / "Zotero" / "Zotero"],
+    }.get(system, [])
+
+
+def _data_dirs(system: str) -> list[Path]:
+    home = Path.home()
+    return {
+        "Darwin": [home / "Zotero"],
+        "Linux": [home / "Zotero"],
+        "Windows": [home / "Zotero"],
+    }.get(system, [])
 
 
 def detect_zotero_data_dir(configured_path: str | None = None) -> Path | None:
@@ -69,7 +73,7 @@ def detect_zotero_data_dir(configured_path: str | None = None) -> Path | None:
 
     # Priority 4: Platform-specific defaults
     system = platform.system()
-    for data_dir in _DATA_DIRS.get(system, []):
+    for data_dir in _data_dirs(system):
         if _validate_data_dir(data_dir):
             logger.info(f"Using platform default Zotero data dir: {data_dir}")
             return data_dir
@@ -85,9 +89,8 @@ def _validate_data_dir(path: Path) -> bool:
 def _detect_from_profiles() -> Path | None:
     """Parse profiles.ini to find the active profile's data directory."""
     system = platform.system()
-    profile_dirs = _PROFILE_DIRS.get(system, [])
 
-    for profile_dir in profile_dirs:
+    for profile_dir in _profile_dirs(system):
         profiles_ini = profile_dir / "profiles.ini"
         if not profiles_ini.exists():
             continue

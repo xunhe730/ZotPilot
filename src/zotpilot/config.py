@@ -9,6 +9,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+ANTHROPIC_DEFAULT_VISION_MODEL = "claude-haiku-4-5-20251001"
+DASHSCOPE_DEFAULT_VISION_MODEL = "qwen3-vl-flash"
+
 
 def _default_config_dir() -> Path:
     """Platform-aware config directory."""
@@ -50,6 +53,8 @@ class Config:
     dashscope_api_key: str | None
     # Embedding provider: "gemini", "dashscope", "local", or "none" (No-RAG mode)
     embedding_provider: str
+    # DashScope embedding endpoint: "compatible" or "native"
+    dashscope_embedding_endpoint: str
     # Embedding settings
     embedding_timeout: float
     embedding_max_retries: int
@@ -67,6 +72,7 @@ class Config:
     openalex_email: str | None  # Optional email for polite pool (10 req/sec vs 1 req/sec)
     # Vision extraction settings
     vision_enabled: bool
+    vision_provider: str
     vision_model: str
     anthropic_api_key: str | None
     vision_max_tables_per_run: int | None
@@ -116,6 +122,18 @@ class Config:
         }
         default_model, default_dims = model_defaults.get(provider, ("gemini-embedding-001", 768))
 
+        vision_provider = data.get("vision_provider", "anthropic")
+        default_vision_model = (
+            DASHSCOPE_DEFAULT_VISION_MODEL
+            if vision_provider == "dashscope"
+            else ANTHROPIC_DEFAULT_VISION_MODEL
+        )
+        vision_model = data.get("vision_model", default_vision_model)
+        if vision_provider == "dashscope" and vision_model == ANTHROPIC_DEFAULT_VISION_MODEL:
+            vision_model = DASHSCOPE_DEFAULT_VISION_MODEL
+        elif vision_provider == "anthropic" and vision_model == DASHSCOPE_DEFAULT_VISION_MODEL:
+            vision_model = ANTHROPIC_DEFAULT_VISION_MODEL
+
         return cls(
             zotero_data_dir=Path(data.get("zotero_data_dir", "~/Zotero")).expanduser(),
             chroma_db_path=Path(data.get("chroma_db_path", default_chroma)).expanduser(),
@@ -126,6 +144,7 @@ class Config:
             gemini_api_key=data.get("gemini_api_key"),
             dashscope_api_key=data.get("dashscope_api_key"),
             embedding_provider=data.get("embedding_provider", "gemini"),
+            dashscope_embedding_endpoint=data.get("dashscope_embedding_endpoint", "compatible"),
             embedding_timeout=data.get("embedding_timeout", 120.0),
             embedding_max_retries=data.get("embedding_max_retries", 3),
             rerank_alpha=data.get("rerank_alpha", 0.7),
@@ -138,7 +157,8 @@ class Config:
             ocr_language=data.get("ocr_language", "eng"),
             openalex_email=data.get("openalex_email"),
             vision_enabled=data.get("vision_enabled", True),
-            vision_model=data.get("vision_model", "claude-haiku-4-5-20251001"),
+            vision_provider=vision_provider,
+            vision_model=vision_model,
             anthropic_api_key=data.get("anthropic_api_key"),
             vision_max_tables_per_run=data.get("vision_max_tables_per_run"),
             vision_max_cost_usd=data.get("vision_max_cost_usd"),
@@ -168,6 +188,7 @@ class Config:
             "chunk_size": self.chunk_size,
             "chunk_overlap": self.chunk_overlap,
             "embedding_provider": self.embedding_provider,
+            "dashscope_embedding_endpoint": self.dashscope_embedding_endpoint,
             "embedding_timeout": self.embedding_timeout,
             "embedding_max_retries": self.embedding_max_retries,
             "rerank_alpha": self.rerank_alpha,
@@ -180,6 +201,7 @@ class Config:
             "ocr_language": self.ocr_language,
             "openalex_email": self.openalex_email,
             "vision_enabled": self.vision_enabled,
+            "vision_provider": self.vision_provider,
             "vision_model": self.vision_model,
             "gemini_api_key": self.gemini_api_key,
             "dashscope_api_key": self.dashscope_api_key,
@@ -233,5 +255,16 @@ class Config:
             errors.append("DASHSCOPE_API_KEY not set (required for embedding_provider='dashscope')")
         elif self.embedding_provider not in ("gemini", "dashscope", "local", "none"):
             errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")  # noqa: E501
+        if self.dashscope_embedding_endpoint not in ("compatible", "native"):
+            errors.append("Invalid dashscope_embedding_endpoint: must be 'compatible' or 'native'")
+
+        if self.vision_provider not in ("anthropic", "dashscope"):
+            errors.append("Invalid vision_provider: must be 'anthropic' or 'dashscope'")
+        elif self.vision_enabled and self.vision_provider == "dashscope" and not self.dashscope_api_key:
+            errors.append("DASHSCOPE_API_KEY not set (required for vision_provider='dashscope')")
+        if self.vision_provider == "dashscope" and self.vision_model.startswith("claude-"):
+            errors.append("Invalid vision_model for vision_provider='dashscope'")
+        elif self.vision_provider == "anthropic" and self.vision_model.startswith("qwen"):
+            errors.append("Invalid vision_model for vision_provider='anthropic'")
 
         return errors

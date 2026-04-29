@@ -7,6 +7,27 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+class TestConfigHash:
+    def test_dashscope_embedding_endpoint_affects_index_hash(self):
+        from zotpilot.indexer import _config_hash
+
+        base = SimpleNamespace(
+            chunk_size=400,
+            chunk_overlap=100,
+            embedding_provider="dashscope",
+            dashscope_embedding_endpoint="compatible",
+            embedding_dimensions=1024,
+            embedding_model="text-embedding-v4",
+            ocr_language="eng",
+            vision_enabled=False,
+            vision_provider="anthropic",
+            vision_model="",
+        )
+        native = SimpleNamespace(**{**base.__dict__, "dashscope_embedding_endpoint": "native"})
+
+        assert _config_hash(base) != _config_hash(native)
+
+
 class TestTitlePatternValidation:
     """Test P0-3: ReDoS protection on title_pattern in Indexer.index_all()."""
 
@@ -355,6 +376,36 @@ class TestSkipTracking:
 
 
 class TestVisionBudgetGuards:
+    def test_dashscope_vision_provider_uses_dashscope_api(self, tmp_path):
+        from zotpilot.indexer import Indexer
+
+        config = MagicMock()
+        config.zotero_data_dir = Path("/fake")
+        config.chroma_db_path = tmp_path / "chroma"
+        config.chroma_db_path.mkdir()
+        config.chunk_size = 1000
+        config.chunk_overlap = 200
+        config.embedding_provider = "local"
+        config.embedding_dimensions = 384
+        config.embedding_model = "test"
+        config.ocr_language = "eng"
+        config.vision_enabled = True
+        config.vision_provider = "dashscope"
+        config.vision_model = "qwen3-vl-flash"
+        config.dashscope_api_key = "dashscope-key"
+        config.anthropic_api_key = None
+
+        import zotpilot.feature_extraction.dashscope_vision_api as dashscope_vision_api
+
+        with patch("zotpilot.indexer.ZoteroClient"), \
+             patch("zotpilot.indexer.create_embedder"), \
+             patch("zotpilot.indexer.VectorStore"), \
+             patch("zotpilot.indexer.JournalRanker"), \
+             patch.object(dashscope_vision_api, "DashScopeVisionAPI") as vision_cls:
+            Indexer(config)
+
+        vision_cls.assert_called_once_with(api_key="dashscope-key", model="qwen3-vl-flash")
+
     def test_skips_batch_vision_when_table_cap_is_exceeded(self):
         from zotpilot.indexer import Indexer
 

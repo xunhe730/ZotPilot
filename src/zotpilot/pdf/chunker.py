@@ -1,6 +1,6 @@
 """Document chunking with overlap and page tracking."""
 from ..models import Chunk, PageExtraction, SectionSpan
-from .section_classifier import assign_section_with_confidence
+from .section_classifier import assign_section_with_confidence, is_reference_like_text
 
 
 class Chunker:
@@ -71,6 +71,9 @@ class Chunker:
 
                 # Assign section label and confidence
                 section, section_confidence = assign_section_with_confidence(start, sections)
+                if section != "references" and is_reference_like_text(chunk_text):
+                    section = "references"
+                    section_confidence = 1.0
 
                 chunks.append(Chunk(
                     text=chunk_text,

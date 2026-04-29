@@ -85,3 +85,53 @@ class TestLocalVisionAPIPromptMode:
 
         assert api._max_tokens == 2048
         assert EXTRACTION_EXAMPLES in messages[0]["content"]
+
+
+class TestDashScopeVisionAPI:
+    def test_messages_use_openai_compatible_image_url(self):
+        from zotpilot.feature_extraction.dashscope_vision_api import DashScopeVisionAPI
+        from zotpilot.feature_extraction.vision_extract import EXTRACTION_EXAMPLES, VISION_COMPACT_SYSTEM
+
+        api = DashScopeVisionAPI(api_key="dashscope-key")
+        messages = api._build_messages(_make_spec(), [("ZmFrZQ==", "image/png")])
+
+        assert api._max_tokens == 1536
+        assert messages[0] == {"role": "system", "content": VISION_COMPACT_SYSTEM}
+        assert EXTRACTION_EXAMPLES not in messages[0]["content"]
+        content = messages[1]["content"]
+        assert content[0]["type"] == "image_url"
+        assert content[0]["image_url"]["url"] == "data:image/png;base64,ZmFrZQ=="
+        assert content[-1]["type"] == "text"
+
+    def test_extract_one_posts_dashscope_payload_and_tracks_usage(self):
+        from zotpilot.feature_extraction.dashscope_vision_api import DashScopeVisionAPI
+
+        api = DashScopeVisionAPI(api_key="dashscope-key", model="qwen3-vl-flash")
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"table_label":"Table 1","caption":"Table 1. Test",'
+                            '"is_incomplete":false,"incomplete_reason":"",'
+                            '"headers":["A"],"rows":[["1"]],"footnotes":""}'
+                        )
+                    }
+                }
+            ],
+        }
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+            result = api._extract_one(_make_spec(), [("ZmFrZQ==", "image/png")])
+
+        payload = mock_client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+        assert payload["model"] == "qwen3-vl-flash"
+        assert payload["messages"][1]["content"][0]["type"] == "image_url"
+        assert result.parse_success is True
+        assert result.headers == ["A"]
+        assert api.total_input_tokens == 11
+        assert api.total_output_tokens == 7
