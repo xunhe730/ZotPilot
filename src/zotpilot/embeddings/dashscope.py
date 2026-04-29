@@ -1,6 +1,7 @@
 """Alibaba Cloud Bailian (DashScope) embedding provider."""
 import logging
 import time
+from typing import Any
 
 import httpx
 
@@ -88,16 +89,17 @@ class DashScopeEmbedder:
             "Content-Type": "application/json",
         }
         text_type = "query" if task_type == "RETRIEVAL_QUERY" else "document"
-        payload = {
-            "model": self.model,
-            "input": {"texts": batch},
-            "parameters": {
-                "dimension": self.dimensions,
-                "text_type": text_type,
-            },
+        parameters: dict[str, Any] = {
+            "dimension": self.dimensions,
+            "text_type": text_type,
         }
         if text_type == "query":
-            payload["parameters"]["instruct"] = QUERY_INSTRUCT
+            parameters["instruct"] = QUERY_INSTRUCT
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": {"texts": batch},
+            "parameters": parameters,
+        }
 
         last_error = ""
         for attempt in range(1, self.max_retries + 1):

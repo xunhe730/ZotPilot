@@ -9,6 +9,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .config import _default_config_dir
 
@@ -164,9 +165,12 @@ def _load_local_secrets() -> dict[str, str]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SecretStoreError(f"Failed to read local secret store {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SecretStoreError(f"Local secret store {path} must contain a JSON object")
+    return {str(key): str(value) for key, value in data.items()}
 
 
 def _save_local_secrets(data: dict[str, str]) -> None:

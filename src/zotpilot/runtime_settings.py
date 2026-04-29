@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from .config import Config, _default_config_dir, _old_config_path
 from .secret_store import describe_backend, get_secret
@@ -49,14 +50,15 @@ def _resolved_config_path(path: Path | str | None = None) -> Path:
     return config_path
 
 
-def _read_json_if_exists(path: Path) -> dict:
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            data: Any = json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _collect_legacy_config_secrets(path: Path | str | None = None) -> dict[str, str]:
@@ -108,7 +110,7 @@ def resolve_runtime_settings(
             updates[field] = value
             sources[field] = "cli-override"
 
-    resolved = replace(base, **updates)
+    resolved = replace(base, **updates)  # type: ignore[arg-type]
 
     # If values still came from the shared config, record that source explicitly.
     for field in ("zotero_user_id", "openalex_email"):
