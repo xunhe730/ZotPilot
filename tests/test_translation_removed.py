@@ -34,7 +34,8 @@ class TestTranslationRemoved:
         with patch("zotpilot.tools.search._get_retriever", return_value=mock_retriever), \
              patch("zotpilot.tools.search._get_reranker", return_value=mock_reranker), \
              patch("zotpilot.tools.search._get_store_optional", return_value=MagicMock()), \
-             patch("zotpilot.tools.search._get_config", return_value=mock_config):
+             patch("zotpilot.tools.search._get_config", return_value=mock_config), \
+             patch("zotpilot.tools.search._current_pdf_doc_ids", return_value=set()):
             from zotpilot.tools.search import search_papers
             search_papers(query="深度学习在流体力学中的应用")
 

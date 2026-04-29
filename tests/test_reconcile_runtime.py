@@ -225,26 +225,29 @@ class TestOpenCodeInspectionRoundtrip:
     """
 
     def test_inspect_returns_string_command_not_list_str(self, tmp_path):
-        cfg = tmp_path / "opencode.json"
+        cfg = tmp_path / ".config" / "opencode" / "opencode.json"
         _write_mcp_config(cfg, {})
-        registered, command, args, env, _ = _inspect_registration("opencode")
+        with patch("zotpilot._platforms._home", return_value=tmp_path):
+            registered, command, args, env, _ = _inspect_registration("opencode")
         assert registered is True
         assert isinstance(command, str), f"command must be str, got {type(command)}: {command!r}"
         assert not command.startswith("["), "command must not be the str() of a list"
 
     def test_inspect_splits_command_and_args_correctly(self, tmp_path):
-        cfg = tmp_path / "opencode.json"
+        cfg = tmp_path / ".config" / "opencode" / "opencode.json"
         _write_mcp_config(cfg, {})
-        _, command, args, _, _ = _inspect_registration("opencode")
+        with patch("zotpilot._platforms._home", return_value=tmp_path):
+            _, command, args, _, _ = _inspect_registration("opencode")
         assert args == ("mcp", "serve"), f"expected ('mcp', 'serve'), got {args!r}"
         assert "zotpilot" in command, f"command should contain 'zotpilot', got {command!r}"
 
     def test_inspect_reads_written_config_without_drift(self, tmp_path, monkeypatch):
         from zotpilot._platforms import _commands_equivalent, _runtime_invocation
-        cfg = tmp_path / "opencode.json"
+        cfg = tmp_path / ".config" / "opencode" / "opencode.json"
         _write_mcp_config(cfg, {})
-        _, command, args, _, _ = _inspect_registration("opencode")
-        desired_command, desired_args = _runtime_invocation()
+        with patch("zotpilot._platforms._home", return_value=tmp_path):
+            _, command, args, _, _ = _inspect_registration("opencode")
+            desired_command, desired_args = _runtime_invocation()
         # After the fix, the inspected command must be equivalent to the desired command.
         assert _commands_equivalent(command, desired_command), (
             f"Inspected command {command!r} != desired {desired_command!r} — would cause drift loop"

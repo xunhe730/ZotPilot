@@ -607,7 +607,7 @@ class TestCmdUpdate:
              patch("zotpilot.cli._get_latest_pypi_version", return_value="0.2.1"), \
              patch("zotpilot.cli._detect_cli_installer", return_value=("pip", None)), \
              patch("zotpilot.cli._import_runtime_env_to_config", return_value={}), \
-             patch("zotpilot._platforms.reconcile_runtime", side_effect=RuntimeError("boom")):
+             patch("zotpilot.cli._deployment_status", side_effect=RuntimeError("boom")):
             with patch("zotpilot.cli.subprocess.run"):
                 result = cmd_update(args)
 
