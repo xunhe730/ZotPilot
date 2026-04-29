@@ -35,7 +35,7 @@ from ..models import (
     SectionSpan,
 )
 from .orphan_recovery import run_recovery
-from .section_classifier import categorize_heading
+from .section_classifier import categorize_heading, is_preamble_heading
 
 if TYPE_CHECKING:
     from ..feature_extraction.vision_api import TableVisionSpec, VisionAPI
@@ -381,8 +381,10 @@ def extract_document(
     for p in pages:
         p.markdown = _normalize_ligatures(p.markdown)
 
-    # Detect sections using toc_items or section-header page_boxes
+    # Detect sections using toc_items, section-header page_boxes, and strict
+    # inline headings such as "References" that layout models often miss.
     sections = _detect_sections(page_chunks, full_markdown, pages)
+    sections = _merge_inline_section_headings(sections, full_markdown)
 
     # --- STRUCTURED EXTRACTION (use native PyMuPDF) ---
     doc = pymupdf.open(str(pdf_path))
@@ -394,6 +396,7 @@ def extract_document(
         abstract_span = _detect_abstract(pages, full_markdown, doc, sections)
         if abstract_span:
             sections = _insert_abstract(sections, abstract_span)
+    sections = _relabel_descriptive_body_sections(sections)
 
     figures: list[ExtractedFigure] = []
     fig_idx = 0
@@ -937,6 +940,108 @@ def _detect_sections(
 
     # Strategy 2: Fall back to section-header page_boxes
     return _sections_from_header_boxes(page_chunks, full_markdown, pages)
+
+
+def _inline_heading_category(line: str) -> tuple[str | None, float]:
+    """Classify strict standalone markdown headings found in extracted text."""
+    raw = line.strip()
+    if not raw or len(raw) > 100:
+        return None, 0.0
+    if not (
+        raw.startswith("#")
+        or raw.startswith("**")
+        or raw.lower().strip("*_ .:")
+        in {
+            "references",
+            "bibliography",
+            "literature cited",
+            "methods",
+            "online methods",
+            "materials and methods",
+            "data availability",
+            "code availability",
+            "acknowledgements",
+            "acknowledgments",
+            "author contributions",
+            "competing interests",
+            "ethics declarations",
+            "additional information",
+        }
+    ):
+        return None, 0.0
+
+    clean = _strip_md_formatting(raw)
+    cat, _ = categorize_heading(clean)
+    if cat in {"references", "appendix", "methods", "abstract", "introduction", "discussion", "conclusion"}:
+        return cat, CONFIDENCE_SCHEME_MATCH
+    return None, 0.0
+
+
+def _merge_inline_section_headings(sections: list[SectionSpan], full_markdown: str) -> list[SectionSpan]:
+    """Add strict inline headings missed by layout section-header detection."""
+    total_len = len(full_markdown)
+    if not full_markdown:
+        return sections
+
+    starts = {s.char_start for s in sections}
+    classified = [
+        (s.char_start, s.label, s.heading_text, s.confidence)
+        for s in sections
+        if 0 <= s.char_start < total_len
+    ]
+
+    offset = 0
+    for line in full_markdown.splitlines(keepends=True):
+        label, confidence = _inline_heading_category(line)
+        if label and all(abs(offset - existing) > 5 for existing in starts):
+            classified.append((offset, label, line.strip(), confidence))
+            starts.add(offset)
+        offset += len(line)
+
+    if not classified:
+        return sections
+    classified.sort(key=lambda x: x[0])
+    return _build_spans(classified, total_len)
+
+
+def _relabel_descriptive_body_sections(sections: list[SectionSpan]) -> list[SectionSpan]:
+    """Infer Nature-style descriptive body headings as results after abstract/intro."""
+    relabelled: list[SectionSpan] = []
+    body_started = False
+    descriptive_unknown_seen = False
+    terminal_seen = False
+
+    for span in sections:
+        label = span.label
+        if label in {"methods", "references", "appendix"}:
+            terminal_seen = True
+        if label in {"abstract", "introduction", "background", "results"}:
+            body_started = True
+
+        if label == "unknown" and body_started and not terminal_seen:
+            clean = _strip_md_formatting(span.heading_text)
+            if clean and not is_preamble_heading(clean):
+                label = "results"
+        elif label == "unknown" and not body_started and not terminal_seen:
+            clean = _strip_md_formatting(span.heading_text)
+            if clean and not is_preamble_heading(clean):
+                if descriptive_unknown_seen:
+                    label = "results"
+                else:
+                    descriptive_unknown_seen = True
+                    body_started = True
+
+        relabelled.append(SectionSpan(
+            label=label,
+            char_start=span.char_start,
+            char_end=span.char_end,
+            heading_text=span.heading_text,
+            confidence=span.confidence if label == span.label else CONFIDENCE_GAP_FILL,
+        ))
+        if label == "results":
+            body_started = True
+
+    return relabelled
 
 
 def _sections_from_toc(

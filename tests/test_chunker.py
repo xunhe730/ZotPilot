@@ -66,6 +66,24 @@ class TestChunker:
         assert chunks[0].section == "methods"
         assert chunks[0].section_confidence == 0.85
 
+    def test_reference_like_chunk_is_relabelled(self):
+        chunker = Chunker(chunk_size=1000, overlap=100)
+        text = """
+        References
+        1. Smith, J. et al. A useful paper. Nature 520, 100-110 (2020). https://doi.org/10.1038/test1
+        2. Chen, Y. et al. Another paper. Cell 180, 12-24 (2021). https://doi.org/10.1016/test2
+        3. Wang, L. et al. More results. Science 370, 44-50 (2022). https://doi.org/10.1126/test3
+        4. Lee, K. et al. Methods paper. Nat Methods 19, 88-99 (2023).
+        """
+        pages = [PageExtraction(page_num=1, markdown=text, char_start=0)]
+        sections = [
+            SectionSpan(label="results", char_start=0, char_end=len(text), heading_text="Results", confidence=1.0),
+        ]
+
+        chunks = chunker.chunk(text, pages, sections)
+        assert chunks[0].section == "references"
+        assert chunks[0].section_confidence == 1.0
+
     def test_sentence_boundary_breaking(self):
         chunker = Chunker(chunk_size=25, overlap=5)
         # 25 tokens * 4 = 100 chars target
