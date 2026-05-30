@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from zotpilot.models import ExtractedFormula
 from zotpilot.vector_store import VectorStore
 
 
@@ -71,6 +72,65 @@ class TestVectorStore:
     def test_empty_store_search(self, store):
         results = store.search("anything", top_k=5)
         assert results == []
+
+    def test_add_formulas(self, store):
+        doc_meta = {
+            "title": "Plasticity Paper",
+            "authors": "Test Author",
+            "year": 2024,
+            "citation_key": "test2024",
+            "publication": "Mechanics Journal",
+            "doi": "10.1234/formula",
+            "tags": "constitutive-model",
+            "collections": "Models",
+            "journal_quartile": "Q1",
+            "pdf_hash": "hash",
+            "quality_grade": "A",
+        }
+        formula = ExtractedFormula(
+            page_num=7,
+            formula_index=0,
+            bbox=(10.0, 20.0, 110.0, 45.0),
+            latex=r"\sigma = E\varepsilon",
+            confidence=0.98,
+        )
+
+        store.add_formulas("FORM001", doc_meta, [formula])
+
+        results = store.search("stress strain constitutive", filters={"chunk_type": {"$eq": "formula"}})
+        assert len(results) == 1
+        assert results[0].metadata["chunk_type"] == "formula"
+        assert results[0].metadata["latex"] == r"\sigma = E\varepsilon"
+        assert results[0].metadata["confidence"] == 0.98
+
+    def test_delete_chunks_by_type_preserves_other_chunks(self, store, sample_chunks):
+        doc_meta = {
+            "title": "Mixed Index Paper",
+            "authors": "Test Author",
+            "year": 2024,
+            "citation_key": "mixed2024",
+            "publication": "Mechanics Journal",
+            "doi": "10.1234/mixed",
+            "tags": "",
+            "collections": "",
+            "journal_quartile": "Q1",
+            "pdf_hash": "hash",
+            "quality_grade": "A",
+        }
+        formula = ExtractedFormula(
+            page_num=2,
+            formula_index=0,
+            bbox=(10.0, 20.0, 110.0, 45.0),
+            latex=r"\varepsilon_f = f(\eta)",
+        )
+        store.add_chunks("MIXED001", doc_meta, sample_chunks)
+        store.add_formulas("MIXED001", doc_meta, [formula])
+
+        store.delete_chunks_by_type("MIXED001", "formula")
+
+        assert store.search("fracture locus", filters={"chunk_type": {"$eq": "formula"}}) == []
+        text_results = store.search("transformer architecture", filters={"chunk_type": {"$eq": "text"}})
+        assert len(text_results) >= 1
 
     def test_corrupt_db_is_quarantined_when_probe_fails(self, tmp_path, mock_embedder):
         db_path = tmp_path / "chroma"

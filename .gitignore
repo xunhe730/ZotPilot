@@ -48,6 +48,12 @@ connector/dist/
 connector/build.log
 connector/cert/
 connector/config.sh
+connector-release/
+
+# Local browser launcher shortcuts
+launchers/Restart-Browsers-With-ZotPilotConnector.ps1
+launchers/Start-CentBrowser-ZotPilot-Connector.cmd
+launchers/Start-Chrome-ZotPilot-Connector.cmd
 
 # Local debug logs (per-session /ztp-research traces, not for repo)
 ztp-research-*.md

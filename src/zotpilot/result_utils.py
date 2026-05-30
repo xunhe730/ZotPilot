@@ -1,4 +1,5 @@
 """Result conversion and merging utilities."""
+from .formula_display import latex_to_display_math
 from .models import RetrievalResult
 
 
@@ -22,6 +23,11 @@ def _stored_chunk_to_retrieval_result(chunk) -> RetrievalResult:
         tags=meta.get("tags", ""),
         collections=meta.get("collections", ""),
         journal_quartile=meta.get("journal_quartile"),
+        chunk_type=meta.get("chunk_type", "text"),
+        formula_index=meta.get("formula_index"),
+        latex=meta.get("latex", ""),
+        confidence=meta.get("confidence"),
+        image_path=meta.get("image_path", ""),
     )
 
 
@@ -76,6 +82,16 @@ def _result_to_dict(r, verbosity: str = "full") -> dict:
             "publication": r.publication,
             "section_confidence": round(r.section_confidence, 2),
             "journal_quartile": r.journal_quartile,
+        })
+
+    if r.chunk_type == "formula" or r.latex:
+        result.update({
+            "chunk_type": "formula",
+            "formula_index": r.formula_index,
+            "display_formula": latex_to_display_math(r.latex),
+            "latex": r.latex,
+            "confidence": r.confidence,
+            "image_path": r.image_path,
         })
 
     if verbosity == "full":

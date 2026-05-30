@@ -51,11 +51,25 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/zotpilot"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"launchers/README.md" = "launchers/README.md"
+"launchers/run_zotpilot_index_full_56_gui.ps1" = "launchers/run_zotpilot_index_full_56_gui.ps1"
+"launchers/run_zotpilot_index_full_library_gui.ps1" = "launchers/run_zotpilot_index_full_library_gui.ps1"
+"launchers/run_zotpilot_index_monitor_gui.ps1" = "launchers/run_zotpilot_index_monitor_gui.ps1"
+"launchers/run_zotpilot_index_resume_latest_gui.ps1" = "launchers/run_zotpilot_index_resume_latest_gui.ps1"
+"launchers/run_zotpilot_index_sample_gui.ps1" = "launchers/run_zotpilot_index_sample_gui.ps1"
+"launchers/zotpilot_collection_index_gui.py" = "launchers/zotpilot_collection_index_gui.py"
+"launchers/zotpilot_index_monitor_gui.py" = "launchers/zotpilot_index_monitor_gui.py"
+
 [tool.hatch.build]
 include = [
     "src/zotpilot/**/*.py",
     "src/zotpilot/skills/*.md",
     "references/*.md",
+    "launchers/README.md",
+    "launchers/run_zotpilot_index_*.ps1",
+    "launchers/zotpilot_collection_index_gui.py",
+    "launchers/zotpilot_index_monitor_gui.py",
     "src/zotpilot/data/**/*",
     "src/zotpilot/py.typed",
 ]

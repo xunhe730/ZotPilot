@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 _VISION_ESTIMATED_COST_PER_TABLE_USD = 0.01
 
 
+def _chat_completions_url(base_url: str) -> str:
+    """Return a full OpenAI-compatible chat completions endpoint URL."""
+    cleaned = base_url.rstrip("/")
+    if cleaned.endswith("/chat/completions"):
+        return cleaned
+    return f"{cleaned}/chat/completions"
+
+
 def _config_hash(config: Config) -> str:
     """Hash of config values that affect indexed content.
 
@@ -38,12 +46,15 @@ def _config_hash(config: Config) -> str:
         f"{config.chunk_size}:"
         f"{config.chunk_overlap}:"
         f"{config.embedding_provider}:"
+        f"{getattr(config, 'embedding_base_url', '')}:"
+        f"{getattr(config, 'openai_compatible_base_url', '')}:"
         f"{getattr(config, 'dashscope_embedding_endpoint', 'compatible')}:"
         f"{config.embedding_dimensions}:"
         f"{config.embedding_model}:"
         f"{config.ocr_language}:"
         f"{getattr(config, 'vision_enabled', True)}:"
         f"{getattr(config, 'vision_provider', 'anthropic')}:"
+        f"{getattr(config, 'vision_base_url', '')}:"
         f"{getattr(config, 'vision_model', '')}"
     )
     return hashlib.sha256(data.encode()).hexdigest()[:16]
@@ -84,7 +95,7 @@ class Indexer:
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
         self.journal: IndexJournal | None = None
         vision_provider = getattr(config, "vision_provider", "anthropic")
-        if vision_provider not in ("anthropic", "dashscope"):
+        if vision_provider not in ("anthropic", "dashscope", "openai-compatible", "siliconflow"):
             vision_provider = "anthropic"
 
         if config.vision_enabled and vision_provider == "dashscope" and config.dashscope_api_key:
@@ -92,6 +103,21 @@ class Indexer:
             self._vision_api = DashScopeVisionAPI(
                 api_key=config.dashscope_api_key,
                 model=config.vision_model,
+            )
+        elif (
+            config.vision_enabled
+            and vision_provider in ("openai-compatible", "siliconflow")
+            and config.openai_compatible_api_key
+        ):
+            from .feature_extraction.dashscope_vision_api import DashScopeVisionAPI
+            base_url = (
+                getattr(config, "vision_base_url", None)
+                or getattr(config, "openai_compatible_base_url", "")
+            )
+            self._vision_api = DashScopeVisionAPI(
+                api_key=config.vision_api_key or config.openai_compatible_api_key,
+                model=config.vision_model,
+                base_url=_chat_completions_url(base_url),
             )
         elif config.vision_enabled and config.anthropic_api_key:
             from .feature_extraction.vision_api import VisionAPI
@@ -103,6 +129,35 @@ class Indexer:
             )
         else:
             self._vision_api = None
+
+        formula_ocr_enabled = getattr(config, "formula_ocr_enabled", False) is True
+        if formula_ocr_enabled and getattr(config, "formula_ocr_provider", "simpletex") == "simpletex":
+            from .feature_extraction.formula_ocr import SimpleTexFormulaOCR
+
+            self._formula_ocr = SimpleTexFormulaOCR(
+                token=getattr(config, "formula_ocr_api_key", None),
+                app_id=getattr(config, "simpletex_app_id", None),
+                app_secret=getattr(config, "simpletex_app_secret", None),
+                endpoint=getattr(
+                    config,
+                    "formula_ocr_endpoint",
+                    "https://server.simpletex.cn/api/latex_ocr",
+                ),
+                min_confidence=getattr(config, "formula_ocr_min_confidence", 0.0),
+                request_interval_seconds=getattr(
+                    config,
+                    "formula_ocr_request_interval_seconds",
+                    0.55,
+                ),
+            )
+            self._formula_ocr_max_formulas = getattr(
+                config,
+                "formula_ocr_max_formulas_per_doc",
+                0,
+            )
+        else:
+            self._formula_ocr = None
+            self._formula_ocr_max_formulas = 0
 
     # ------------------------------------------------------------------
     # Empty-doc tracking (keyed by item_key -> pdf file hash)
@@ -128,6 +183,23 @@ class Indexer:
         with open(path, "rb") as f:
             h.update(f.read(65536))
         return h.hexdigest()
+
+    def _build_doc_meta(self, item: ZoteroItem, quality_grade: str = "") -> dict:
+        """Build document metadata shared by text, table, figure, and formula chunks."""
+        journal_quartile = self.journal_ranker.lookup(item.publication)
+        return {
+            "title": item.title,
+            "authors": item.authors,
+            "year": item.year,
+            "citation_key": item.citation_key,
+            "publication": item.publication,
+            "journal_quartile": journal_quartile or "",
+            "doi": item.doi,
+            "tags": item.tags,
+            "collections": item.collections,
+            "pdf_hash": self._pdf_hash(item.pdf_path) if item.pdf_path else "",
+            "quality_grade": quality_grade,
+        }
 
     def _needs_reindex(self, item: ZoteroItem) -> tuple[bool, str]:
         """Check if a document needs (re)indexing based on PDF hash.
@@ -401,6 +473,8 @@ class Indexer:
                     images_dir=figures_dir,
                     ocr_language=self.config.ocr_language,
                     vision_api=self._vision_api,
+                    formula_ocr=self._formula_ocr,
+                    formula_ocr_max_formulas=self._formula_ocr_max_formulas,
                 )
                 doc_extractions[item.item_key] = (item, extraction)
             except Exception as e:
@@ -617,6 +691,8 @@ class Indexer:
             images_dir=figures_dir,
             ocr_language=self.config.ocr_language,
             vision_api=self._vision_api,
+            formula_ocr=self._formula_ocr,
+            formula_ocr_max_formulas=self._formula_ocr_max_formulas,
         )
 
         # Resolve vision for this single document
@@ -687,23 +763,8 @@ class Indexer:
             return 0, 0, f"{len(extraction.pages)} pages, {total_chars} chars but no chunks created", extraction.stats, quality_grade  # noqa: E501
         logger.debug(f"  Created {len(chunks)} chunks")
 
-        # Look up journal quartile
-        journal_quartile = self.journal_ranker.lookup(item.publication)
-
         # Store text chunks
-        doc_meta = {
-            "title": item.title,
-            "authors": item.authors,
-            "year": item.year,
-            "citation_key": item.citation_key,
-            "publication": item.publication,
-            "journal_quartile": journal_quartile or "",
-            "doi": item.doi,
-            "tags": item.tags,
-            "collections": item.collections,
-            "pdf_hash": self._pdf_hash(item.pdf_path),
-            "quality_grade": quality_grade,
-        }
+        doc_meta = self._build_doc_meta(item, quality_grade=quality_grade)
         store_started = time.perf_counter()
         self.store.add_chunks(item.item_key, doc_meta, chunks)
         store_elapsed = time.perf_counter() - store_started
@@ -774,13 +835,67 @@ class Indexer:
                 if journal is not None:
                     record_table_failure(journal, item_key, f"figure storage: {e}")
 
-        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
+        n_formulas = 0
+        if getattr(extraction, "formulas", None):
+            try:
+                self.store.add_formulas(item_key, doc_meta, extraction.formulas)
+                n_formulas = len(extraction.formulas)
+                logger.debug(f"  Extracted {n_formulas} formulas")
+            except Exception as e:
+                logger.warning(f"Formula storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"formula storage: {e}")
+
+        logger.debug(
+            "Indexed %s: %d chunks, %d tables, %d figures, %d formulas, quality %s",
+            item.item_key,
+            len(chunks),
+            n_tables,
+            n_figures,
+            n_formulas,
+            quality_grade,
+        )
         return len(chunks), n_tables, "", extraction.stats, quality_grade
 
     def index_document(self, item: ZoteroItem) -> int:
         """Index a single document. Returns number of chunks created."""
         n_chunks, _n_tables, _reason, _stats, _quality = self._index_document_detailed(item)
         return n_chunks
+
+    def index_formula_chunks(self, item: ZoteroItem, *, refresh_existing: bool = True) -> int:
+        """Add or refresh only formula chunks for a document.
+
+        This path is intentionally isolated from the normal text/table/figure
+        indexing flow so enabling formula OCR does not force users to rebuild an
+        existing semantic index.
+        """
+        if self._formula_ocr is None:
+            raise RuntimeError("Formula OCR is not configured")
+        if item.pdf_path is None or not item.pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found for {item.item_key}")
+
+        import pymupdf
+
+        from .feature_extraction.formula_ocr import recognize_formulas
+
+        figures_dir = self.config.chroma_db_path.parent / "figures"
+        doc = pymupdf.open(str(item.pdf_path))
+        try:
+            formulas = recognize_formulas(
+                doc,
+                formula_ocr=self._formula_ocr,
+                max_formulas=self._formula_ocr_max_formulas or None,
+                images_dir=figures_dir,
+            )
+        finally:
+            doc.close()
+
+        if refresh_existing:
+            self.store.delete_chunks_by_type(item.item_key, "formula")
+        if formulas:
+            self.store.add_formulas(item.item_key, self._build_doc_meta(item), formulas)
+        logger.info("Indexed formula chunks for %s: %d", item.item_key, len(formulas))
+        return len(formulas)
 
     def reindex_document(self, item_key: str) -> int:
         """Re-index a specific document."""

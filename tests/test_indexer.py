@@ -27,6 +27,33 @@ class TestConfigHash:
 
         assert _config_hash(base) != _config_hash(native)
 
+    def test_formula_ocr_settings_do_not_affect_index_hash(self):
+        from zotpilot.indexer import _config_hash
+
+        base = SimpleNamespace(
+            chunk_size=400,
+            chunk_overlap=100,
+            embedding_provider="dashscope",
+            dashscope_embedding_endpoint="compatible",
+            embedding_dimensions=1024,
+            embedding_model="text-embedding-v4",
+            ocr_language="eng",
+            vision_enabled=False,
+            vision_provider="anthropic",
+            vision_model="",
+            formula_ocr_enabled=False,
+            formula_ocr_max_formulas_per_doc=0,
+        )
+        formula_enabled = SimpleNamespace(
+            **{
+                **base.__dict__,
+                "formula_ocr_enabled": True,
+                "formula_ocr_max_formulas_per_doc": 50,
+            }
+        )
+
+        assert _config_hash(base) == _config_hash(formula_enabled)
+
 
 class TestTitlePatternValidation:
     """Test P0-3: ReDoS protection on title_pattern in Indexer.index_all()."""

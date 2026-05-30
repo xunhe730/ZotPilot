@@ -81,6 +81,11 @@ class Retriever:
                 section=hit.metadata.get("section", "unknown"),
                 section_confidence=hit.metadata.get("section_confidence", 1.0),
                 journal_quartile=journal_quartile,
+                chunk_type=hit.metadata.get("chunk_type", "text"),
+                formula_index=hit.metadata.get("formula_index"),
+                latex=hit.metadata.get("latex", ""),
+                confidence=hit.metadata.get("confidence"),
+                image_path=hit.metadata.get("image_path", ""),
                 context_before=context_before,
                 context_after=context_after,
             ))

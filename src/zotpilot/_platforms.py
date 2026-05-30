@@ -32,6 +32,9 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 
+CODEX_MCP_SERVER_NAME = "zotero_mcp_zotpilot"
+LEGACY_MCP_SERVER_NAME = "zotpilot"
+
 
 def _mask_secret(secret: str) -> str:
     """Mask a secret key for safe display in logs and output."""
@@ -310,7 +313,7 @@ def _inspect_codex_registration() -> tuple[bool, str | None, tuple[str, ...], di
         data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return False, None, (), {}, str(config_path)
-    entry = data.get("mcp_servers", {}).get("zotpilot")
+    entry = data.get("mcp_servers", {}).get(CODEX_MCP_SERVER_NAME)
     if not isinstance(entry, dict):
         return False, None, (), {}, str(config_path)
     command = entry.get("command")
@@ -401,6 +404,10 @@ def _runtime_invocation(source_dir: Path | None = None) -> tuple[str, tuple[str,
     return _zotpilot_command(), ("mcp", "serve")
 
 
+def _is_zotpilot_executable_name(name: str) -> bool:
+    return name.lower() in ("zotpilot", "zotpilot.exe")
+
+
 def _skill_state_for_platform(plat: str) -> tuple[tuple[str, ...], bool]:
     info = PLATFORMS.get(plat, {})
     skills_dir = info.get("skills_dir")
@@ -434,7 +441,11 @@ def _commands_equivalent(actual: str | None, desired: str) -> bool:
     try:
         actual_path = Path(actual)
         desired_path = Path(desired)
-        if actual_path.name == desired_path.name == "zotpilot" and actual_path.exists():
+        if (
+            _is_zotpilot_executable_name(actual_path.name)
+            and _is_zotpilot_executable_name(desired_path.name)
+            and actual_path.exists()
+        ):
             return True
     except OSError:
         return False
@@ -459,7 +470,7 @@ def inspect_current_state(
         has_embedded_secrets = any(key in env for key in CREDENTIAL_ENV_KEYS)
         registration_hash_ok = (
             registered
-            and command == desired_command
+            and _commands_equivalent(command, desired_command)
             and tuple(args) == desired_args
             and not has_embedded_secrets
         )
@@ -851,9 +862,11 @@ def _register_codex(env: dict[str, str], source_dir: Path | None = None) -> bool
     """Register via `codex mcp add`."""
     command, args = _runtime_invocation(source_dir)
     _backup_config_file(_codex_config_path())
-    subprocess.run(["codex", "mcp", "remove", "zotpilot"],
+    subprocess.run(["codex", "mcp", "remove", LEGACY_MCP_SERVER_NAME],
                    capture_output=True, text=True)
-    cmd = ["codex", "mcp", "add", "zotpilot"]
+    subprocess.run(["codex", "mcp", "remove", CODEX_MCP_SERVER_NAME],
+                   capture_output=True, text=True)
+    cmd = ["codex", "mcp", "add", CODEX_MCP_SERVER_NAME]
     cmd.extend(["--", command] + list(args))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -1022,7 +1035,7 @@ def _print_manual_fallback(plat: str, env: dict[str, str]) -> None:
     if plat == "claude-code":
         print(f"    Manual: claude mcp add --scope user zotpilot -- {command} {' '.join(args)}")
     elif plat == "codex":
-        print(f"    Manual: codex mcp add zotpilot -- {command} {' '.join(args)}")
+        print(f"    Manual: codex mcp add {CODEX_MCP_SERVER_NAME} -- {command} {' '.join(args)}")
     else:
         config_path = _mcp_config_path(plat)
         is_opencode = "opencode" in str(config_path) if config_path else False

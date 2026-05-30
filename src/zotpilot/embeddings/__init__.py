@@ -38,13 +38,31 @@ def create_embedder(config):
             timeout=config.embedding_timeout,
             max_retries=config.embedding_max_retries,
         )
+    elif config.embedding_provider in ("openai-compatible", "siliconflow"):
+        base_url = (
+            getattr(config, "embedding_base_url", None)
+            or getattr(config, "openai_compatible_base_url", None)
+        )
+        logger.info(
+            f"Using OpenAI-compatible embeddings ({config.embedding_model}, "
+            f"{config.embedding_dimensions} dimensions, base_url={base_url})"
+        )
+        return DashScopeEmbedder(
+            model=config.embedding_model,
+            dimensions=config.embedding_dimensions,
+            api_key=config.embedding_api_key or config.openai_compatible_api_key,
+            base_url=base_url,
+            endpoint="compatible",
+            timeout=config.embedding_timeout,
+            max_retries=config.embedding_max_retries,
+        )
     elif config.embedding_provider == "none":
         logger.info("No-RAG mode: embedding disabled, semantic search unavailable")
         return None
     else:
         raise ValueError(
             f"Invalid embedding_provider: {config.embedding_provider}. "
-            f"Must be 'gemini', 'dashscope', 'local', or 'none'"
+            f"Must be 'gemini', 'dashscope', 'openai-compatible', 'siliconflow', 'local', or 'none'"
         )
 
 

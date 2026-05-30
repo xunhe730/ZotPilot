@@ -97,8 +97,12 @@ def cmd_setup(args):
 
         # Provider from flag
         embedding_provider = getattr(args, "provider", None) or "gemini"
-        if embedding_provider not in ("gemini", "dashscope", "local"):
-            print(f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini', 'dashscope', or 'local'.", file=sys.stderr)  # noqa: E501
+        if embedding_provider not in ("gemini", "dashscope", "openai-compatible", "siliconflow", "local"):
+            print(
+                f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini', 'dashscope', "
+                "'openai-compatible', 'siliconflow', or 'local'.",
+                file=sys.stderr,
+            )
             return 1
 
     else:
@@ -131,17 +135,21 @@ def cmd_setup(args):
         print("  1. Gemini (recommended, requires API key)")
         print("  2. DashScope / Bailian (Alibaba Cloud, requires API key)")
         print("  3. Local (all-MiniLM-L6-v2, no API key needed)")
-        choice = input("  Choice [1/2/3]: ").strip()
+        print("  4. SiliconFlow / OpenAI-compatible (requires API key)")
+        choice = input("  Choice [1/2/3/4]: ").strip()
         if choice == "2":
             embedding_provider = "dashscope"
         elif choice == "3":
             embedding_provider = "local"
+        elif choice == "4":
+            embedding_provider = "siliconflow"
         else:
             embedding_provider = "gemini"
 
     # Step 3: Configure API key (interactive only)
     gemini_api_key = None
     dashscope_api_key = None
+    openai_compatible_api_key = None
     zotero_api_key = None
     zotero_user_id = None
     if non_interactive:
@@ -184,6 +192,33 @@ def cmd_setup(args):
                 dashscope_api_key = input("  Enter DashScope API key: ").strip()
                 if not dashscope_api_key:
                     print("  WARNING: No API key provided. Set DASHSCOPE_API_KEY env var later.")
+    elif embedding_provider in ("openai-compatible", "siliconflow"):
+        import os as _os
+        existing_key = (
+            _os.environ.get("SILICONFLOW_API_KEY")
+            or _os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+        )
+        if non_interactive:
+            openai_compatible_api_key = existing_key
+            if not openai_compatible_api_key:
+                print(
+                    "NOTE: SILICONFLOW_API_KEY/OPENAI_COMPATIBLE_API_KEY not set. "
+                    "Set it before running provider-backed indexing.",
+                    file=sys.stderr,
+                )
+        else:
+            print("\n[3/5] OpenAI-compatible API key:")
+            if existing_key:
+                print("  Found SILICONFLOW_API_KEY/OPENAI_COMPATIBLE_API_KEY in environment (***hidden)")
+                if input("  Use this key? [Y/n] ").strip().lower() not in ("n", "no"):
+                    openai_compatible_api_key = existing_key
+            else:
+                print("  For SiliconFlow, get a key from https://cloud.siliconflow.cn/")
+                print("  Set it as: SILICONFLOW_API_KEY='your-key'")
+            if not openai_compatible_api_key:
+                openai_compatible_api_key = input("  Enter OpenAI-compatible API key: ").strip()
+                if not openai_compatible_api_key:
+                    print("  WARNING: No API key provided. Set SILICONFLOW_API_KEY env var later.")
     elif not non_interactive:
         print("\n[3/5] Skipping API key (local embeddings selected)")
 
@@ -251,6 +286,7 @@ def cmd_setup(args):
         embedding_provider=embedding_provider,
         gemini_api_key=gemini_api_key or base_config.gemini_api_key,
         dashscope_api_key=dashscope_api_key or base_config.dashscope_api_key,
+        openai_compatible_api_key=openai_compatible_api_key or base_config.openai_compatible_api_key,
         zotero_api_key=zotero_api_key or base_config.zotero_api_key,
         zotero_user_id=zotero_user_id or base_config.zotero_user_id,
     )
@@ -452,15 +488,21 @@ def cmd_status(args):
             from .vector_store import VectorStore
             from .zotero_client import ZoteroClient
 
-            embedder = create_embedder(config)
-            store = VectorStore(config.chroma_db_path, embedder)
-            zotero = ZoteroClient(config.zotero_data_dir)
-            current_doc_ids = current_library_pdf_doc_ids(zotero)
-            doc_ids = authoritative_indexed_doc_ids(store, current_doc_ids)
-            total = store.count_chunks_for_doc_ids(doc_ids)
-            result["doc_count"] = len(doc_ids)
-            result["chunk_count"] = total
-            result["index_ready"] = len(doc_ids) > 0
+            if config.embedding_provider == "none":
+                result["doc_count"] = 0
+                result["chunk_count"] = 0
+                result["index_ready"] = False
+                result["warnings"].append("Semantic indexing disabled (provider=none)")
+            else:
+                embedder = create_embedder(config)
+                store = VectorStore(config.chroma_db_path, embedder)
+                zotero = ZoteroClient(config.zotero_data_dir)
+                current_doc_ids = current_library_pdf_doc_ids(zotero)
+                doc_ids = authoritative_indexed_doc_ids(store, current_doc_ids)
+                total = store.count_chunks_for_doc_ids(doc_ids)
+                result["doc_count"] = len(doc_ids)
+                result["chunk_count"] = total
+                result["index_ready"] = len(doc_ids) > 0
         except Exception as e:
             result["errors"].append(f"Index error: {e}")
 
@@ -477,6 +519,8 @@ def cmd_status(args):
     print(f"  Embedding provider: {config.embedding_provider}")
     if config.embedding_provider == "dashscope":
         print(f"  DashScope endpoint:  {config.dashscope_embedding_endpoint}")
+    if config.embedding_provider in ("openai-compatible", "siliconflow"):
+        print(f"  Embedding base URL: {config.embedding_base_url or config.openai_compatible_base_url}")
     print(f"  Legacy secret backend: {resolved.secret_backend}")
     print(f"  Write ops ready:    {'yes' if (config.zotero_api_key and config.zotero_user_id) else 'no'}")
     print(f"  Embedding model:    {config.embedding_model}")
@@ -484,7 +528,14 @@ def cmd_status(args):
     print(f"  Reranking enabled:  {config.rerank_enabled}")
     print(f"  Vision enabled:     {config.vision_enabled}")
     print(f"  Vision provider:    {config.vision_provider}")
+    if config.vision_provider in ("openai-compatible", "siliconflow"):
+        print(f"  Vision base URL:    {config.vision_base_url or config.openai_compatible_base_url}")
     print(f"  Vision model:       {config.vision_model}")
+    print(f"  Formula OCR:        {config.formula_ocr_enabled}")
+    print(f"  Formula OCR provider: {config.formula_ocr_provider}")
+    if config.formula_ocr_enabled:
+        print(f"  Formula OCR endpoint: {config.formula_ocr_endpoint}")
+        print(f"  Formula OCR max/doc:  {config.formula_ocr_max_formulas_per_doc}")
     print("\n  Client integration:")
     detected = deployment["detected_platforms"]
     print(f"    Detected:   {', '.join(detected) if detected else 'none'}")
@@ -597,7 +648,8 @@ def _mask_secret(v: str) -> str:
 
 _SENSITIVE_FIELDS = {
     "gemini_api_key", "dashscope_api_key", "anthropic_api_key",
-    "zotero_api_key", "semantic_scholar_api_key",
+    "zotero_api_key", "semantic_scholar_api_key", "formula_ocr_api_key",
+    "simpletex_app_secret",
 }
 
 _SENSITIVE_REGISTER_FLAGS = {
@@ -612,6 +664,9 @@ _SCALAR_TYPES = {
     "oversample_multiplier": int, "oversample_topic_factor": int,
     "stats_sample_limit": int, "max_pages": int, "vision_enabled": bool,
     "embedding_dimensions": int, "preflight_enabled": bool,
+    "formula_ocr_enabled": bool, "formula_ocr_max_formulas_per_doc": int,
+    "formula_ocr_min_confidence": float,
+    "formula_ocr_request_interval_seconds": float,
 }
 
 
@@ -1115,7 +1170,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_setup.add_argument("--zotero-dir", type=str, default=None, help="Zotero data directory path")
     sub_setup.add_argument(
         "--provider", type=str, default=None,
-        choices=["gemini", "dashscope", "local"],
+        choices=["gemini", "dashscope", "openai-compatible", "siliconflow", "local"],
         help="Embedding provider (default: gemini)",
     )
     sub_setup.add_argument("--gemini-key", type=str, default=None, help=argparse.SUPPRESS)

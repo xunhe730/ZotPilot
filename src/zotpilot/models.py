@@ -59,6 +59,7 @@ class DocumentExtraction:
     sections: list[SectionSpan]
     tables: list[ExtractedTable]
     figures: list[ExtractedFigure]
+    formulas: list[ExtractedFormula]
     stats: dict
     quality_grade: str
     completeness: ExtractionCompleteness | None = None
@@ -85,6 +86,32 @@ class ExtractedFigure:
         if self.reference_context:
             text += f"\n{self.reference_context}"
         return text
+
+
+@dataclass
+class ExtractedFormula:
+    """A formula image/text region recognized as LaTeX."""
+    page_num: int
+    formula_index: int
+    bbox: tuple[float, float, float, float]
+    latex: str
+    confidence: float | None = None
+    image_path: Path | None = None
+    source: str = "simpletex"
+    raw_text: str = ""
+    reference_context: str | None = None
+
+    def to_searchable_text(self) -> str:
+        """Return formula text for embedding and search."""
+        lines = [
+            f"Formula on page {self.page_num}",
+            f"LaTeX: {self.latex}",
+        ]
+        if self.raw_text:
+            lines.append(f"Nearby extracted text: {self.raw_text}")
+        if self.reference_context:
+            lines.append(self.reference_context)
+        return "\n".join(lines)
 
 
 @dataclass
@@ -308,6 +335,11 @@ class RetrievalResult:
     tags: str = ""
     collections: str = ""
     journal_quartile: str | None = None
+    chunk_type: str = "text"
+    formula_index: int | None = None
+    latex: str = ""
+    confidence: float | None = None
+    image_path: str = ""
     composite_score: float | None = None  # Reranked score (similarity x section x journal)
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)

@@ -716,6 +716,15 @@ def render_table_region(
             Default 200 for initial crops. Pass 250 for re-crops.
     """
     x0, y0, x1, y1 = bbox
+    page_rect = page.rect
+    x0 = max(page_rect.x0, min(page_rect.x1, x0))
+    y0 = max(page_rect.y0, min(page_rect.y1, y0))
+    x1 = max(page_rect.x0, min(page_rect.x1, x1))
+    y1 = max(page_rect.y0, min(page_rect.y1, y1))
+    if x1 <= x0 or y1 <= y0:
+        logger.warning("Skipping invalid table crop bbox=%s after clamping to page=%s", bbox, page_rect)
+        return []
+
     width_in = (x1 - x0) / 72
     height_in = (y1 - y0) / 72
     long_edge_in = max(width_in, height_in)
@@ -729,15 +738,22 @@ def render_table_region(
             optimal_dpi = max(dpi_floor, min(dpi_cap, int(1568 / strip_width_in)))
             clip = pymupdf.Rect(sx0, sy0, sx1, sy1)
             mat = pymupdf.Matrix(optimal_dpi / 72, optimal_dpi / 72)
-            pix = page.get_pixmap(matrix=mat, clip=clip)
-            results.append((pix.tobytes("png"), "image/png"))
+            try:
+                pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+                results.append((pix.tobytes("png"), "image/png"))
+            except Exception as exc:
+                logger.warning("Skipping table strip render failure bbox=%s dpi=%s: %s", clip, optimal_dpi, exc)
         return results
     else:
         optimal_dpi = max(dpi_floor, min(dpi_cap, int(1568 / long_edge_in)))
         clip = pymupdf.Rect(x0, y0, x1, y1)
         mat = pymupdf.Matrix(optimal_dpi / 72, optimal_dpi / 72)
-        pix = page.get_pixmap(matrix=mat, clip=clip)
-        return [(pix.tobytes("png"), "image/png")]
+        try:
+            pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+            return [(pix.tobytes("png"), "image/png")]
+        except Exception as exc:
+            logger.warning("Skipping table region render failure bbox=%s dpi=%s: %s", clip, optimal_dpi, exc)
+            return []
 
 
 def compute_recrop_bbox(

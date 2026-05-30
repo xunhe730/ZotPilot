@@ -38,6 +38,7 @@ from .orphan_recovery import run_recovery
 from .section_classifier import categorize_heading, is_preamble_heading
 
 if TYPE_CHECKING:
+    from ..feature_extraction.formula_ocr import SimpleTexFormulaOCR
     from ..feature_extraction.vision_api import TableVisionSpec, VisionAPI
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,8 @@ def extract_document(
     images_dir: Path | str | None = None,
     ocr_language: str = "eng",
     vision_api: "VisionAPI | None" = None,
+    formula_ocr: "SimpleTexFormulaOCR | None" = None,
+    formula_ocr_max_formulas: int | None = None,
 ) -> DocumentExtraction:
     """Extract a PDF document using pymupdf4llm with layout detection."""
     pdf_path = Path(pdf_path)
@@ -388,6 +391,7 @@ def extract_document(
 
     # --- STRUCTURED EXTRACTION (use native PyMuPDF) ---
     doc = pymupdf.open(str(pdf_path))
+    formulas = []
 
     # --- Abstract detection ---
     # If no section is labelled "abstract", check first pages for abstract text
@@ -465,6 +469,17 @@ def extract_document(
     for f in figures:
         f.caption = _normalize_ligatures(f.caption)
 
+    if formula_ocr is not None:
+        from ..feature_extraction.formula_ocr import recognize_formulas
+
+        formula_images_dir = Path(images_dir) if write_images and images_dir else None
+        formulas = recognize_formulas(
+            doc,
+            formula_ocr=formula_ocr,
+            max_formulas=formula_ocr_max_formulas,
+            images_dir=formula_images_dir,
+        )
+
     # Orphan recovery: match floating captions to captionless figures
     run_recovery(doc, figures, tables, page_chunks)
 
@@ -483,6 +498,7 @@ def extract_document(
             sections=sections,
             tables=[],
             figures=figures,
+            formulas=formulas,
             stats=stats,
             quality_grade="",
             completeness=None,
@@ -504,6 +520,7 @@ def extract_document(
         sections=sections,
         tables=tables,
         figures=figures,
+        formulas=formulas,
         stats=stats,
         quality_grade=completeness.grade,
         completeness=completeness,

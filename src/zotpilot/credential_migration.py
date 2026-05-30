@@ -14,6 +14,12 @@ from .secret_store import get_secret, has_secret, set_secret
 _ENV_TO_SECRET_FIELD = {
     "GEMINI_API_KEY": "gemini_api_key",
     "DASHSCOPE_API_KEY": "dashscope_api_key",
+    "OPENAI_COMPATIBLE_API_KEY": "openai_compatible_api_key",
+    "SILICONFLOW_API_KEY": "openai_compatible_api_key",
+    "OPENAI_COMPATIBLE_EMBEDDING_API_KEY": "embedding_api_key",
+    "SILICONFLOW_EMBEDDING_API_KEY": "embedding_api_key",
+    "OPENAI_COMPATIBLE_VISION_API_KEY": "vision_api_key",
+    "SILICONFLOW_VISION_API_KEY": "vision_api_key",
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "ZOTERO_API_KEY": "zotero_api_key",
     "S2_API_KEY": "semantic_scholar_api_key",

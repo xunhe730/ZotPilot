@@ -175,7 +175,7 @@ Environment variables remain supported as temporary overrides. Prefer \
 `zotpilot setup` or `zotpilot config set ...` over editing client config.
 """
 
-mcp = FastMCP("zotpilot", instructions=_MCP_INSTRUCTIONS)
+mcp = FastMCP("zotero_mcp_zotpilot", instructions=_MCP_INSTRUCTIONS)
 
 _fastmcp_tool = mcp.tool
 

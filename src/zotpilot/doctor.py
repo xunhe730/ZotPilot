@@ -105,6 +105,18 @@ def _check_embedding_api_key(config) -> CheckResult:
             return CheckResult("embedding_api_key", "pass", "DASHSCOPE_API_KEY is set")
         return CheckResult("embedding_api_key", "fail", "DASHSCOPE_API_KEY not set (required for provider=dashscope)")
 
+    if provider in ("openai-compatible", "siliconflow"):
+        if config.embedding_api_key or config.openai_compatible_api_key:
+            return CheckResult("embedding_api_key", "pass", "OPENAI_COMPATIBLE_API_KEY/SILICONFLOW_API_KEY is set")
+        return CheckResult(
+            "embedding_api_key",
+            "fail",
+            f"OPENAI_COMPATIBLE_API_KEY or SILICONFLOW_API_KEY not set (required for provider={provider})",
+        )
+
+    if provider == "none":
+        return CheckResult("embedding_api_key", "pass", "provider=none (semantic search disabled)")
+
     return CheckResult("embedding_api_key", "fail", f"Unknown provider: {provider}")
 
 
@@ -124,6 +136,11 @@ def _check_secret_backend(config=None, sources: dict[str, str] | None = None) ->
 
 def _check_chromadb_index(config) -> CheckResult:
     """Check ChromaDB index health."""
+    if config.embedding_provider == "none":
+        return CheckResult("chromadb_index", "warn", "semantic indexing disabled (provider=none)")
+    if not config.chroma_db_path.exists() or not any(config.chroma_db_path.iterdir()):
+        return CheckResult("chromadb_index", "warn", "Index is empty (run 'zotpilot index' to populate)")
+
     try:
         from .embeddings import create_embedder
         from .index_authority import authoritative_indexed_doc_ids, current_library_pdf_doc_ids
