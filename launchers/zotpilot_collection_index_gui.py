@@ -58,6 +58,9 @@ def resolve_zotpilot_exe(override: Path | None = None) -> str:
     nearby = Path(sys.executable).with_name("zotpilot.exe")
     if nearby.exists():
         return str(nearby)
+    scripts_exe = Path(sys.executable).parent / "Scripts" / "zotpilot.exe"
+    if scripts_exe.exists():
+        return str(scripts_exe)
     discovered = shutil.which("zotpilot")
     return discovered or "zotpilot"
 
