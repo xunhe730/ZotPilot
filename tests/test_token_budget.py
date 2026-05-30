@@ -2,6 +2,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from zotpilot.models import RetrievalResult, ZoteroItem
 
 
@@ -451,6 +453,18 @@ class TestContextAndIndexingContracts:
             index_library(item_keys='["KBQCDWBE","54ZZF3LP"]', batch_size=0)
 
         assert mock_indexer.index_all.call_args.kwargs["item_keys"] == ["KBQCDWBE", "54ZZF3LP"]
+
+    def test_index_library_rejects_scalar_item_keys_string(self):
+        from zotpilot.tools.indexing import index_library
+
+        with pytest.raises(Exception, match="item_keys must be a list"):
+            index_library(item_keys="KBQCDWBE", batch_size=0)
+
+    def test_index_formulas_rejects_scalar_item_keys_string(self):
+        from zotpilot.tools.indexing import index_formulas
+
+        with pytest.raises(Exception, match="item_keys must be a list"):
+            index_formulas(item_keys="KBQCDWBE")
 
 
     def test_index_library_exposes_vision_budget_summary_when_requested(self):

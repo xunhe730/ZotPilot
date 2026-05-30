@@ -107,7 +107,7 @@ class Indexer:
         elif (
             config.vision_enabled
             and vision_provider in ("openai-compatible", "siliconflow")
-            and config.openai_compatible_api_key
+            and (config.vision_api_key or config.openai_compatible_api_key)
         ):
             from .feature_extraction.dashscope_vision_api import DashScopeVisionAPI
             base_url = (

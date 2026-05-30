@@ -328,7 +328,8 @@ class Config:
             and not (self.embedding_api_key or self.openai_compatible_api_key)
         ):
             errors.append(
-                "OPENAI_COMPATIBLE_API_KEY or SILICONFLOW_API_KEY not set "
+                "OPENAI_COMPATIBLE_API_KEY/SILICONFLOW_API_KEY or "
+                "OPENAI_COMPATIBLE_EMBEDDING_API_KEY/SILICONFLOW_EMBEDDING_API_KEY not set "
                 f"(required for embedding_provider='{self.embedding_provider}')"
             )
         elif self.embedding_provider not in (
@@ -353,7 +354,8 @@ class Config:
             and not (self.vision_api_key or self.openai_compatible_api_key)
         ):
             errors.append(
-                "OPENAI_COMPATIBLE_API_KEY or SILICONFLOW_API_KEY not set "
+                "OPENAI_COMPATIBLE_API_KEY/SILICONFLOW_API_KEY or "
+                "OPENAI_COMPATIBLE_VISION_API_KEY/SILICONFLOW_VISION_API_KEY not set "
                 f"(required for vision_provider='{self.vision_provider}')"
             )
         if self.vision_provider == "dashscope" and self.vision_model.startswith("claude-"):

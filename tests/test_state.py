@@ -232,6 +232,51 @@ class TestResultToDict:
         assert "context_after" not in d
         assert "full_context" not in d
 
+    def test_formula_result_preserves_chunk_type_and_normalizes_confidence(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_formula_0001_000",
+            text="Formula text",
+            score=0.91,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2024,
+            page_num=1,
+            chunk_index=-1,
+            chunk_type="formula",
+            formula_index=0,
+            latex=r"\sigma = E\varepsilon",
+            confidence=-1.0,
+            image_path="formula.png",
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+
+        assert d["chunk_type"] == "formula"
+        assert d["display_formula"] == "$$\n\\sigma = E\\varepsilon\n$$"
+        assert d["confidence"] is None
+        assert d["image_path"] == "formula.png"
+
+    def test_non_formula_latex_does_not_relabel_chunk_type(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_chunk_0001",
+            text="Passage with inline LaTeX",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2024,
+            page_num=1,
+            chunk_index=1,
+            chunk_type="text",
+            latex=r"\sigma = E\varepsilon",
+        )
+
+        d = _result_to_dict(r, verbosity="minimal")
+
+        assert "chunk_type" not in d
+        assert "display_formula" not in d
+
 
 # ---------------------------------------------------------------------------
 # _merge_results_by_chunk
@@ -314,6 +359,7 @@ class TestMCPInstructions:
             "get_notes",
             "get_paper_details",
             "get_passage_context",
+            "index_formulas",
             "index_library",
             "ingest_by_identifiers",
             "manage_collections",

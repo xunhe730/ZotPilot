@@ -36,6 +36,16 @@ def _parse_json_string_list(value: Any) -> Any:
     return value
 
 
+def _validate_item_keys_param(value: Any, *, name: str = "item_keys") -> list[str] | None:
+    """Return item keys after JSON coercion, rejecting scalar strings."""
+    value = _parse_json_string_list(value)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+        raise ToolError(f"{name} must be a list of item key strings or a JSON array of strings.")
+    return value
+
+
 def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
     """Return unindexed Zotero papers and their total count."""
     zotero = _get_zotero()
@@ -215,6 +225,8 @@ def index_library(
     """  # noqa: E501
     if not _index_lock.acquire(blocking=False):
         raise ToolError("Indexing in progress, please wait.")
+    lease = None
+    lease_acquired = False
     try:
         from dataclasses import replace as dc_replace
 
@@ -222,7 +234,7 @@ def index_library(
 
         # Direct Python callers can still bypass FastMCP/Pydantic dispatch, so
         # keep the same string->list coercion here for consistency.
-        item_keys = _parse_json_string_list(item_keys)
+        item_keys = _validate_item_keys_param(item_keys)
 
         _config = _get_config()
 
@@ -242,6 +254,7 @@ def index_library(
         # Acquire mutual-exclusion lease
         try:
             acquire_lease(lease)
+            lease_acquired = True
         except LeaseContentionError as e:
             raise ToolError(str(e))
 
@@ -327,7 +340,8 @@ def index_library(
 
         return response
     finally:
-        release_lease(lease)
+        if lease is not None and lease_acquired:
+            release_lease(lease)
         _index_lock.release()
 
 
@@ -353,7 +367,7 @@ def index_formulas(
     try:
         from ..indexer import Indexer
 
-        item_keys = _parse_json_string_list(item_keys)
+        item_keys = _validate_item_keys_param(item_keys)
         _config = _get_config()
         if not _config.formula_ocr_enabled:
             raise ToolError("Formula OCR is disabled. Set formula_ocr_enabled=true before calling index_formulas.")

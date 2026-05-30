@@ -433,6 +433,43 @@ class TestVisionBudgetGuards:
 
         vision_cls.assert_called_once_with(api_key="dashscope-key", model="qwen3-vl-flash")
 
+    def test_openai_compatible_vision_accepts_vision_specific_key(self, tmp_path):
+        from zotpilot.indexer import Indexer
+
+        config = MagicMock()
+        config.zotero_data_dir = Path("/fake")
+        config.chroma_db_path = tmp_path / "chroma"
+        config.chroma_db_path.mkdir()
+        config.chunk_size = 1000
+        config.chunk_overlap = 200
+        config.embedding_provider = "local"
+        config.embedding_dimensions = 384
+        config.embedding_model = "test"
+        config.ocr_language = "eng"
+        config.vision_enabled = True
+        config.vision_provider = "openai-compatible"
+        config.vision_model = "gpt-4o-mini"
+        config.vision_api_key = "vision-only-key"
+        config.vision_base_url = "https://vision.example/v1"
+        config.openai_compatible_api_key = None
+        config.openai_compatible_base_url = "https://shared.example/v1"
+        config.anthropic_api_key = None
+
+        import zotpilot.feature_extraction.dashscope_vision_api as dashscope_vision_api
+
+        with patch("zotpilot.indexer.ZoteroClient"), \
+             patch("zotpilot.indexer.create_embedder"), \
+             patch("zotpilot.indexer.VectorStore"), \
+             patch("zotpilot.indexer.JournalRanker"), \
+             patch.object(dashscope_vision_api, "DashScopeVisionAPI") as vision_cls:
+            Indexer(config)
+
+        vision_cls.assert_called_once_with(
+            api_key="vision-only-key",
+            model="gpt-4o-mini",
+            base_url="https://vision.example/v1/chat/completions",
+        )
+
     def test_skips_batch_vision_when_table_cap_is_exceeded(self):
         from zotpilot.indexer import Indexer
 

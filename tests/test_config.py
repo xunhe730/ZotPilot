@@ -24,6 +24,12 @@ def _use_local_secrets(monkeypatch, tmp_path: Path) -> None:
         "SIMPLETEX_API_KEY",
         "SIMPLETEX_APP_ID",
         "SIMPLETEX_APP_SECRET",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "OPENAI_COMPATIBLE_EMBEDDING_API_KEY",
+        "SILICONFLOW_EMBEDDING_API_KEY",
+        "OPENAI_COMPATIBLE_VISION_API_KEY",
+        "SILICONFLOW_VISION_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ZOTPILOT_SECRET_BACKEND", "local-file")
@@ -241,6 +247,36 @@ class TestConfigValidation:
         errors = cfg.validate()
 
         assert any("Invalid vision_provider" in e for e in errors)
+
+    def test_validate_openai_compatible_embedding_message_mentions_specific_key(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        cfg.zotero_data_dir = tmp_path
+        (tmp_path / "zotero.sqlite").touch()
+        cfg.embedding_provider = "siliconflow"
+        cfg.embedding_api_key = None
+        cfg.openai_compatible_api_key = None
+
+        errors = cfg.validate()
+
+        assert any("OPENAI_COMPATIBLE_EMBEDDING_API_KEY" in e for e in errors)
+        assert any("SILICONFLOW_EMBEDDING_API_KEY" in e for e in errors)
+
+    def test_validate_openai_compatible_vision_message_mentions_specific_key(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        cfg.zotero_data_dir = tmp_path
+        (tmp_path / "zotero.sqlite").touch()
+        cfg.embedding_provider = "local"
+        cfg.vision_enabled = True
+        cfg.vision_provider = "siliconflow"
+        cfg.vision_api_key = None
+        cfg.openai_compatible_api_key = None
+
+        errors = cfg.validate()
+
+        assert any("OPENAI_COMPATIBLE_VISION_API_KEY" in e for e in errors)
+        assert any("SILICONFLOW_VISION_API_KEY" in e for e in errors)
 
     def test_validate_vision_model_provider_mismatch(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
