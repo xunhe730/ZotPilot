@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from zotpilot.models import ExtractedFormula
-from zotpilot.vector_store import VectorStore
+from zotpilot.vector_store import EmbeddingProviderUnavailableError, VectorStore
 
 
 @pytest.fixture
@@ -102,6 +102,18 @@ class TestVectorStore:
         assert results[0].metadata["chunk_type"] == "formula"
         assert results[0].metadata["latex"] == r"\sigma = E\varepsilon"
         assert results[0].metadata["confidence"] == 0.98
+
+    def test_add_formulas_requires_embedder(self, tmp_path):
+        store = VectorStore(tmp_path / "chroma", None)
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(10.0, 20.0, 110.0, 45.0),
+            latex=r"E = mc^2",
+        )
+
+        with pytest.raises(EmbeddingProviderUnavailableError, match="requires an embedding provider"):
+            store.add_formulas("FORM002", {"title": "No Embedder"}, [formula])
 
     def test_delete_chunks_by_type_preserves_other_chunks(self, store, sample_chunks):
         doc_meta = {

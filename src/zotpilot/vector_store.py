@@ -73,6 +73,10 @@ class EmbeddingDimensionMismatchError(Exception):
     """Raised when embedder dimensions don't match existing index."""
 
 
+class EmbeddingProviderUnavailableError(Exception):
+    """Raised when a vector write needs embeddings but no embedder is configured."""
+
+
 class VectorStore:
     """
     ChromaDB-backed vector store for document chunks.
@@ -324,6 +328,11 @@ class VectorStore:
             for formula in formulas
         ]
         documents = [formula.to_searchable_text() for formula in formulas]
+        if self.embedder is None or not hasattr(self.embedder, "embed"):
+            raise EmbeddingProviderUnavailableError(
+                "Formula indexing requires an embedding provider. "
+                "Configure embedding_provider before running formula OCR indexing."
+            )
         embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
 
         metadatas = []

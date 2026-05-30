@@ -556,7 +556,6 @@ def search_formulas(
         )
     start = time.perf_counter()
     top_k = max(1, min(top_k, 30))
-    store = _get_store()
     live_doc_ids = _current_pdf_doc_ids()
 
     type_filter = {"chunk_type": {"$eq": "formula"}}
