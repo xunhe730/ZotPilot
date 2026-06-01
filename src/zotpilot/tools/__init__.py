@@ -8,6 +8,7 @@ from . import (  # noqa: F401
     ingestion,
     library,
     search,
+    tutor,
     write_ops,
 )
 from .profiles import apply_tool_profile

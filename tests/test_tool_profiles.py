@@ -42,16 +42,20 @@ def _list_tools(profile: str, disabled: str | None = None) -> list[str]:
 
 def test_core_profile_exposes_baseline_tools():
     tools = _list_tools("core")
-    assert len(tools) == 17
+    assert len(tools) == 19
     assert "profile_library" not in tools
     assert "advanced_search" in tools
     assert "search_papers" in tools
     assert "manage_collections" in tools
+    assert "get_paper_for_tutor" in tools
+    assert "annotate_pdf" in tools
 
 def test_full_profile_includes_profile_library():
     tools = _list_tools("full")
-    assert len(tools) == 18
+    assert len(tools) == 20
     assert "profile_library" in tools
+    assert "get_paper_for_tutor" in tools
+    assert "annotate_pdf" in tools
 
 def test_disabled_tools_are_removed_after_profile_filtering():
     tools = _list_tools("full", disabled="search_topic;manage_tags")

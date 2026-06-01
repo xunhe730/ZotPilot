@@ -88,6 +88,7 @@ ZotPilot 由三部分组成：
 | `ztp-review` | 基于库内论文做综述、聚类、比较、初稿整理 |
 | `ztp-profile` | 分析文献库主题分布、期刊层次、时间跨度、标签使用 |
 | `ztp-setup` | 指导 agent 调用 `zotpilot setup` / `upgrade` / `doctor` 做安装、更新、排错。它不是 CLI 命令本身 |
+| `ztp-tutor` | 五维彩色高亮 + 每句中文批注 + 第 1 页便签概览，直接写进 Zotero 存储的 PDF；备份 `.ztpbak` 可回滚 |
 
 ### 5 个核心能力
 
