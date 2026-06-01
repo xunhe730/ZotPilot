@@ -39,8 +39,6 @@ logger = logging.getLogger(__name__)
 _ITEM_KEY_RE = re.compile(r"^[A-Z0-9]{8,}$")
 
 _PERSONA_HEADINGS = ("## 阅读画像", "## Reading Persona")
-# Heading written by save_reading_persona; starts with _PERSONA_HEADINGS[0] so
-# _read_persona() detects it on the next run.
 _PERSONA_CANONICAL_HEADING = "## 阅读画像 (Reading Persona)"
 
 _TRIMMED_SECTION_LABELS = frozenset({"references", "appendix"})
@@ -79,10 +77,12 @@ def _looks_like_item_key(s: str) -> bool:
 
 
 def _read_persona() -> str | None:
-    """Return the raw `## 阅读画像` / `## Reading Persona` section from
-    ~/.config/zotpilot/ZOTPILOT.md (heading through next `## ` or EOF), or None."""
+    """Return the raw `## 阅读画像` / `## Reading Persona` section from the
+    user's ZOTPILOT.md (config.profile_path(); heading through next `## ` or
+    EOF), or None."""
     try:
-        path = Path("~/.config/zotpilot/ZOTPILOT.md").expanduser()
+        from ..config import profile_path
+        path = profile_path()
         if not path.exists():
             return None
         content = path.read_text(encoding="utf-8")
@@ -321,8 +321,9 @@ def save_reading_persona(
         str,
         Field(description=(
             "Reading-persona body to persist under the '## 阅读画像 (Reading Persona)' "
-            "section of ~/.config/zotpilot/ZOTPILOT.md (the heading is added "
-            "automatically). Typically the four hints: 英文水平 / 领域熟悉度 / 导读深度 / "
+            "section of the user's ZOTPILOT.md profile (platform-aware location; "
+            "the heading is added automatically). Typically the four hints: "
+            "英文水平 / 领域熟悉度 / 导读深度 / "
             "风格偏好. Call this once after the user states preferences so future "
             "/ztp-tutor runs don't re-ask. Replaces an existing section if present."
         )),
@@ -332,7 +333,8 @@ def save_reading_persona(
     body = (persona_text or "").strip()
     if not body:
         raise ToolError("persona_text is required")
-    path = Path("~/.config/zotpilot/ZOTPILOT.md").expanduser()
+    from ..config import profile_path
+    path = profile_path()
     try:
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
     except Exception as e:

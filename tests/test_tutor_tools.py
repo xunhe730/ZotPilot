@@ -286,6 +286,28 @@ def test_persona_english_heading_recognized(monkeypatch, tmp_path):
     assert "Reading Persona" in result
 
 
+def test_profile_path_platform_aware_with_legacy_fallback(monkeypatch, tmp_path):
+    """config.profile_path: canonical preferred, legacy fallback, else canonical."""
+    import zotpilot.config as cfg
+    canon_dir = tmp_path / "appdata" / "zotpilot"
+    canon_dir.mkdir(parents=True)
+    legacy_dir = tmp_path / "home" / ".config" / "zotpilot"
+    legacy_dir.mkdir(parents=True)
+    monkeypatch.setattr(cfg, "_default_config_dir", lambda: canon_dir)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    canon_md = canon_dir / "ZOTPILOT.md"
+    legacy_md = legacy_dir / "ZOTPILOT.md"
+
+    # neither exists -> canonical (for a clean "no profile")
+    assert cfg.profile_path() == canon_md
+    # only legacy exists -> legacy (existing users keep their file)
+    legacy_md.write_text("legacy", encoding="utf-8")
+    assert cfg.profile_path() == legacy_md
+    # canonical exists -> canonical preferred
+    canon_md.write_text("canon", encoding="utf-8")
+    assert cfg.profile_path() == canon_md
+
+
 def test_save_reading_persona_creates_then_read_detects(monkeypatch, tmp_path):
     """save_reading_persona writes a section that _read_persona detects next run."""
     home = tmp_path / "home"

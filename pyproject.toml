@@ -21,7 +21,7 @@ dependencies = [
     "google-genai>=1.0.0",
     "pymupdf>=1.25.0",
     "pymupdf4llm>=0.0.17",
-    "pymupdf-layout",
+    "pymupdf-layout>=1.25.0",
     "fastmcp>=2.0.0,<4",
     "pydantic>=2.0.0",
     "httpx",

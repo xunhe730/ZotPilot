@@ -649,6 +649,29 @@ def test_orchestrator_rollback_uses_prerun_snapshot_not_stale_backup(
     assert bak.read_bytes() == pristine  # .ztpbak never consumed
 
 
+def test_orchestrator_handles_space_and_unicode_path(tmp_path: Path):
+    """Core write path works when the PDF filename has a space + non-ASCII char
+    (cross-platform path handling via str(Path) for open/replace/copy2)."""
+    awkward = tmp_path / "a paper 论文 v2.pdf"
+    _make_text_pdf(
+        awkward,
+        [
+            (50, 80, "Our efficient method outperforms the baseline clearly."),
+            (50, 120, "The final results show consistent gains across tasks."),
+        ],
+    )
+    spec = AnnotationSpec(
+        quote="efficient method outperforms", dimension="evidence", comment="导读",
+    )
+    report = annotate_pdf_file(awkward, [spec], None)
+    assert report.verified is True
+    bak = awkward.with_suffix(awkward.suffix + ".ztpbak")
+    assert bak.exists()
+    # sibling temp files cleaned up
+    for suffix in (".ztptmp", ".ztpout", ".ztptmp_restore"):
+        assert not awkward.with_suffix(awkward.suffix + suffix).exists()
+
+
 def test_orchestrator_idempotent_file_size_bounded(text_pdf: Path):
     """3x re-run → file size within 1.05x of single-annotated size."""
     spec = AnnotationSpec(

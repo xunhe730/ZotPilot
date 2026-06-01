@@ -293,8 +293,6 @@ def profile_library(
     so agents can see the existing user profile without needing filesystem access.
 
     Pure read operation — no side effects."""
-    from pathlib import Path
-
     zotero = _get_zotero()
 
     # --- total items and year distribution: query SQLite directly so all items
@@ -398,11 +396,12 @@ def profile_library(
         gaps.append("few survey/review papers")
 
     # --- existing profile ---
-    profile_path = Path("~/.config/zotpilot/ZOTPILOT.md").expanduser()
+    from ..config import profile_path as _profile_path
+    profile_md = _profile_path()
     existing_profile: str | None = None
-    if profile_path.exists():
+    if profile_md.exists():
         try:
-            existing_profile = profile_path.read_text(encoding="utf-8")
+            existing_profile = profile_md.read_text(encoding="utf-8")
         except Exception:
             existing_profile = None
 

@@ -31,6 +31,25 @@ def _default_data_dir() -> Path:
     return base / "zotpilot"
 
 
+def profile_path() -> Path:
+    """Canonical path to the user's ZOTPILOT.md reading/research profile.
+
+    Platform-aware: ``%APPDATA%/zotpilot/ZOTPILOT.md`` on Windows,
+    ``~/.config/zotpilot/ZOTPILOT.md`` elsewhere. For backward compatibility,
+    if the canonical path does not exist but a legacy ``~/.config/zotpilot``
+    file does, the legacy path is returned. Used for BOTH reads and writes so
+    the reader (profile_library, tutor._read_persona) and the writer
+    (tutor.save_reading_persona) always resolve to the same file.
+    """
+    canonical = _default_config_dir() / "ZOTPILOT.md"
+    if canonical.exists():
+        return canonical
+    legacy = Path("~/.config/zotpilot/ZOTPILOT.md").expanduser()
+    if legacy.exists():
+        return legacy
+    return canonical
+
+
 def _old_config_path() -> Path:
     """Legacy deep-zotero config path."""
     if sys.platform == "win32":
