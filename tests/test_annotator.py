@@ -672,6 +672,34 @@ def test_orchestrator_handles_space_and_unicode_path(tmp_path: Path):
         assert not awkward.with_suffix(awkward.suffix + suffix).exists()
 
 
+def test_orchestrator_swap_lock_raises_actionable_error(text_pdf: Path, monkeypatch):
+    """If os.replace fails at the swap (e.g. the PDF is open/locked in Zotero on
+    Windows), annotate_pdf_file surfaces an actionable ToolError and leaves the
+    original intact (restored from the .ztptmp pre-run snapshot)."""
+    import os as _os
+
+    spec = AnnotationSpec(
+        quote="efficient method outperforms", dimension="evidence", comment="c",
+    )
+    original = text_pdf.read_bytes()
+    real_replace = _os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:  # the swap out->original
+            raise OSError("simulated WinError 32: file in use")
+        return real_replace(src, dst, *a, **k)  # rollback restore succeeds
+
+    monkeypatch.setattr("zotpilot.pdf.annotator.os.replace", flaky_replace)
+    with pytest.raises(ToolError, match="open in Zotero|close it|replace the original"):
+        annotate_pdf_file(text_pdf, [spec], None)
+    # original intact (rollback restored from the pre-run snapshot)
+    assert text_pdf.read_bytes() == original
+    bak = text_pdf.with_suffix(text_pdf.suffix + ".ztpbak")
+    assert bak.exists()
+
+
 def test_orchestrator_idempotent_file_size_bounded(text_pdf: Path):
     """3x re-run → file size within 1.05x of single-annotated size."""
     spec = AnnotationSpec(
