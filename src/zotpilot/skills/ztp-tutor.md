@@ -337,7 +337,9 @@ approval prompt. Instead:
    { "annotations": [ ...the final list from Steps 3–7... ],
      "overview":    { ...the dict from Step 5... } }
    ```
-   e.g. `/tmp/ztp-tutor-<doc_id>.json`.
+   Put it in the OS temp directory so it works on every platform — e.g.
+   `$TMPDIR/ztp-tutor-<doc_id>.json` (macOS/Linux) or
+   `%TEMP%\ztp-tutor-<doc_id>.json` (Windows). Do NOT hardcode `/tmp`.
 2. Call `annotate_pdf` with just:
    ```
    doc_id:     the doc_id from Step 1

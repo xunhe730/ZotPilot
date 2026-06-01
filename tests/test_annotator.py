@@ -618,6 +618,37 @@ def test_orchestrator_rollback_preserves_backup(text_pdf: Path, monkeypatch):
     assert bak.read_bytes() == original_bytes
 
 
+def test_orchestrator_rollback_uses_prerun_snapshot_not_stale_backup(
+    text_pdf: Path, monkeypatch
+):
+    """A failed RE-RUN must restore the pre-run state (pristine + run-A
+    annotations), NOT the stale .ztpbak from run A (pristine only). Guards the
+    data-loss bug where rollback restored from a stale backup."""
+    spec = AnnotationSpec(
+        quote="efficient method outperforms", dimension="evidence", comment="c",
+    )
+    pristine = text_pdf.read_bytes()
+
+    # Run A succeeds: .ztpbak becomes the pristine archive; live PDF gets annots.
+    rep_a = annotate_pdf_file(text_pdf, [spec], None)
+    assert rep_a.verified
+    state_after_a = text_pdf.read_bytes()
+    assert state_after_a != pristine  # annotations actually written
+    bak = text_pdf.with_suffix(text_pdf.suffix + ".ztpbak")
+    assert bak.read_bytes() == pristine
+
+    # Run B fails mid-save: must roll back to state_after_a (the pre-run-B
+    # snapshot), not to the stale pristine .ztpbak.
+    def boom_save(self, *a, **k):
+        raise RuntimeError("disk full mid re-run")
+
+    monkeypatch.setattr(pymupdf.Document, "save", boom_save)
+    with pytest.raises(ToolError):
+        annotate_pdf_file(text_pdf, [spec], None)
+    assert text_pdf.read_bytes() == state_after_a  # pre-run state restored
+    assert bak.read_bytes() == pristine  # .ztpbak never consumed
+
+
 def test_orchestrator_idempotent_file_size_bounded(text_pdf: Path):
     """3x re-run → file size within 1.05x of single-annotated size."""
     spec = AnnotationSpec(

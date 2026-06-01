@@ -22,7 +22,7 @@ dependencies = [
     "pymupdf>=1.25.0",
     "pymupdf4llm>=0.0.17",
     "pymupdf-layout",
-    "fastmcp>=2.0.0",
+    "fastmcp>=2.0.0,<4",
     "pydantic>=2.0.0",
     "httpx",
     "rapidfuzz",

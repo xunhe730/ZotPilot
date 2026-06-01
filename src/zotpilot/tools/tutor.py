@@ -27,7 +27,6 @@ from ..pdf.annotator import (
     has_text_layer,
     read_existing_annotations,
 )
-from ..pdf.extractor import extract_document
 from ..state import ToolError, _get_zotero, mcp
 from .profiles import tool_tags
 
@@ -392,6 +391,12 @@ def get_paper_for_tutor(
         raise ToolError(
             f"PDF has no text layer (scanned?); OCR required: {pdf_path}"
         )
+
+    # Imported lazily to keep tutor's own module load decoupled from the heavy
+    # extraction stack (pymupdf4llm + layout + OCR) and narrow its import-failure
+    # surface. (extract_document is a core dep and already re-exported by
+    # zotpilot.pdf.__init__, so this is hygiene, not a startup-cost guarantee.)
+    from ..pdf.extractor import extract_document
 
     try:
         extraction = extract_document(pdf_path)

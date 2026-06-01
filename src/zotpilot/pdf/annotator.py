@@ -940,6 +940,7 @@ def annotate_pdf_file(
     verification: dict[str, Any] = {}
     file_size_after = file_size_before
     foreign_before = 0
+    swapped = False
 
     try:
         # 5. copy2 → .ztptmp
@@ -985,27 +986,44 @@ def annotate_pdf_file(
                 f"post-write verification failed: {verification}"
             )
 
-        # cross-check foreign annot count is unchanged
-        foreign_after = len(read_existing_annotations(pymupdf.open(str(out_path))))
+        # cross-check foreign annot count is unchanged. MUST close this handle
+        # before the os.replace below — on Windows a live handle on out_path
+        # locks the file and blocks the rename (RC-3).
+        chk_doc = pymupdf.open(str(out_path))
+        try:
+            foreign_after = len(read_existing_annotations(chk_doc))
+        finally:
+            chk_doc.close()
         if foreign_after != foreign_before:
             raise ToolError(
                 f"foreign-annot count changed: before={foreign_before}, after={foreign_after}"
             )
 
-        # 9. atomic swap
+        # 9. atomic swap — the ONLY point the original is modified (all-or-nothing).
         file_size_after = out_path.stat().st_size
-        os.replace(str(out_path), str(pdf_path))
+        try:
+            os.replace(str(out_path), str(pdf_path))
+        except OSError as swap_exc:
+            raise ToolError(
+                f"could not replace the original PDF (is it open in Zotero or a "
+                f"PDF viewer? close it and retry): {pdf_path}: {swap_exc}"
+            ) from swap_exc
+        swapped = True
         try:
             tmp_path.unlink()
         except FileNotFoundError:
             pass
     except Exception as main_exc:
-        # rollback path (non-consuming, RL-3)
+        # The original is untouched until the atomic os.replace above, so a
+        # pre-swap failure needs the run-scoped pre-mutation snapshot (.ztptmp)
+        # restored — NOT .ztpbak. .ztpbak is the user's pristine archive and is
+        # never consumed; using a stale .ztpbak (from an earlier successful run)
+        # as the rollback source would restore wrong content / lose user edits
+        # (RL-3). If the swap already happened, the new content is committed —
+        # do not undo it.
         try:
-            if bak_path.exists():
-                shutil.copy2(bak_path, restore_path)
-                os.replace(str(restore_path), str(pdf_path))
-            # never unlink(.ztpbak)
+            if not swapped and tmp_path.exists():
+                os.replace(str(tmp_path), str(pdf_path))
         except Exception as rb_exc:
             raise ToolError(
                 f"rollback double-fault; backup preserved at {bak_path}: "
