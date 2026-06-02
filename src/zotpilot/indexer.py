@@ -68,9 +68,10 @@ class Indexer:
     Pipeline: Zotero -> PDF -> Chunks -> Embeddings -> VectorStore
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, library_id: int | None = None):
         self.config = config
-        self.zotero = ZoteroClient(config.zotero_data_dir)
+        _lib_id = library_id if library_id is not None else 1
+        self.zotero = ZoteroClient(config.zotero_data_dir, library_id=_lib_id)
 
         self.chunker = Chunker(
             chunk_size=config.chunk_size,

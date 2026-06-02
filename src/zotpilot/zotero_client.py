@@ -207,14 +207,36 @@ class ZoteroClient:
             raise FileNotFoundError(f"Zotero database not found: {self.db_path}")
 
     def _load_citation_keys(self) -> dict[str, str]:
-        """Load BetterBibTeX citation keys. Returns itemKey -> citationKey mapping."""
+        """Load BetterBibTeX citation keys. Returns itemKey -> citationKey mapping.
+
+        Supports both BBT storage schemas:
+        - Legacy (pre-7): dedicated ``citationkey`` table with itemKey/citationKey columns.
+        - Current (BBT 7+): LokiJS JSON blob stored in the ``better-bibtex`` table under
+          the ``better-bibtex.citekey`` row.  Field name is ``citekey`` (lowercase).
+        """
         if not self.bbt_db_path.exists():
             return {}
         conn = sqlite3.connect(_sqlite_uri(self.bbt_db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
-            rows = conn.execute("SELECT itemKey, citationKey FROM citationkey").fetchall()
-            return {row["itemKey"]: row["citationKey"] for row in rows}
+            # Legacy BBT schema: dedicated citationkey table.
+            try:
+                rows = conn.execute("SELECT itemKey, citationKey FROM citationkey").fetchall()
+                return {row["itemKey"]: row["citationKey"] for row in rows}
+            except sqlite3.OperationalError:
+                pass
+            # BBT 7+ schema: LokiJS JSON blob.
+            import json as _json
+            row = conn.execute(
+                "SELECT data FROM \"better-bibtex\" WHERE name = 'better-bibtex.citekey'"
+            ).fetchone()
+            if row is None:
+                return {}
+            return {
+                item["itemKey"]: item["citekey"]
+                for item in _json.loads(row["data"]).get("data", [])
+                if "itemKey" in item and "citekey" in item
+            }
         finally:
             conn.close()
 
