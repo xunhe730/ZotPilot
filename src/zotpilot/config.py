@@ -70,6 +70,8 @@ class Config:
     chunk_overlap: int
     gemini_api_key: str | None
     dashscope_api_key: str | None
+    # Custom Gemini base URL (for API proxies / restricted regions). None = SDK default.
+    gemini_base_url: str | None
     # Embedding provider: "gemini", "dashscope", "local", or "none" (No-RAG mode)
     embedding_provider: str
     # DashScope embedding endpoint: "compatible" or "native"
@@ -162,6 +164,7 @@ class Config:
             chunk_overlap=data.get("chunk_overlap", 100),
             gemini_api_key=data.get("gemini_api_key"),
             dashscope_api_key=data.get("dashscope_api_key"),
+            gemini_base_url=data.get("gemini_base_url"),
             embedding_provider=data.get("embedding_provider", "gemini"),
             dashscope_embedding_endpoint=data.get("dashscope_embedding_endpoint", "compatible"),
             embedding_timeout=data.get("embedding_timeout", 120.0),
@@ -224,6 +227,7 @@ class Config:
             "vision_model": self.vision_model,
             "gemini_api_key": self.gemini_api_key,
             "dashscope_api_key": self.dashscope_api_key,
+            "gemini_base_url": self.gemini_base_url,
             "anthropic_api_key": self.anthropic_api_key,
             "vision_max_tables_per_run": self.vision_max_tables_per_run,
             "vision_max_cost_usd": self.vision_max_cost_usd,

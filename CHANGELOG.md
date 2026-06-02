@@ -4,6 +4,7 @@
 
 ### Added
 
+- **自定义 Gemini base URL / Custom Gemini base URL**（Issue #11）—— Gemini 嵌入客户端支持自定义 endpoint，方便处于受限网络或使用 API 代理的用户。通过 `GEMINI_BASE_URL` 环境变量或 `zotpilot config set gemini_base_url <url>` 配置；底层透传给 `genai.Client` 的 `http_options`，未设置时使用 Google 官方 endpoint。
 - **`ztp-tutor` 论文导读 / Deep Reading Guide** —— 新增单篇论文深度导读功能。`/ztp-tutor <标题>` 模糊匹配本地 Zotero 文献后，由 LLM 通读全文，将五维彩色高亮（核心论点 / 关键概念 / 实证证据 / 让步反驳 / 方法论）、逐句中文批注、图表与公式标注，以及第 1 页的论证结构概览便签，直接写入 Zotero 存储的 PDF，可在 Zotero 阅读器中原地打开查看，全程本地。功能会按 `~/.config/zotpilot/ZOTPILOT.md` 中的"阅读画像"自适应调整批注密度与讲解层次（如英文偏弱时补充术语解释与长难句拆解），并尊重 PDF 中已有的人工批注（不重复、不覆盖）。每次写入前自动生成 `.ztpbak` 备份，经独立文件写入、多重校验与原子替换保证原文永不损坏、失败即回滚；跨 macOS / Linux / Windows 均经兼容性加固。配套提供声明式 skill 与 MCP 工具 `get_paper_for_tutor` / `annotate_pdf` / `save_reading_persona`。首次启用后建议在真实 Zotero 阅读器中目视确认中文便签与五色高亮渲染正常。
 
 ## 如何更新 / How to Update

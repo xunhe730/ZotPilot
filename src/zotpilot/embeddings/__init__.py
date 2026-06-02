@@ -21,6 +21,7 @@ def create_embedder(config):
             api_key=config.gemini_api_key,
             timeout=config.embedding_timeout,
             max_retries=config.embedding_max_retries,
+            base_url=getattr(config, "gemini_base_url", None),
         )
     elif config.embedding_provider == "dashscope":
         dashscope_endpoint = getattr(config, "dashscope_embedding_endpoint", "compatible")

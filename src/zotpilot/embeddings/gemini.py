@@ -29,13 +29,19 @@ class GeminiEmbedder:
         api_key: str | None = None,
         timeout: float = 120.0,
         max_retries: int = 3,
+        base_url: str | None = None,
     ):
         from google import genai
-        # Uses GEMINI_API_KEY env var if api_key not provided
+        from google.genai import types
+        # Uses GEMINI_API_KEY env var if api_key not provided.
+        # base_url targets a custom endpoint (API proxy / restricted regions);
+        # None falls back to the SDK default.
+        client_kwargs: dict[str, object] = {}
         if api_key:
-            self.client = genai.Client(api_key=api_key)
-        else:
-            self.client = genai.Client()
+            client_kwargs["api_key"] = api_key
+        if base_url:
+            client_kwargs["http_options"] = types.HttpOptions(base_url=base_url)
+        self.client = genai.Client(**client_kwargs)
         self.model = model
         self.dimensions = dimensions
         self.timeout = timeout

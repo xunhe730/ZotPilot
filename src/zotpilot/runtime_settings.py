@@ -20,6 +20,7 @@ SECRET_FIELDS: tuple[str, ...] = (
 
 ENV_TO_FIELD: dict[str, str] = {
     "GEMINI_API_KEY": "gemini_api_key",
+    "GEMINI_BASE_URL": "gemini_base_url",
     "DASHSCOPE_API_KEY": "dashscope_api_key",
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "ZOTERO_API_KEY": "zotero_api_key",

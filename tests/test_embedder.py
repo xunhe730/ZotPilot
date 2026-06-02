@@ -56,9 +56,33 @@ class TestCreateEmbedder:
         config.embedding_timeout = 120.0
         config.embedding_max_retries = 3
 
+        config.gemini_base_url = None
         with patch("google.genai.Client"):
             embedder = create_embedder(config)
             assert isinstance(embedder, GeminiEmbedder)
+
+    def test_create_gemini_passes_base_url(self):
+        config = MagicMock()
+        config.embedding_provider = "gemini"
+        config.embedding_model = "gemini-embedding-001"
+        config.embedding_dimensions = 768
+        config.gemini_api_key = "test-key"
+        config.embedding_timeout = 120.0
+        config.embedding_max_retries = 3
+        config.gemini_base_url = "https://proxy.example.com"
+
+        with patch("google.genai.Client") as mock_client:
+            create_embedder(config)
+
+        kwargs = mock_client.call_args.kwargs
+        assert kwargs["api_key"] == "test-key"
+        assert kwargs["http_options"].base_url == "https://proxy.example.com"
+
+    def test_create_gemini_omits_http_options_without_base_url(self):
+        with patch("google.genai.Client") as mock_client:
+            GeminiEmbedder(api_key="test-key", base_url=None)
+
+        assert "http_options" not in mock_client.call_args.kwargs
 
     def test_create_dashscope(self):
         config = MagicMock()
