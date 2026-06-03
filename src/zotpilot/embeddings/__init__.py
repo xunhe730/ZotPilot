@@ -3,6 +3,7 @@ from .base import EmbedderProtocol
 from .dashscope import DashScopeEmbedder
 from .gemini import EmbeddingError, GeminiEmbedder
 from .local import LocalEmbedder
+from .ollama import OllamaEmbedder
 
 
 def create_embedder(config):
@@ -38,14 +39,25 @@ def create_embedder(config):
             timeout=config.embedding_timeout,
             max_retries=config.embedding_max_retries,
         )
+    elif config.embedding_provider == "ollama":
+        base_url = getattr(config, "ollama_base_url", "http://localhost:11434")
+        logger.info(
+            f"Using Ollama embeddings ({config.embedding_model}, "
+            f"{config.embedding_dimensions} dims @ {base_url})"
+        )
+        return OllamaEmbedder(
+            model=config.embedding_model,
+            base_url=base_url,
+            timeout=config.embedding_timeout,
+        )
     elif config.embedding_provider == "none":
         logger.info("No-RAG mode: embedding disabled, semantic search unavailable")
         return None
     else:
         raise ValueError(
             f"Invalid embedding_provider: {config.embedding_provider}. "
-            f"Must be 'gemini', 'dashscope', 'local', or 'none'"
+            f"Must be 'gemini', 'dashscope', 'local', 'ollama', or 'none'"
         )
 
 
-__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "EmbeddingError", "EmbedderProtocol"]  # noqa: E501
+__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "OllamaEmbedder", "EmbeddingError", "EmbedderProtocol"]  # noqa: E501

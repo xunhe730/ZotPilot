@@ -2,11 +2,11 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from zotpilot.embeddings import create_embedder
 from zotpilot.embeddings.dashscope import QUERY_INSTRUCT, DashScopeEmbedder
 from zotpilot.embeddings.gemini import GeminiEmbedder
 from zotpilot.embeddings.local import LocalEmbedder
+from zotpilot.embeddings.ollama import OllamaEmbedder
 
 
 class TestLocalEmbedder:
@@ -205,3 +205,107 @@ class TestDashScopeEmbedder:
     def test_invalid_endpoint_rejected(self):
         with pytest.raises(ValueError, match="compatible.*native"):
             DashScopeEmbedder(api_key="test-key", endpoint="invalid")
+
+
+class TestOllamaEmbedder:
+    def _mock_response(self, embeddings: list[list[float]]) -> MagicMock:
+        resp = MagicMock()
+        resp.json.return_value = {"embeddings": embeddings}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    def test_embed_returns_vectors(self):
+        embedder = OllamaEmbedder()
+        mock_resp = self._mock_response([[0.1, 0.2, 0.3]])
+
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            result = embedder.embed(["test text"])
+
+        assert result == [[0.1, 0.2, 0.3]]
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["model"] == "nomic-embed-text"
+        assert payload["input"] == ["test text"]
+
+    def test_embed_empty_input(self):
+        embedder = OllamaEmbedder()
+        result = embedder.embed([])
+        assert result == []
+
+    def test_embed_query(self):
+        embedder = OllamaEmbedder()
+        mock_resp = self._mock_response([[0.4, 0.5]])
+
+        with patch("httpx.post", return_value=mock_resp):
+            result = embedder.embed_query("my query")
+
+        assert result == [0.4, 0.5]
+
+    def test_embed_documents(self):
+        embedder = OllamaEmbedder()
+        vecs = [[float(i)] for i in range(3)]
+        mock_resp = self._mock_response(vecs)
+
+        with patch("httpx.post", return_value=mock_resp):
+            result = embedder.embed_documents(["a", "b", "c"])
+
+        assert result == vecs
+
+    def test_default_dimensions(self):
+        embedder = OllamaEmbedder()
+        assert embedder.dimensions == 768
+
+    def test_custom_model_and_url(self):
+        embedder = OllamaEmbedder(model="mxbai-embed-large", base_url="http://192.168.1.10:11434")
+        mock_resp = self._mock_response([[0.1]])
+
+        with patch("httpx.post", return_value=mock_resp) as mock_post:
+            embedder.embed(["text"])
+
+        call_url = mock_post.call_args.args[0]
+        assert "192.168.1.10:11434" in call_url
+        assert mock_post.call_args.kwargs["json"]["model"] == "mxbai-embed-large"
+
+    def test_base_url_trailing_slash_stripped(self):
+        embedder = OllamaEmbedder(base_url="http://localhost:11434/")
+        assert not embedder.base_url.endswith("/")
+
+    def test_http_error_propagates(self):
+        embedder = OllamaEmbedder()
+        import httpx
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "500", request=MagicMock(), response=MagicMock()
+        )
+
+        with patch("httpx.post", return_value=mock_resp):
+            with pytest.raises(httpx.HTTPStatusError):
+                embedder.embed(["text"])
+
+
+class TestCreateEmbedderOllama:
+    def test_create_ollama(self):
+        config = MagicMock()
+        config.embedding_provider = "ollama"
+        config.embedding_model = "nomic-embed-text"
+        config.embedding_dimensions = 768
+        config.ollama_base_url = "http://localhost:11434"
+        config.embedding_timeout = 120.0
+
+        embedder = create_embedder(config)
+
+        assert isinstance(embedder, OllamaEmbedder)
+        assert embedder.model == "nomic-embed-text"
+        assert embedder.base_url == "http://localhost:11434"
+
+    def test_create_ollama_custom_url(self):
+        config = MagicMock()
+        config.embedding_provider = "ollama"
+        config.embedding_model = "mxbai-embed-large"
+        config.embedding_dimensions = 1024
+        config.ollama_base_url = "http://gpu-box:11434"
+        config.embedding_timeout = 60.0
+
+        embedder = create_embedder(config)
+
+        assert isinstance(embedder, OllamaEmbedder)
+        assert embedder.base_url == "http://gpu-box:11434"

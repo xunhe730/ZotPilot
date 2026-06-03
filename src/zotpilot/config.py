@@ -105,6 +105,8 @@ class Config:
     zotero_library_type: str  # "user" or "group"
     # Semantic Scholar API key (optional, increases rate limit)
     semantic_scholar_api_key: str | None
+    # Ollama base URL (only used when embedding_provider="ollama")
+    ollama_base_url: str = "http://localhost:11434"
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -137,6 +139,7 @@ class Config:
             "gemini": ("gemini-embedding-001", 768),
             "dashscope": ("text-embedding-v4", 1024),
             "local": ("all-MiniLM-L6-v2", 384),
+            "ollama": ("nomic-embed-text", 768),
             "none": ("none", 0),
         }
         default_model, default_dims = model_defaults.get(provider, ("gemini-embedding-001", 768))
@@ -164,6 +167,7 @@ class Config:
             dashscope_api_key=data.get("dashscope_api_key"),
             embedding_provider=data.get("embedding_provider", "gemini"),
             dashscope_embedding_endpoint=data.get("dashscope_embedding_endpoint", "compatible"),
+            ollama_base_url=data.get("ollama_base_url", "http://localhost:11434"),
             embedding_timeout=data.get("embedding_timeout", 120.0),
             embedding_max_retries=data.get("embedding_max_retries", 3),
             rerank_alpha=data.get("rerank_alpha", 0.7),
@@ -208,6 +212,7 @@ class Config:
             "chunk_overlap": self.chunk_overlap,
             "embedding_provider": self.embedding_provider,
             "dashscope_embedding_endpoint": self.dashscope_embedding_endpoint,
+            "ollama_base_url": self.ollama_base_url,
             "embedding_timeout": self.embedding_timeout,
             "embedding_max_retries": self.embedding_max_retries,
             "rerank_alpha": self.rerank_alpha,
@@ -272,8 +277,10 @@ class Config:
             errors.append("GEMINI_API_KEY not set (required for embedding_provider='gemini')")
         elif self.embedding_provider == "dashscope" and not self.dashscope_api_key:
             errors.append("DASHSCOPE_API_KEY not set (required for embedding_provider='dashscope')")
+        elif self.embedding_provider == "ollama":
+            pass  # no API key required; connection validated at runtime
         elif self.embedding_provider not in ("gemini", "dashscope", "local", "none"):
-            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")  # noqa: E501
+            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', 'ollama', or 'none'")  # noqa: E501
         if self.dashscope_embedding_endpoint not in ("compatible", "native"):
             errors.append("Invalid dashscope_embedding_endpoint: must be 'compatible' or 'native'")
 
