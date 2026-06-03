@@ -1,9 +1,18 @@
 """Gemini embedding provider."""
 import concurrent.futures
 import logging
+import re
 import time
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_retry_delay(error_str: str) -> float | None:
+    """Extract retryDelay seconds from a Gemini 429 error message."""
+    match = re.search(r"'retryDelay':\s*'(\d+)s'", error_str)
+    if match:
+        return float(match.group(1)) + 2.0  # 2s buffer
+    return None
 
 
 class EmbeddingError(Exception):
@@ -84,7 +93,8 @@ class GeminiEmbedder:
                 )
 
             if attempt < self.max_retries:
-                backoff = 2 ** attempt
+                retry_after = _parse_retry_delay(str(e))
+                backoff = retry_after if retry_after is not None else 2 ** attempt
                 logger.info(f"Retrying in {backoff}s...")
                 time.sleep(backoff)
 
@@ -135,7 +145,7 @@ class GeminiEmbedder:
             )
             results.extend(batch_results)
             if batch_num < total_batches:
-                time.sleep(1.0)  # Avoid Gemini rate limiting between batches
+                time.sleep(3.0)  # Avoid Gemini rate limiting between batches
 
         return results
 
