@@ -104,8 +104,8 @@ class _NoEmbeddingFunction:
 def discover_corrupt_backups(db_path: Path) -> list[Path]:
     """Return quarantined backups matching the real ``{name}.corrupt-*`` glob.
 
-    Mirrors ``vector_store._quarantine_chroma_db`` naming
-    (``{db_path.name}.corrupt-{suffix}``). Newest-first by suffix.
+    Matches the legacy ``{db_path.name}.corrupt-{suffix}`` quarantine naming
+    left by older versions. Newest-first by suffix.
     """
     parent = db_path.parent
     if not parent.exists():

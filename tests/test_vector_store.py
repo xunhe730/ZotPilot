@@ -8,7 +8,6 @@ from zotpilot.vector_store import (
     IndexUnavailableError,
     VectorStore,
     _probe_chroma_db_access,
-    _quarantine_chroma_db,
 )
 
 
@@ -117,23 +116,3 @@ class TestProbeChromaDbAccess:
         # exit). Must return False without raising on the READ path.
         (db_path / "chroma.sqlite3").write_text("not a real sqlite database")
         assert _probe_chroma_db_access(db_path) is False
-
-
-class TestQuarantineChromaDb:
-    def test_collision_safe_within_same_second(self, tmp_path):
-        """Two quarantines in rapid succession produce two distinct backups."""
-        backups = []
-        for _ in range(2):
-            db_path = tmp_path / "chroma"
-            db_path.mkdir()
-            (db_path / "chroma.sqlite3").write_text("data")
-            backup = _quarantine_chroma_db(db_path)
-            assert backup is not None
-            backups.append(backup)
-
-        assert backups[0] != backups[1]
-        found = list(tmp_path.glob("*.corrupt-*"))
-        assert len(found) == 2
-
-    def test_missing_dir_returns_none(self, tmp_path):
-        assert _quarantine_chroma_db(tmp_path / "nope") is None

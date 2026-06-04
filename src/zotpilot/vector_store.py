@@ -1,10 +1,8 @@
 """ChromaDB vector storage with chunk management."""
 import logging
 import re
-import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -66,24 +64,6 @@ def _probe_chroma_db_access(db_path: Path) -> bool:
     # returncode == 0 -> openable; non-zero (real open error) or negative
     # (SIGSEGV child) -> unavailable. The READ/open path NEVER quarantines here.
     return probe.returncode == 0
-
-
-def _quarantine_chroma_db(db_path: Path) -> Path | None:
-    """Move a broken Chroma directory aside and return the backup path.
-
-    Supervised-only helper (doctor recovery / WRITE-path genuine corruption).
-    NOT called from the READ/open path. Uses a nanosecond suffix so rapid
-    successive calls (sub-second) never collide; the backup name keeps the
-    ``{db_path.name}.corrupt-{suffix}`` pattern so ``doctor --recover-index``
-    autodiscovery (glob ``{name}.corrupt-*``) still matches.
-    """
-    if not db_path.exists():
-        return None
-    backup = db_path.with_name(f"{db_path.name}.corrupt-{time.time_ns()}")
-    while backup.exists():
-        backup = db_path.with_name(f"{db_path.name}.corrupt-{time.time_ns()}")
-    shutil.move(str(db_path), str(backup))
-    return backup
 
 
 def _ref_chunk_index(ref_map: dict, element_type: str, item) -> int:
