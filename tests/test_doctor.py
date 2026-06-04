@@ -68,6 +68,71 @@ class TestCheckEmbeddingApiKey:
         config.gemini_api_key = None
         assert _check_embedding_api_key(config).status == "fail"
 
+    def _openai_compat_config(self, base_url, api_key):
+        config = MagicMock()
+        config.embedding_provider = "openai-compatible"
+        config.embedding_base_url = base_url
+        config.embedding_api_key = api_key
+        return config
+
+    def test_openai_compatible_pass_when_key_resolves(self, monkeypatch):
+        monkeypatch.delenv("ZOTPILOT_EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = self._openai_compat_config("https://api.siliconflow.cn/v1", "sk-secret")
+        result = _check_embedding_api_key(config)
+        assert result.status == "pass"
+        assert "openai-compatible" in result.message
+
+    def test_openai_compatible_pass_when_key_from_env(self, monkeypatch):
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ZOTPILOT_EMBEDDING_API_KEY", "sk-from-env")
+        config = self._openai_compat_config("https://api.siliconflow.cn/v1", None)
+        result = _check_embedding_api_key(config)
+        assert result.status == "pass"
+
+    def test_openai_compatible_warn_when_no_key_remote(self, monkeypatch):
+        monkeypatch.delenv("ZOTPILOT_EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = self._openai_compat_config("https://api.siliconflow.cn/v1", None)
+        result = _check_embedding_api_key(config)
+        # Missing key must WARN, never FAIL (a missing key may still be valid).
+        assert result.status == "warn"
+        assert "Unknown provider" not in result.message
+
+    def test_openai_compatible_warn_when_no_key_local(self, monkeypatch):
+        monkeypatch.delenv("ZOTPILOT_EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = self._openai_compat_config("http://localhost:11434/v1", None)
+        result = _check_embedding_api_key(config)
+        assert result.status == "warn"
+        assert "local" in result.message.lower()
+
+    def test_openai_compatible_never_fails(self, monkeypatch):
+        # Even with no base_url and no key, the worst outcome is WARN.
+        monkeypatch.delenv("ZOTPILOT_EMBEDDING_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = self._openai_compat_config(None, None)
+        result = _check_embedding_api_key(config)
+        assert result.status in ("pass", "warn")
+        assert result.status != "fail"
+
+
+class TestIsLocalHost:
+    def test_localhost_variants_are_local(self):
+        from zotpilot.doctor import _is_local_host
+
+        assert _is_local_host("http://localhost:11434/v1")
+        assert _is_local_host("http://127.0.0.1:11434/v1")
+        assert _is_local_host("http://[::1]:11434/v1")
+        assert _is_local_host("http://my-box.local/v1")
+
+    def test_remote_and_empty_are_not_local(self):
+        from zotpilot.doctor import _is_local_host
+
+        assert not _is_local_host("https://api.siliconflow.cn/v1")
+        assert not _is_local_host(None)
+        assert not _is_local_host("")
+
 
 class TestCheckSecretBackend:
     def test_local_file_backend_passes(self, tmp_path, monkeypatch):
@@ -194,6 +259,69 @@ class TestCmdDoctorJsonOutput:
         data = json.loads(capsys.readouterr().out)
         assert data["legacy_embedded_secrets_detected"] is True
         assert data["legacy_embedded_secret_platforms"] == ["codex"]
+
+
+class TestRuntimeSettingsEmbeddingKey:
+    """Step 4.7: embedding_api_key must be known to runtime_settings."""
+
+    def test_field_registered(self):
+        from zotpilot.runtime_settings import ENV_TO_FIELD, SECRET_FIELDS
+
+        assert "embedding_api_key" in SECRET_FIELDS
+        assert ENV_TO_FIELD["ZOTPILOT_EMBEDDING_API_KEY"] == "embedding_api_key"
+        assert ENV_TO_FIELD["OPENAI_API_KEY"] == "embedding_api_key"
+
+    def test_zotpilot_env_resolves_with_env_override_source(self, tmp_path, monkeypatch):
+        from zotpilot.runtime_settings import resolve_runtime_settings
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ZOTPILOT_EMBEDDING_API_KEY", "sk-runtime")
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"embedding_provider": "openai-compatible"}')
+
+        resolved = resolve_runtime_settings(config_file)
+        assert resolved.config.embedding_api_key == "sk-runtime"
+        assert resolved.sources["embedding_api_key"] == "env-override"
+
+    def test_zotpilot_env_wins_over_openai_env(self, tmp_path, monkeypatch):
+        # Locks the precedence that ENV_TO_FIELD currently encodes only via dict
+        # insertion order (ZOTPILOT_EMBEDDING_API_KEY listed last => wins the
+        # resolve loop). This guards against a future silent reorder of the dict
+        # silently flipping precedence to the generic OPENAI_API_KEY.
+        from zotpilot.runtime_settings import resolve_runtime_settings
+
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        monkeypatch.setenv("ZOTPILOT_EMBEDDING_API_KEY", "sk-zotpilot")
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"embedding_provider": "openai-compatible"}')
+
+        resolved = resolve_runtime_settings(config_file)
+        assert resolved.config.embedding_api_key == "sk-zotpilot"
+
+
+class TestConfigGetEmbeddingKey:
+    """Step 5.16: config get must mask the key and report the env source."""
+
+    def test_masked_value_and_env_override_source(self, tmp_path, monkeypatch, capsys):
+        _use_local_secrets(monkeypatch, tmp_path)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("ZOTPILOT_EMBEDDING_API_KEY", "sk-supersecret")
+        config_file = tmp_path / "config.json"
+        config_file.write_text('{"embedding_provider": "openai-compatible"}')
+
+        from zotpilot.cli import cmd_config
+
+        args = MagicMock()
+        args.config = str(config_file)
+        args.config_subcmd = "get"
+        args.key = "embedding_api_key"
+
+        cmd_config(args)
+        out = capsys.readouterr().out
+        assert "env-override" in out
+        # Secret value must be masked, never printed in full.
+        assert "sk-supersecret" not in out
+        assert "sk-s****" in out
 
 
 class TestCheckConfigPermissions:

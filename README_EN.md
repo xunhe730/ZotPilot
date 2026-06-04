@@ -125,14 +125,40 @@ What is different: ingestion uses a real browser session and Zotero translators,
 | Gemini | High-quality default | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
 | DashScope | Better fit for China networks | ✗ | [Alibaba Bailian](https://bailian.console.aliyun.com/) |
 | Local | Good enough baseline | ✓ | Not required |
+| OpenAI-compatible | Generic: any OpenAI-compatible embedding endpoint (SiliconFlow / Zhipu·GLM / Ollama / vLLM / self-hosted) | Depends on endpoint | Per vendor (local Ollama needs none) |
 
 > Avoid switching after the first index. Dimensions differ, so a switch requires `zotpilot index --force`.
 > Selecting `local` only switches ZotPilot into local-embedding mode. The local model is downloaded on the first real embedding call, not during `setup`.
+
+For `openai-compatible`, set `embedding_base_url` to the vendor's OpenAI-compatible **root** (usually ends in `/v1`, but GLM uses `/api/paas/v4`) and you **must** set `embedding_dimensions` explicitly — it is never auto-detected, and a wrong value corrupts the index. Example configs:
+
+```jsonc
+// SiliconFlow (bge-m3, fixed 1024 dims)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://api.siliconflow.cn/v1",
+  "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024 }
+
+// Zhipu / GLM (embedding-3, non-/v1 root)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "embedding_model": "embedding-3", "embedding_dimensions": 2048 }
+
+// Ollama (local, no key)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "http://localhost:11434/v1",
+  "embedding_model": "nomic-embed-text", "embedding_dimensions": 768 }
+```
+
+> **Provider-switch note**: changing the embedding provider / model / dimensions on an existing library requires `zotpilot index --force` to rebuild. The old vectors remain until then (no silent data loss), but search quality may degrade in the meantime.
 
 Non-interactive (agent-driven):
 
 ```bash
 zotpilot setup --non-interactive --provider gemini   # or dashscope / local
+# openai-compatible requires explicit base_url / model / dimensions (key optional for local Ollama):
+zotpilot setup --non-interactive --provider openai-compatible \
+  --embedding-base-url https://api.siliconflow.cn/v1 \
+  --embedding-model BAAI/bge-m3 --embedding-dimensions 1024 --embedding-key <key>
 ```
 
 </details>

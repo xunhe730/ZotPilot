@@ -7,6 +7,7 @@ import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .config import _default_config_dir
 from .runtime_settings import SECRET_FIELDS, resolve_runtime_settings
@@ -88,6 +89,21 @@ def _check_zotero_data(config) -> CheckResult:
     return CheckResult("zotero_data", "pass", str(zotero_dir))
 
 
+def _is_local_host(base_url: str | None) -> bool:
+    """Return True when ``base_url`` points at a loopback/local host.
+
+    Used to soften the "no API key" warning for local endpoints such as Ollama
+    (``http://localhost:11434/v1``), where running without a key is normal.
+    """
+    if not base_url:
+        return False
+    try:
+        host = (urlparse(base_url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local")
+
+
 def _check_embedding_api_key(config) -> CheckResult:
     """Check that the required embedding API key is set."""
     provider = config.embedding_provider
@@ -104,6 +120,38 @@ def _check_embedding_api_key(config) -> CheckResult:
         if config.dashscope_api_key:
             return CheckResult("embedding_api_key", "pass", "DASHSCOPE_API_KEY is set")
         return CheckResult("embedding_api_key", "fail", "DASHSCOPE_API_KEY not set (required for provider=dashscope)")
+
+    if provider == "openai-compatible":
+        from .providers import _resolve_secret
+
+        base_url = getattr(config, "embedding_base_url", None) or "(unset)"
+        key = _resolve_secret(
+            getattr(config, "embedding_api_key", None),
+            "ZOTPILOT_EMBEDDING_API_KEY",
+            "OPENAI_API_KEY",
+        )
+        if key:
+            return CheckResult(
+                "embedding_api_key",
+                "pass",
+                f"embedding API key is set (provider=openai-compatible, base_url={base_url})",
+            )
+        # A missing key is legitimate for local endpoints (e.g. Ollama). The
+        # wizard-time `requires_key` flag is NOT persisted, so doctor can only
+        # warn -- never fail -- when no key resolves.
+        if _is_local_host(base_url):
+            return CheckResult(
+                "embedding_api_key",
+                "warn",
+                f"No embedding API key set; this is expected for a local endpoint ({base_url}).",
+            )
+        return CheckResult(
+            "embedding_api_key",
+            "warn",
+            "No embedding API key resolved for provider=openai-compatible "
+            f"(base_url={base_url}). Set ZOTPILOT_EMBEDDING_API_KEY / OPENAI_API_KEY "
+            "or 'zotpilot config set embedding_api_key' if this endpoint requires one.",
+        )
 
     return CheckResult("embedding_api_key", "fail", f"Unknown provider: {provider}")
 

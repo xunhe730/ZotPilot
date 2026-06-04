@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .config import Config
+from .config import Config, _config_hash
 from .embeddings import create_embedder
 from .index_authority import (
     IndexJournal,
@@ -28,25 +28,9 @@ logger = logging.getLogger(__name__)
 
 _VISION_ESTIMATED_COST_PER_TABLE_USD = 0.01
 
-
-def _config_hash(config: Config) -> str:
-    """Hash of config values that affect indexed content.
-
-    Changes to these values require re-indexing.
-    """
-    data = (
-        f"{config.chunk_size}:"
-        f"{config.chunk_overlap}:"
-        f"{config.embedding_provider}:"
-        f"{getattr(config, 'dashscope_embedding_endpoint', 'compatible')}:"
-        f"{config.embedding_dimensions}:"
-        f"{config.embedding_model}:"
-        f"{config.ocr_language}:"
-        f"{getattr(config, 'vision_enabled', True)}:"
-        f"{getattr(config, 'vision_provider', 'anthropic')}:"
-        f"{getattr(config, 'vision_model', '')}"
-    )
-    return hashlib.sha256(data.encode()).hexdigest()[:16]
+# NOTE: _config_hash is defined in config.py (Decision 4 relocation) so the
+# lightweight CLI can import it without the indexer's heavy deps. It is imported
+# above and remains accessible as `indexer._config_hash` for existing callers.
 
 
 @dataclass

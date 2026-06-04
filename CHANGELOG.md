@@ -4,6 +4,8 @@
 
 ### Added
 
+- **通用 OpenAI 兼容嵌入 provider / Generic OpenAI-compatible embedding provider** —— 新增 `openai-compatible` 嵌入 provider，可对接任意 OpenAI 兼容的 `/embeddings` 端点（SiliconFlow、Zhipu/GLM、Ollama、vLLM、自建服务等），切换厂商只需配置 `embedding_base_url` + `embedding_model` + `embedding_dimensions`，无需新增代码。维度必须显式指定、永不自动探测（首个响应向量会做长度断言以防索引被静默破坏）。设置向导内置厂商预设（SiliconFlow / Zhipu·GLM / Ollama / Custom）。解决 Issue #12（嵌入部分），取代厂商专用的 Ollama PR #16。视觉（vision）的 OpenAI 兼容支持暂缓至后续 issue。/ Added a generic OpenAI-compatible embedding provider (Issue #12, embeddings half); supersedes vendor-specific Ollama PR #16. Vision support deferred.
+
 - **`ztp-tutor` 论文导读 / Deep Reading Guide** —— 新增单篇论文深度导读功能。`/ztp-tutor <标题>` 模糊匹配本地 Zotero 文献后，由 LLM 通读全文，将五维彩色高亮（核心论点 / 关键概念 / 实证证据 / 让步反驳 / 方法论）、逐句中文批注、图表与公式标注，以及第 1 页的论证结构概览便签，直接写入 Zotero 存储的 PDF，可在 Zotero 阅读器中原地打开查看，全程本地。功能会按 `~/.config/zotpilot/ZOTPILOT.md` 中的"阅读画像"自适应调整批注密度与讲解层次（如英文偏弱时补充术语解释与长难句拆解），并尊重 PDF 中已有的人工批注（不重复、不覆盖）。每次写入前自动生成 `.ztpbak` 备份，经独立文件写入、多重校验与原子替换保证原文永不损坏、失败即回滚；跨 macOS / Linux / Windows 均经兼容性加固。配套提供声明式 skill 与 MCP 工具 `get_paper_for_tutor` / `annotate_pdf` / `save_reading_persona`。首次启用后建议在真实 Zotero 阅读器中目视确认中文便签与五色高亮渲染正常。
 
 ## 如何更新 / How to Update

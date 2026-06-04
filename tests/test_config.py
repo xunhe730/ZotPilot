@@ -260,3 +260,198 @@ class TestConfigValidation:
         errors = cfg.validate()
 
         assert any("Invalid dashscope_embedding_endpoint" in e for e in errors)
+
+
+class TestOpenAICompatConfigSchema:
+    """Phase 2: openai-compatible Config fields, back-compat, validation."""
+
+    def test_old_config_loads_without_new_fields(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"embedding_provider": "local"}))
+        cfg = Config.load(path=config_file)
+        assert cfg.embedding_base_url is None
+        assert cfg.embedding_api_key is None
+
+    def test_new_fields_round_trip(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            json.dumps({
+                "embedding_provider": "openai-compatible",
+                "embedding_model": "BAAI/bge-m3",
+                "embedding_dimensions": 1024,
+                "embedding_base_url": "https://api.siliconflow.cn/v1",
+                "embedding_api_key": "sk-secret",
+            })
+        )
+        cfg = Config.load(path=config_file)
+        assert cfg.embedding_base_url == "https://api.siliconflow.cn/v1"
+        assert cfg.embedding_api_key == "sk-secret"
+
+        out = tmp_path / "saved.json"
+        cfg.save(path=out)
+        saved = json.loads(out.read_text())
+        assert saved["embedding_base_url"] == "https://api.siliconflow.cn/v1"
+        assert saved["embedding_api_key"] == "sk-secret"
+        reloaded = Config.load(path=out)
+        assert reloaded.embedding_base_url == cfg.embedding_base_url
+        assert reloaded.embedding_api_key == cfg.embedding_api_key
+
+    def test_save_omits_none_new_fields(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        out = tmp_path / "saved.json"
+        cfg.save(path=out)
+        saved = json.loads(out.read_text())
+        assert "embedding_base_url" not in saved
+        assert "embedding_api_key" not in saved
+
+    def _oai_cfg(self, tmp_path, monkeypatch, **overrides):
+        _use_local_secrets(monkeypatch, tmp_path)
+        for env in ("ZOTPILOT_EMBEDDING_BASE_URL", "OPENAI_BASE_URL",
+                    "ZOTPILOT_EMBEDDING_API_KEY", "OPENAI_API_KEY"):
+            monkeypatch.delenv(env, raising=False)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        cfg.zotero_data_dir = tmp_path
+        (tmp_path / "zotero.sqlite").touch()
+        cfg.embedding_provider = "openai-compatible"
+        cfg.embedding_model = "m"
+        cfg.embedding_dimensions = 1024
+        cfg.embedding_base_url = "https://api.example.com/v1"
+        for key, value in overrides.items():
+            setattr(cfg, key, value)
+        return cfg
+
+    def test_validate_accepts_complete_openai_compatible(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch)
+        assert cfg.validate() == []
+
+    def test_validate_rejects_dims_zero(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_dimensions=0)
+        assert any("embedding_dimensions must be > 0" in e for e in cfg.validate())
+
+    def test_validate_rejects_empty_model(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_model="")
+        assert any("embedding_model not set" in e for e in cfg.validate())
+
+    def test_validate_rejects_missing_base_url(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_base_url=None)
+        assert any("embedding_base_url not set" in e for e in cfg.validate())
+
+    def test_validate_rejects_userinfo_in_base_url(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_base_url="http://user:pass@host/v1")
+        assert any("embedded credentials" in e for e in cfg.validate())
+
+    def test_validate_rejects_non_http_scheme(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_base_url="ftp://host/v1")
+        assert any("scheme" in e for e in cfg.validate())
+
+    def test_validate_accepts_glm_non_v1_base_url(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(
+            tmp_path, monkeypatch,
+            embedding_model="embedding-3", embedding_dimensions=2048,
+            embedding_base_url="https://open.bigmodel.cn/api/paas/v4",
+        )
+        assert cfg.validate() == []
+
+    def test_validate_accepts_base_url_from_env(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_base_url=None)
+        monkeypatch.setenv("ZOTPILOT_EMBEDDING_BASE_URL", "https://env.example/v1")
+        assert cfg.validate() == []
+
+    def test_validate_invalid_provider_message_lists_providers(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, embedding_provider="bogus")
+        errors = cfg.validate()
+        assert any("'openai-compatible'" in e for e in errors)
+
+    def test_vision_allow_list_still_inline(self, tmp_path, monkeypatch):
+        # Vision allow-list is NOT centralized -- it stays ("anthropic", "dashscope").
+        cfg = self._oai_cfg(tmp_path, monkeypatch)
+        cfg.vision_provider = "openai-compatible"  # not a valid vision provider
+        assert any("Invalid vision_provider" in e for e in cfg.validate())
+
+
+class TestConfigHashOpenAICompat:
+    """Step 5.8: golden baselines + conditional base_url folding."""
+
+    GOLDEN = {
+        ("gemini", "anthropic"): "7f4f892bc3358f00",
+        ("gemini", "dashscope"): "c7b58e5abac6e62f",
+        ("dashscope", "anthropic"): "e60a8304db40ee45",
+        ("dashscope", "dashscope"): "ea9dd3839160f395",
+        ("local", "anthropic"): "d581597dacca8926",
+        ("local", "dashscope"): "28f870ba5e7d073b",
+        ("none", "anthropic"): "f4dd55e6a07e5819",
+        ("none", "dashscope"): "8ada215c37baba66",
+    }
+
+    def test_existing_combos_match_golden(self, tmp_path, monkeypatch):
+        from zotpilot.config import _config_hash
+        _use_local_secrets(monkeypatch, tmp_path)
+        for (ep, vp), expected in self.GOLDEN.items():
+            config_file = tmp_path / f"cfg_{ep}_{vp}.json"
+            config_file.write_text(json.dumps({"embedding_provider": ep, "vision_provider": vp}))
+            cfg = Config.load(path=config_file)
+            assert _config_hash(cfg) == expected, f"{ep}+{vp} drifted"
+
+    def test_base_url_folded_for_openai_compatible(self, tmp_path, monkeypatch):
+        import dataclasses
+
+        from zotpilot.config import _config_hash
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(
+            json.dumps({
+                "embedding_provider": "openai-compatible",
+                "embedding_model": "m",
+                "embedding_dimensions": 1024,
+                "embedding_base_url": "https://a.example/v1",
+            })
+        )
+        cfg = Config.load(path=config_file)
+        other = dataclasses.replace(cfg, embedding_base_url="https://b.example/v1")
+        assert _config_hash(cfg) != _config_hash(other)
+
+    def test_api_key_not_folded(self, tmp_path, monkeypatch):
+        import dataclasses
+
+        from zotpilot.config import _config_hash
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(
+            json.dumps({
+                "embedding_provider": "openai-compatible",
+                "embedding_model": "m",
+                "embedding_dimensions": 1024,
+                "embedding_base_url": "https://a.example/v1",
+            })
+        )
+        cfg = Config.load(path=config_file)
+        rotated = dataclasses.replace(cfg, embedding_api_key="new-key")
+        assert _config_hash(cfg) == _config_hash(rotated)
+
+
+class TestResolveSecretSaveRoundTrip:
+    """H4: a resolved secret is NEVER written back into config.json by save()."""
+
+    def test_env_placeholder_round_trips_as_literal(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        monkeypatch.setenv("OPENAI_API_KEY", "resolved-secret-value")
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            json.dumps({
+                "embedding_provider": "openai-compatible",
+                "embedding_model": "m",
+                "embedding_dimensions": 1024,
+                "embedding_base_url": "https://x/v1",
+                "embedding_api_key": "{env:OPENAI_API_KEY}",
+            })
+        )
+        cfg = Config.load(path=config_file)
+        out = tmp_path / "saved.json"
+        cfg.save(path=out)
+        saved = json.loads(out.read_text())
+        # The placeholder is persisted literally, NOT the resolved secret.
+        assert saved["embedding_api_key"] == "{env:OPENAI_API_KEY}"
+        assert "resolved-secret-value" not in out.read_text()

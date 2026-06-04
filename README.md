@@ -126,15 +126,41 @@ ZotPilot 由三部分组成：
 | Gemini | 高质量默认 | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
 | DashScope | 适合中国网络环境 | ✗ | [阿里云百炼](https://bailian.console.aliyun.com/) |
 | Local | 基本够用 | ✓ | 不需要 |
+| OpenAI-compatible | 通用：任意 OpenAI 兼容 embedding 端点（SiliconFlow / Zhipu·GLM / Ollama / vLLM / 自建） | 取决于端点 | 各厂商自取（本地 Ollama 不需要） |
 
 > 选定后不建议换。向量维度不同，换模型要 `zotpilot index --force` 重建。
 > 选 `local` 只把 ZotPilot 切到本地嵌入模式；本地模型在首次实际调用 embeddings 时才下载，不在 `setup` 阶段预下载。
 > DashScope 默认使用 OpenAI-compatible embedding endpoint；如需 DashScope 原生 `document` / `query` 非对称检索语义，可运行 `zotpilot config set dashscope_embedding_endpoint native`，然后 `zotpilot index --force` 重建索引。
 
+`openai-compatible` 用 `embedding_base_url` 指向厂商的 OpenAI 兼容**根地址**（通常以 `/v1` 结尾，但 GLM 是 `/api/paas/v4`），并**必须显式指定 `embedding_dimensions`**——维度永不自动探测，填错会破坏索引。配置示例：
+
+```jsonc
+// SiliconFlow（bge-m3，固定 1024 维）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://api.siliconflow.cn/v1",
+  "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024 }
+
+// Zhipu / GLM（embedding-3，根地址非 /v1）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "embedding_model": "embedding-3", "embedding_dimensions": 2048 }
+
+// Ollama（本地，无需 key）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "http://localhost:11434/v1",
+  "embedding_model": "nomic-embed-text", "embedding_dimensions": 768 }
+```
+
+> **切换 provider 提示**：在已建库上更换 embedding provider / model / dimensions 后，需运行 `zotpilot index --force` 重建索引；在重建前旧向量仍保留、不会被静默删除，但检索结果可能不准。
+
 非交互式（agent 驱动）：
 
 ```bash
 zotpilot setup --non-interactive --provider gemini   # 或 dashscope / local
+# openai-compatible 需显式传 base_url / model / dimensions（key 对本地 Ollama 可省）：
+zotpilot setup --non-interactive --provider openai-compatible \
+  --embedding-base-url https://api.siliconflow.cn/v1 \
+  --embedding-model BAAI/bge-m3 --embedding-dimensions 1024 --embedding-key <key>
 ```
 
 </details>

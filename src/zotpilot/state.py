@@ -231,7 +231,7 @@ def _get_retriever():
                 if _config.embedding_provider == "none":
                     raise ToolError(
                         "Semantic search requires indexing. "
-                        "Configure an embedding provider (gemini/dashscope/local) "
+                        "Configure an embedding provider (gemini/dashscope/local/openai-compatible) "
                         "and run index_library() first."
                     )
                 from .embeddings import create_embedder

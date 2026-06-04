@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
+from . import providers
 from ._platforms import (
     _deployment_status,
     _detect_cli_installer,
@@ -59,6 +61,137 @@ def _import_register_secret_overrides(args, config_path: Path) -> bool:
     return imported_any
 
 
+class ProbeResult(NamedTuple):
+    """Outcome of a connectivity self-check against an openai-compatible endpoint."""
+
+    ok: bool
+    message: str
+    returned_dim: int | None
+
+
+def _probe_endpoint(
+    base_url: str,
+    api_key: str | None,
+    model: str,
+    dims: int,
+    timeout: float = 5.0,
+) -> ProbeResult:
+    """Tiny single-embed connectivity self-check (U2).
+
+    Sends ONE embed request (not ``GET /models``) so it can compare the returned
+    vector length against the user-entered ``dims`` and surface a C1 mismatch at
+    setup time. Never raises; all failures are reported via ``ProbeResult.ok``.
+    """
+    import httpx
+
+    url = base_url.rstrip("/") + "/embeddings"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    payload = {
+        "model": model,
+        "input": "ping",
+        "dimensions": dims,
+        "encoding_format": "float",
+    }
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        vec = data["data"][0]["embedding"]
+        returned_dim = len(vec) if isinstance(vec, list) else None
+        if returned_dim is not None and returned_dim != dims:
+            return ProbeResult(
+                False,
+                f"Endpoint returned {returned_dim}-dimensional vectors but you entered "
+                f"embedding_dimensions={dims}. Set embedding_dimensions to {returned_dim} "
+                f"to match the server's native output.",
+                returned_dim,
+            )
+        return ProbeResult(
+            True,
+            f"Connectivity OK — endpoint returned {returned_dim}-dimensional vectors.",
+            returned_dim,
+        )
+    except httpx.ConnectError:
+        return ProbeResult(
+            False,
+            f"Cannot reach {base_url}. Is the server running? "
+            f"For Ollama, try `ollama serve`, then `ollama pull {model}`.",
+            None,
+        )
+    except Exception as e:  # noqa: BLE001 — self-check must never crash setup
+        return ProbeResult(False, f"Self-check failed: {e}", None)
+
+
+def _prompt_openai_compatible() -> tuple[str, str, int, str | None]:
+    """Interactive preset sub-menu for the openai-compatible provider (Decision 7).
+
+    Returns ``(base_url, embedding_model, embedding_dimensions, api_key)``. The
+    api_key is collected INLINE here, so the per-provider key-prompt chain must
+    skip ``openai-compatible``.
+    """
+    presets = providers.EMBEDDING_PRESETS
+    print("\n  OpenAI-compatible embedding endpoint.")
+    print("  Choose a preset (auto-fills base_url / model / dimensions):")
+    for i, preset in enumerate(presets, 1):
+        print(f"    {i}. {preset.name}")
+    sel = input(f"  Choice [1-{len(presets)}]: ").strip()
+    try:
+        preset = presets[int(sel) - 1]
+    except (ValueError, IndexError):
+        preset = presets[-1]  # default to Custom
+
+    is_custom = not preset.base_url
+    if is_custom:
+        print("\n  Custom endpoint. base_url is the OpenAI-compatible root")
+        print("  (usually ends in /v1, e.g. http://localhost:11434/v1; GLM uses /api/paas/v4).")
+        base_url = input("  base_url: ").strip()
+        embedding_model = input("  embedding_model: ").strip()
+        print("  embedding_dimensions must be set explicitly: non-matryoshka servers")
+        print("  ignore a requested size and return their native dimension.")
+        dims_raw = input("  embedding_dimensions: ").strip()
+    else:
+        print(f"\n  {preset.name} selected. Pre-filled values (press Enter to keep):")
+        base_url = input(f"  base_url [{preset.base_url}]: ").strip() or preset.base_url
+        embedding_model = (
+            input(f"  embedding_model [{preset.embedding_model}]: ").strip()
+            or preset.embedding_model
+        )
+        dims_raw = input(f"  embedding_dimensions [{preset.embedding_dimensions}]: ").strip()
+
+    try:
+        embedding_dimensions = int(dims_raw) if dims_raw else preset.embedding_dimensions
+    except ValueError:
+        embedding_dimensions = preset.embedding_dimensions
+
+    api_key: str | None = None
+    if preset.requires_key or is_custom:
+        if preset.key_url:
+            print(f"  Get an API key at: {preset.key_url}")
+        api_key = input("  API key (leave blank if none): ").strip() or None
+    else:
+        print("  No API key needed for local Ollama.")
+
+    # U2: non-blocking connectivity self-check; offer to fix a dimension mismatch.
+    if base_url and embedding_model and embedding_dimensions > 0:
+        print("  Running connectivity self-check...")
+        probe = _probe_endpoint(base_url, api_key, embedding_model, embedding_dimensions)
+        print(f"  {'OK' if probe.ok else 'WARNING'}: {probe.message}")
+        if (
+            not probe.ok
+            and probe.returned_dim
+            and probe.returned_dim != embedding_dimensions
+        ):
+            if input(
+                f"  Update embedding_dimensions to {probe.returned_dim}? [Y/n] "
+            ).strip().lower() not in ("n", "no"):
+                embedding_dimensions = probe.returned_dim
+
+    return base_url, embedding_model, embedding_dimensions, api_key
+
+
 def cmd_setup(args):
     """Interactive or non-interactive setup wizard."""
     from ._platforms import register as register_runtime
@@ -77,6 +210,13 @@ def cmd_setup(args):
             )
 
     non_interactive = getattr(args, "non_interactive", False)
+
+    # OpenAI-compatible provider locals (populated from args or the wizard below;
+    # left None for every other provider so the write block does not clobber them).
+    embedding_base_url = None
+    embedding_api_key = None
+    embedding_model = None
+    embedding_dimensions = None
 
     # Step 1: Detect Zotero data directory
     if non_interactive:
@@ -97,9 +237,42 @@ def cmd_setup(args):
 
         # Provider from flag
         embedding_provider = getattr(args, "provider", None) or "gemini"
-        if embedding_provider not in ("gemini", "dashscope", "local"):
-            print(f"ERROR: Invalid provider '{embedding_provider}'. Must be 'gemini', 'dashscope', or 'local'.", file=sys.stderr)  # noqa: E501
+        valid_providers = [p for p in providers.EMBEDDING_PROVIDERS if p != "none"]
+        if embedding_provider not in valid_providers:
+            print(
+                f"ERROR: Invalid provider '{embedding_provider}'. Must be one of: "
+                f"{', '.join(valid_providers)}.",
+                file=sys.stderr,
+            )
             return 1
+
+        if embedding_provider == "openai-compatible":
+            embedding_base_url = getattr(args, "embedding_base_url", None)
+            embedding_model = getattr(args, "embedding_model", None)
+            embedding_api_key = getattr(args, "embedding_key", None)
+            embedding_dimensions = getattr(args, "embedding_dimensions", None)
+            if embedding_dimensions is None:
+                print(
+                    "ERROR: --embedding-dimensions is required for "
+                    "--provider openai-compatible (non-matryoshka servers ignore a "
+                    "requested dimension; set it explicitly).",
+                    file=sys.stderr,
+                )
+                return 1
+            if not embedding_base_url:
+                print(
+                    "ERROR: --embedding-base-url is required for "
+                    "--provider openai-compatible.",
+                    file=sys.stderr,
+                )
+                return 1
+            if not embedding_model:
+                print(
+                    "ERROR: --embedding-model is required for "
+                    "--provider openai-compatible.",
+                    file=sys.stderr,
+                )
+                return 1
 
     else:
         # Interactive mode (original behavior)
@@ -131,11 +304,20 @@ def cmd_setup(args):
         print("  1. Gemini (recommended, requires API key)")
         print("  2. DashScope / Bailian (Alibaba Cloud, requires API key)")
         print("  3. Local (all-MiniLM-L6-v2, no API key needed)")
-        choice = input("  Choice [1/2/3]: ").strip()
+        print("  4. OpenAI-compatible (SiliconFlow / Zhipu-GLM / Ollama / custom)")
+        choice = input("  Choice [1/2/3/4]: ").strip()
         if choice == "2":
             embedding_provider = "dashscope"
         elif choice == "3":
             embedding_provider = "local"
+        elif choice == "4":
+            embedding_provider = "openai-compatible"
+            (
+                embedding_base_url,
+                embedding_model,
+                embedding_dimensions,
+                embedding_api_key,
+            ) = _prompt_openai_compatible()
         else:
             embedding_provider = "gemini"
 
@@ -184,7 +366,7 @@ def cmd_setup(args):
                 dashscope_api_key = input("  Enter DashScope API key: ").strip()
                 if not dashscope_api_key:
                     print("  WARNING: No API key provided. Set DASHSCOPE_API_KEY env var later.")
-    elif not non_interactive:
+    elif not non_interactive and embedding_provider == "local":
         print("\n[3/5] Skipping API key (local embeddings selected)")
 
     if not non_interactive:
@@ -253,6 +435,14 @@ def cmd_setup(args):
         dashscope_api_key=dashscope_api_key or base_config.dashscope_api_key,
         zotero_api_key=zotero_api_key or base_config.zotero_api_key,
         zotero_user_id=zotero_user_id or base_config.zotero_user_id,
+        embedding_base_url=embedding_base_url or base_config.embedding_base_url,
+        embedding_api_key=embedding_api_key or base_config.embedding_api_key,
+        embedding_model=embedding_model or base_config.embedding_model,
+        embedding_dimensions=(
+            embedding_dimensions
+            if embedding_dimensions is not None
+            else base_config.embedding_dimensions
+        ),
     )
     config.save(config_path)
 
@@ -276,6 +466,12 @@ def cmd_setup(args):
             print("Set your API key via:")
             print("  export DASHSCOPE_API_KEY='<your-key>'")
             print("  or: zotpilot config set dashscope_api_key <key>")
+        elif embedding_provider == "openai-compatible":
+            print(f"OpenAI-compatible endpoint: {embedding_base_url}")
+            print(f"  model={embedding_model}, dimensions={embedding_dimensions}")
+            print("Set the API key (if your endpoint needs one) via:")
+            print("  export ZOTPILOT_EMBEDDING_API_KEY='<your-key>'")
+            print("  or: zotpilot config set embedding_api_key <key>")
         print("For Zotero write operations:")
         print("  zotpilot config set zotero_user_id <numeric-id>")
         print("  zotpilot config set zotero_api_key <your-key>")
@@ -597,7 +793,7 @@ def _mask_secret(v: str) -> str:
 
 _SENSITIVE_FIELDS = {
     "gemini_api_key", "dashscope_api_key", "anthropic_api_key",
-    "zotero_api_key", "semantic_scholar_api_key",
+    "zotero_api_key", "semantic_scholar_api_key", "embedding_api_key",
 }
 
 _SENSITIVE_REGISTER_FLAGS = {
@@ -626,10 +822,46 @@ def _coerce_value(key: str, value: str):
                 return False
             raise ValueError(f"Expected true/false for {key}, got '{value}'")
         return t(value)
+    # {env:VAR} references must round-trip as literals (H3): bypass JSON parse so
+    # `config set embedding_api_key '{env:OPENAI_API_KEY}'` is not eaten by the
+    # leading-`{` JSON heuristic below.
+    if value.startswith("{env:"):
+        return value
     # dict/list fields: try JSON parse
     if value.startswith("{") or value.startswith("["):
         return json.loads(value)
     return value
+
+
+def _warn_if_index_bound_change(key: str, value: str, config_path: Path) -> None:
+    """Print ONE advisory warning when `config set` mutates an index-bound field
+    and a non-empty index directory exists (Decision 8).
+
+    Purely additive UX: it never blocks the set. Hash comparison reuses
+    ``config._config_hash``; coercion/replace errors are swallowed so the real
+    set path surfaces them instead.
+    """
+    import dataclasses
+
+    from .config import _config_hash
+
+    try:
+        current = Config.load(config_path)
+        proposed = dataclasses.replace(current, **{key: _coerce_value(key, value)})
+    except Exception:
+        return
+    if _config_hash(current) == _config_hash(proposed):
+        return
+    chroma_dir = current.chroma_db_path
+    try:
+        non_empty = chroma_dir.exists() and any(chroma_dir.iterdir())
+    except OSError:
+        non_empty = False
+    if non_empty:
+        print(
+            "WARNING: This changes an index-bound setting. Run 'zotpilot index --force' "
+            "to rebuild. Until then, search results may be degraded."
+        )
 
 
 def _config_set(key: str, value: str, config_path: Path) -> None:
@@ -720,6 +952,7 @@ def cmd_config(args):
         if key == "zotero_user_id" and not value.isdigit():
             print(f"Warning: zotero_user_id should be a numeric ID, not a username (got '{value}').\n"
                   f"Find your numeric ID at https://www.zotero.org/settings/keys")
+        _warn_if_index_bound_change(key, value, config_path)
         if key in _SENSITIVE_FIELDS:
             try:
                 _config_set(key, value, config_path)
@@ -1115,8 +1348,24 @@ def main(argv: list[str] | None = None) -> int:
     sub_setup.add_argument("--zotero-dir", type=str, default=None, help="Zotero data directory path")
     sub_setup.add_argument(
         "--provider", type=str, default=None,
-        choices=["gemini", "dashscope", "local"],
+        choices=[p for p in providers.EMBEDDING_PROVIDERS if p != "none"],
         help="Embedding provider (default: gemini)",
+    )
+    sub_setup.add_argument(
+        "--embedding-base-url", type=str, default=None,
+        help="OpenAI-compatible endpoint root (e.g. http://localhost:11434/v1)",
+    )
+    sub_setup.add_argument(
+        "--embedding-model", type=str, default=None,
+        help="Embedding model name (required for --provider openai-compatible)",
+    )
+    sub_setup.add_argument(
+        "--embedding-dimensions", type=int, default=None,
+        help="Embedding output dimensions (required for --provider openai-compatible)",
+    )
+    sub_setup.add_argument(
+        "--embedding-key", type=str, default=None,
+        help="API key for the openai-compatible endpoint (omit for local Ollama)",
     )
     sub_setup.add_argument("--gemini-key", type=str, default=None, help=argparse.SUPPRESS)
     sub_setup.add_argument("--dashscope-key", type=str, default=None, help=argparse.SUPPRESS)

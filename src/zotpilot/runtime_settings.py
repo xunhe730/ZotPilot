@@ -16,6 +16,7 @@ SECRET_FIELDS: tuple[str, ...] = (
     "anthropic_api_key",
     "zotero_api_key",
     "semantic_scholar_api_key",
+    "embedding_api_key",
 )
 
 ENV_TO_FIELD: dict[str, str] = {
@@ -26,6 +27,10 @@ ENV_TO_FIELD: dict[str, str] = {
     "ZOTERO_USER_ID": "zotero_user_id",
     "OPENALEX_EMAIL": "openalex_email",
     "S2_API_KEY": "semantic_scholar_api_key",
+    # OpenAI-compatible embedding key: ZotPilot-specific name takes precedence
+    # over the generic OPENAI_API_KEY (it is listed last so it wins the loop).
+    "OPENAI_API_KEY": "embedding_api_key",
+    "ZOTPILOT_EMBEDDING_API_KEY": "embedding_api_key",
 }
 
 
