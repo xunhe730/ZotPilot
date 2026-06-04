@@ -171,6 +171,7 @@ class OpenAICompatEmbedder:
 
         last_error = ""
         attempt = 0
+        latched_this_call = False
         while attempt < self.max_retries:
             attempt += 1
             sent_dimensions = self._send_dimensions
@@ -211,9 +212,16 @@ class OpenAICompatEmbedder:
                         self.base_url,
                     )
                     self._send_dimensions = False
+                    latched_this_call = True
                     dims_fallback = True
                 elif status != 429 and status < 500:
                     # Non-transient client error -- fast-fail, no retry.
+                    if latched_this_call:
+                        # The no-`dimensions` retry ALSO 400'd: `dimensions` was
+                        # not the culprit. Restore the latch so an unrelated 400
+                        # does not poison `dimensions` for the rest of the
+                        # session (matryoshka endpoints keep honoring it).
+                        self._send_dimensions = True
                     raise EmbeddingError(
                         f"HTTP {status} from {url}: {body}"
                     ) from e

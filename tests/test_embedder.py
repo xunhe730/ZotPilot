@@ -356,9 +356,10 @@ class TestOpenAICompatEmbedder:
             assert post.call_count == 1  # no extra 400 round-trip
             assert "dimensions" not in post.call_args.kwargs["json"]
 
-    def test_dimensions_400_persists_raises(self):
-        # After the latch is off (both attempts 400) the second 400 is a real
-        # client error -- raise EmbeddingError, no infinite loop.
+    def test_unrelated_400_does_not_poison_latch(self):
+        # If the no-`dimensions` retry ALSO 400s, `dimensions` was not the
+        # culprit: raise EmbeddingError (no infinite loop) AND restore the latch
+        # so a matryoshka endpoint keeps honoring `dimensions` on later batches.
         embedder = OpenAICompatEmbedder(
             model="m", dimensions=1024, base_url="https://x/v1", max_retries=3
         )
@@ -367,7 +368,7 @@ class TestOpenAICompatEmbedder:
             post.side_effect = [_status_error(400), _status_error(400), _oai_response([[0.0] * 1024])]
             with pytest.raises(EmbeddingError, match="HTTP 400"):
                 embedder.embed(["x"])
-        assert embedder._send_dimensions is False
+        assert embedder._send_dimensions is True  # reverted: 400 was not about dims
         assert post.call_count == 2  # first 400 -> drop+retry -> second 400 fast-fails
 
     def test_c1_still_fires_after_dims_dropped(self):
