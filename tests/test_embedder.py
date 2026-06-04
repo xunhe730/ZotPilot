@@ -221,10 +221,10 @@ def _oai_response(embeddings):
     return resp
 
 
-def _status_error(code):
+def _status_error(code, text="upstream error"):
     """Build a MagicMock response whose raise_for_status raises HTTP `code`."""
     request = httpx.Request("POST", "http://x/embeddings")
-    response = httpx.Response(code, request=request, text="upstream error")
+    response = httpx.Response(code, request=request, text=text)
     resp = MagicMock()
     resp.raise_for_status.side_effect = httpx.HTTPStatusError(
         "err", request=request, response=response
@@ -312,15 +312,79 @@ class TestOpenAICompatEmbedder:
         assert post.call_count == 2
 
     def test_4xx_client_error_not_retried(self):
+        # A non-400 4xx (e.g. 401 auth) fast-fails with no retry. 400 has its own
+        # `dimensions`-fallback path covered separately below.
         embedder = OpenAICompatEmbedder(
             model="m", dimensions=2, base_url="https://x/v1", max_retries=3
         )
         with patch("httpx.Client") as mock_client, patch("zotpilot.embeddings.openai_compat.time.sleep"):
             post = mock_client.return_value.__enter__.return_value.post
-            post.side_effect = [_status_error(400), _oai_response([[0.1, 0.2]])]
-            with pytest.raises(EmbeddingError, match="HTTP 400"):
+            post.side_effect = [_status_error(401), _oai_response([[0.1, 0.2]])]
+            with pytest.raises(EmbeddingError, match="HTTP 401"):
                 embedder.embed(["x"])
         assert post.call_count == 1  # fast-fail, no retry
+
+    def test_dimensions_400_drops_and_retries(self, caplog):
+        # Fixed-dimension endpoint (e.g. SiliconFlow bge-m3) rejects the
+        # `dimensions` parameter with HTTP 400; auto-drop it and retry.
+        embedder = OpenAICompatEmbedder(
+            model="BAAI/bge-m3", dimensions=1024, base_url="https://api.siliconflow.cn/v1", max_retries=3
+        )
+        body = '{"code":20015,"message":"The parameter is invalid."}'
+        with patch("httpx.Client") as mock_client, patch("zotpilot.embeddings.openai_compat.time.sleep"):
+            post = mock_client.return_value.__enter__.return_value.post
+            post.side_effect = [
+                _status_error(400, text=body),
+                _oai_response([[0.0] * 1024]),
+            ]
+            with caplog.at_level("WARNING"):
+                result = embedder.embed(["x"])
+
+            assert result == [[0.0] * 1024]
+            assert embedder._send_dimensions is False
+            assert post.call_count == 2
+            # First request sent `dimensions`; the retry omitted it.
+            assert "dimensions" in post.call_args_list[0].kwargs["json"]
+            assert "dimensions" not in post.call_args_list[1].kwargs["json"]
+            assert any("dimensions" in rec.message for rec in caplog.records)
+
+            # Subsequent calls also omit `dimensions` (latch persists, no 400 retry).
+            post.reset_mock()
+            post.side_effect = None
+            post.return_value = _oai_response([[0.0] * 1024])
+            embedder.embed(["y"])
+            assert post.call_count == 1  # no extra 400 round-trip
+            assert "dimensions" not in post.call_args.kwargs["json"]
+
+    def test_dimensions_400_persists_raises(self):
+        # After the latch is off (both attempts 400) the second 400 is a real
+        # client error -- raise EmbeddingError, no infinite loop.
+        embedder = OpenAICompatEmbedder(
+            model="m", dimensions=1024, base_url="https://x/v1", max_retries=3
+        )
+        with patch("httpx.Client") as mock_client, patch("zotpilot.embeddings.openai_compat.time.sleep"):
+            post = mock_client.return_value.__enter__.return_value.post
+            post.side_effect = [_status_error(400), _status_error(400), _oai_response([[0.0] * 1024])]
+            with pytest.raises(EmbeddingError, match="HTTP 400"):
+                embedder.embed(["x"])
+        assert embedder._send_dimensions is False
+        assert post.call_count == 2  # first 400 -> drop+retry -> second 400 fast-fails
+
+    def test_c1_still_fires_after_dims_dropped(self):
+        # C1 dimension assertion still applies after the `dimensions` fallback:
+        # a wrong-length vector still raises the dimension-specific error naming
+        # both numbers, even though the request no longer sends `dimensions`.
+        embedder = OpenAICompatEmbedder(
+            model="m", dimensions=1024, base_url="https://x/v1", max_retries=3
+        )
+        with patch("httpx.Client") as mock_client, patch("zotpilot.embeddings.openai_compat.time.sleep"):
+            post = mock_client.return_value.__enter__.return_value.post
+            post.side_effect = [_status_error(400), _oai_response([[0.0] * 512])]
+            with pytest.raises(EmbeddingError) as exc:
+                embedder.embed(["x"])
+        message = str(exc.value)
+        assert "1024" in message and "512" in message
+        assert "failed after" not in message  # routed through C1, not masked
 
     def test_raises_after_retries_exhausted(self):
         embedder = OpenAICompatEmbedder(

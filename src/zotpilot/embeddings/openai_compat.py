@@ -93,6 +93,10 @@ class OpenAICompatEmbedder:
         self.max_retries = max_retries
         self.batch_size = min(max(1, batch_size), MAX_BATCH_SIZE)
         self.max_input_chars = max_input_chars
+        # One-way latch: start by sending `dimensions`; if a fixed-dimension
+        # endpoint rejects it with HTTP 400, drop it for this and all later
+        # requests on this instance (see _post_with_retry).
+        self._send_dimensions: bool = True
 
     @staticmethod
     def _normalize_and_validate_base_url(raw: str | None, api_key: str | None) -> str:
@@ -152,18 +156,28 @@ class OpenAICompatEmbedder:
             # Ollama needs no key: when none resolves, OMIT the header entirely.
             headers["Authorization"] = f"Bearer {self.api_key}"
         url = f"{self.base_url}/embeddings"
-        payload = {
-            "model": self.model,
-            "input": batch,
-            "dimensions": self.dimensions,
-            "encoding_format": "float",
-        }
+
+        def _build_payload() -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "input": batch,
+                "encoding_format": "float",
+            }
+            # Only send `dimensions` while the latch is still set. Fixed-dim
+            # (non-matryoshka) endpoints reject it with HTTP 400; see below.
+            if self._send_dimensions:
+                payload["dimensions"] = self.dimensions
+            return payload
 
         last_error = ""
-        for attempt in range(1, self.max_retries + 1):
+        attempt = 0
+        while attempt < self.max_retries:
+            attempt += 1
+            sent_dimensions = self._send_dimensions
+            dims_fallback = False
             try:
                 with httpx.Client(timeout=self.timeout) as client:
-                    response = client.post(url, headers=headers, json=payload)
+                    response = client.post(url, headers=headers, json=_build_payload())
                     response.raise_for_status()
                     data: dict[str, Any] = response.json()
                 return data
@@ -182,17 +196,39 @@ class OpenAICompatEmbedder:
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 body = e.response.text[:300]
-                if status != 429 and status < 500:
+                if status == 400 and sent_dimensions:
+                    # Fixed-dimension (non-matryoshka) endpoint rejecting the
+                    # `dimensions` parameter (e.g. SiliconFlow bge-m3). Latch it
+                    # off for this and all later requests, then immediately retry
+                    # the SAME request once without `dimensions`. This one-time
+                    # fallback does not consume a retry slot and does not sleep;
+                    # a subsequent 400 (latch now off) is a real client error and
+                    # fast-fails as EmbeddingError on the next loop pass.
+                    logger.warning(
+                        "Endpoint rejected the `dimensions` parameter (HTTP 400); "
+                        "retrying without it -- the model is likely fixed-dimension. "
+                        "base_url=%s",
+                        self.base_url,
+                    )
+                    self._send_dimensions = False
+                    dims_fallback = True
+                elif status != 429 and status < 500:
                     # Non-transient client error -- fast-fail, no retry.
                     raise EmbeddingError(
                         f"HTTP {status} from {url}: {body}"
                     ) from e
-                last_error = f"HTTP {status}: {body}"
-                logger.warning(
-                    "Batch %s/%s HTTP %s (attempt %s/%s)",
-                    batch_num, total_batches, status, attempt, self.max_retries,
-                )
+                else:
+                    last_error = f"HTTP {status}: {body}"
+                    logger.warning(
+                        "Batch %s/%s HTTP %s (attempt %s/%s)",
+                        batch_num, total_batches, status, attempt, self.max_retries,
+                    )
 
+            if dims_fallback:
+                # Re-run this attempt immediately without the `dimensions` key;
+                # do not count it as a retry and do not back off.
+                attempt -= 1
+                continue
             if attempt < self.max_retries:
                 time.sleep(2 ** attempt)
 
