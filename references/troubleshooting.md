@@ -54,6 +54,45 @@
 - Force re-index all: `zotpilot index --force`
 - Re-index by title pattern: `zotpilot index --title "transformer"`
 
+## Index Recovery (corrupt / unreadable index)
+
+If the index can no longer be opened — for example after a `chromadb` upgrade
+changes the on-disk segment format, or after disk corruption — ZotPilot now
+**refuses and preserves your data** (it never silently wipes the index). You will
+see an `IndexUnavailableError` pointing here.
+
+Recover it for free (no embedding-API calls) from the intact SQLite + HNSW data:
+
+```bash
+# Preview what would be recovered (no writes, no swap)
+zotpilot doctor --recover-index --dry-run
+
+# Recover: rebuilds into a new dir, verifies (count + dim + self-NN + probe),
+# then atomically swaps in. The previous index is kept aside as
+# chroma.pre-rescue-<ts>; on any verification failure the original is untouched.
+zotpilot doctor --recover-index
+
+# Recover from a specific quarantined backup
+zotpilot doctor --recover-index --source ~/.local/share/zotpilot/chroma.corrupt-<ts>
+```
+
+The zero-cost path reads vectors straight from the HNSW segment and needs the
+`recover` extra:
+
+```bash
+uv sync --extra recover        # or: uv tool install zotpilot --with chroma-hnswlib
+```
+
+Notes:
+- `chroma-hnswlib` has no prebuilt wheel for Python 3.13 yet — it compiles from
+  source and needs a C++ compiler (clang/gcc; MSVC build tools on Windows). If
+  you cannot install it, recovery falls back to re-embedding the stored text,
+  which **does** cost embedding-API calls.
+- To remove orphaned index entries for papers deleted in Zotero, use
+  `zotpilot doctor --reconcile --dry-run` (preview) / `--reconcile` (apply). A
+  safety floor refuses mass deletions (more than 25% of the index, or an empty /
+  unreachable library); pass `--force` only if you really removed that many.
+
 ## MCP Registration by Platform
 
 ### Claude Code

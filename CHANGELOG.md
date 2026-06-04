@@ -6,6 +6,21 @@
 
 - **`ztp-tutor` 论文导读 / Deep Reading Guide** —— 新增单篇论文深度导读功能。`/ztp-tutor <标题>` 模糊匹配本地 Zotero 文献后，由 LLM 通读全文，将五维彩色高亮（核心论点 / 关键概念 / 实证证据 / 让步反驳 / 方法论）、逐句中文批注、图表与公式标注，以及第 1 页的论证结构概览便签，直接写入 Zotero 存储的 PDF，可在 Zotero 阅读器中原地打开查看，全程本地。功能会按 `~/.config/zotpilot/ZOTPILOT.md` 中的"阅读画像"自适应调整批注密度与讲解层次（如英文偏弱时补充术语解释与长难句拆解），并尊重 PDF 中已有的人工批注（不重复、不覆盖）。每次写入前自动生成 `.ztpbak` 备份，经独立文件写入、多重校验与原子替换保证原文永不损坏、失败即回滚；跨 macOS / Linux / Windows 均经兼容性加固。配套提供声明式 skill 与 MCP 工具 `get_paper_for_tutor` / `annotate_pdf` / `save_reading_persona`。首次启用后建议在真实 Zotero 阅读器中目视确认中文便签与五色高亮渲染正常。
 
+- **`zotpilot doctor --recover-index` 索引零额度恢复** —— 从完好的 SQLite + HNSW 段（含被旧版本写坏、新核打不开的段）重建向量库，直接复用已有向量、**不产生任何嵌入 API 调用**；先写入新目录并通过校验门（数量 / 维度 / 自最近邻 / 探针）再原子换库，失败则保留原库不动。可用 `--source` 指定某个 `chroma.corrupt-*` 备份（省略则自动发现），`--dry-run` 预览；HNSW 不可读时可回退到从 SQLite 文本重嵌（需确认，会花嵌入额度）。
+- **`zotpilot doctor --reconcile` 显式对账** —— 预览 / 清理 Zotero 中已删除的孤儿索引文档；默认受删除下限保护，`--dry-run` 预览，`--force` 越过 25% 下限。
+- **可选依赖 extra `recover`**（`chroma-hnswlib`）—— 仅索引恢复路径需要；缺失时给出 `uv sync --extra recover` 提示并可回退重嵌。注意 Python 3.13 暂无预编译 wheel，需本机 C++ 编译器（或改用重嵌回退）。
+
+### Changed
+
+- **索引打不开不再自动「搬走 + 重建空库」**（破坏性行为变更）—— 旧版在探针失败时会把整库移到 `*.corrupt-*` 再原位重建空库，曾导致完好数据被静默清空。现在改为**报错并保留数据**（`IndexUnavailableError`），并引导运行 `zotpilot doctor --recover-index`。依赖「自动重建」的旧行为已移除。
+
+### Fixed
+
+- **P0 数据安全：索引「打不开即静默清空」**（根因 RC1/RC2）—— 旧逻辑用会加载 HNSW 的探针，遇被不同 chromadb 版本写坏的旧段时段错误（exit 139），随即把一个 SQLite 完好、向量在位的库判为损坏并清空。现探针改为**只读、不加载 HNSW、子进程带超时**；段错误判为「不可用」而**不再触发任何搬移 / 清空**，完好库不会被误删。
+- **批量误删保护**（RC6）—— 孤儿对账加入常开删除下限：当前库空读、数据目录不可达、或删除量超过索引的 25% 时，拒绝删除并响亮告警；`--force` / `allow_mass_delete` 仅放行比例下限，空读 / 不可达即便显式 override 仍拒删。
+- **嵌入维度不匹配**（RC7）—— 在 CLI 与 `doctor` 的索引构造处捕获 `EmbeddingDimensionMismatchError` / `IndexUnavailableError`，给出清晰可操作的提示而非未捕获崩溃。
+- **配置漂移**（RC8）—— 嵌入 / 分块 / 视觉等影响索引内容的配置变化且未 `--force` 时**硬阻断**（`ConfigDriftError`），避免静默写入混合嵌入空间的索引。
+
 ## 如何更新 / How to Update
 
 ```bash
