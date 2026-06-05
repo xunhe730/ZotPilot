@@ -2,8 +2,9 @@
 name: ztp-tutor
 description: >
   Deep reading guide for a single paper already in the Zotero library.
-  Writes 5-dimension color highlights with per-sentence Chinese comments,
-  figure/table/equation annotations, and a page-1 argument-structure
+  Writes 5-dimension color highlights with per-sentence understanding comments
+  in the reader's language (Chinese by default), figure/table/equation
+  annotations, and a page-1 argument-structure
   overview directly into the Zotero-stored PDF. Original PDF is always
   backed up to a .ztpbak sidecar before any write.
   Trigger on: "论文导读", "/ztp-tutor", "帮我导读", "五维导读",
@@ -18,10 +19,19 @@ description: >
 
 ## Language Policy
 
-Detect the user's language from the triggering message and use it for all
-user-facing messages. Chinese is the default and is used for all annotation
-`comment` fields regardless of the interface language — comments are always
-Chinese per-sentence understanding notes (the whole point of the feature).
+Two independent languages:
+
+- **Interface language** — detect from the triggering message; use it for every
+  user-facing chat message.
+- **Annotation language** — the language of the in-PDF `comment` fields AND the
+  page-1 overview. It follows the reader's persona (Step 2a): use the reader's
+  stated native / preferred annotation language. When the persona indicates no
+  language, default to Chinese.
+
+The annotation language is independent of the paper's language — the goal is to
+explain a (often foreign-language) paper in the reader's own language. Carry the
+chosen language on the overview via its `lang` field (`"zh"`, `"en"`, …) so the
+page-1 overview labels render in the same language (Step 5).
 
 ---
 
@@ -88,18 +98,28 @@ density to avoid over-annotation.
 
 When depth cannot be recognized, default to `速览`.
 
+**Annotation language — sets the language of every in-PDF comment + overview:**
+Match a stated native / preferred language, e.g. `母语：英文`, `批注语言：中文`,
+`用英文批注`, `native language: English`, `annotate in English`. Use that
+language for all `comment` fields and the page-1 overview, and set the overview
+`lang` accordingly (Step 5). When no language is stated, default to Chinese
+(`zh`). This is independent of English proficiency — a reader may want English
+annotations yet still need the term / long-sentence layers, or vice versa.
+
 **If `persona` is `null`:**
 Ask ONCE (then stop and wait):
 
 > 未检测到阅读画像配置。告诉我你的阅读偏好我会记住，以后不再询问
-> （影响批注密度与是否加术语/长难句层）：英文水平 / 领域熟悉度 /
-> 导读深度 / 风格偏好。或回复「跳过」用默认（速览 / 中等 / 中等）。
+> （影响批注语言、密度与是否加术语/长难句层）：批注语言（母语）/
+> 英文水平 / 领域熟悉度 / 导读深度 / 风格偏好。或回复「跳过」用默认
+> （中文批注 / 速览 / 中等）。
 
 **When the user provides preferences, you MUST persist them before continuing:**
 call `save_reading_persona(persona_text=...)` with the four hints formatted as
 markdown lines, e.g.:
 
 ```
+- 批注语言：中文
 - 英文水平：入门
 - 领域熟悉度：中等
 - 导读深度：速览
@@ -112,8 +132,8 @@ and does **not** ask again. Confirm to the user it was saved (the tool returns
 `{saved, path, action}`). Do NOT skip this step — failing to persist is exactly
 why the user gets re-asked every run.
 
-If the user replies「跳过」/ declines: use defaults (sparse density,
-English-proficiency moderate, no term/long-sentence layer), do NOT call
+If the user replies「跳过」/ declines: use defaults (Chinese annotations,
+sparse density, English-proficiency moderate, no term/long-sentence layer), do NOT call
 `save_reading_persona`, and do not ask again this run.
 
 ### 2b. Existing annotations (`existing_annotations: list`)
@@ -159,7 +179,7 @@ Never duplicate-color the same text span across two dimensions.
 {
   quote:      the verbatim excerpt from the paper text (≤ 1000 bytes UTF-8),
   dimension:  one of the five keys above,
-  comment:    Chinese per-sentence understanding note (≤ 500 bytes UTF-8),
+  comment:    per-sentence understanding note in the annotation language (≤ 500 bytes UTF-8),
   page_hint:  the page_num of the page where this quote appears (1-based),
   kind:       "highlight" for all prose/term/equation/caption annotations,
               "region"    for figure and materialized-table region notes,
@@ -196,7 +216,7 @@ judgment calls.
 - Only emit when Step 2a determined English proficiency is "weak".
 - `kind="highlight"`, `subtype="term"`, `dimension="concept"`.
 - Short quote of the term itself (≤ 40 characters preferred).
-- `comment` = brief Chinese gloss: what the term means in this paper's context.
+- `comment` = brief gloss in the annotation language: what the term means in this paper's context.
 - `page_hint` from the page where the term first appears.
 
 ### 4c. 长难句 (English-proficiency weak only)
@@ -204,7 +224,7 @@ judgment calls.
 - `kind="highlight"`, `subtype="long_sentence"`, `dimension="method"` or
   `"concept"` as appropriate.
 - Quote the full difficult sentence (≤ 200 characters preferred).
-- `comment` = grammar skeleton + Chinese translation in natural prose.
+- `comment` = grammar skeleton + a translation into the annotation language, in natural prose.
 - `page_hint` from the page where the sentence appears.
 
 ### 4d. 图 Figure
@@ -218,8 +238,8 @@ For EVERY entry in `figures[]` (all are guaranteed to have `bbox` and
   or synthesize coordinates. Never compute, estimate, or modify a bbox.
 - `dimension` = `"evidence"` (figures are usually evidence or method; use
   your judgment but do not leave blank).
-- `comment` = 该图导读: one or two Chinese sentences describing what this
-  figure shows and why it matters to the argument.
+- `comment` = figure 导读: one or two sentences (in the annotation language)
+  describing what this figure shows and why it matters to the argument.
 - Leave `quote` as an empty string `""` for region notes.
 
 **Caption highlight** (secondary anchor on the caption text):
@@ -254,8 +274,8 @@ For EVERY entry in `figures[]` (all are guaranteed to have `bbox` and
 - Quote the SPECIFIC explanatory sentence that describes or derives the
   equation (the prose adjacent to the equation, not the equation glyphs
   themselves). Choose a sentence ≥ 12 characters.
-- `comment` = Chinese explanation of what the equation means and how it
-  connects to the argument.
+- `comment` = an explanation, in the annotation language, of what the equation
+  means and how it connects to the argument.
 - Do NOT use `kind="region"` for equations — there is no extractor bbox.
 - If the explanatory sentence is ambiguous (appears more than once on the
   page), the code will report `ambiguous_multi_match`. In that case, try a
@@ -269,6 +289,7 @@ Construct a compact argument-structure map for the page-1 sticky-note:
 
 ```json
 {
+  "lang":      "zh|en|… — the annotation language from Step 2a (drives overview labels)",
   "thesis":    "核心论点，一句话",
   "skeleton": {
     "question":   "研究问题",
@@ -282,7 +303,7 @@ Construct a compact argument-structure map for the page-1 sticky-note:
 }
 ```
 
-All fields in Chinese, short phrases. Total JSON serialized to ≤ 2000 bytes.
+All text fields in the annotation language (set `lang` to match), short phrases. Total JSON serialized to ≤ 2000 bytes.
 
 ---
 
@@ -361,7 +382,7 @@ Read the returned dict carefully. It contains:
 - `coverage`: breakdown by subtype (figures, tables_region, tables_caption,
   tables_unanchorable, terms, long_sentences, equations)
 - `verified`: bool — the post-write verification result
-- `summary`: pre-formatted one-line Chinese summary
+- `summary`: pre-formatted one-line summary (interface language)
 
 ---
 
@@ -396,7 +417,7 @@ original PDF was restored from `.ztpbak`. No data was lost.
 
 ## Step 10 — Coverage summary
 
-Relay a concise one-line Chinese coverage summary to the user. Build it from
+Relay a concise one-line coverage summary to the user, in the interface language. Build it from
 the `coverage` dict and `unplaced` list. Example format:
 
 > 五维齐全 · 5图已标 · 2表（1表仅按标题锚定）· 3术语 · 2长难句 · 备份 foo.pdf.ztpbak · 4处未定位（其中2处用户已批注）

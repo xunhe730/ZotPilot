@@ -245,32 +245,67 @@ def validate_annotation_specs(
             )
 
 
+# Page-1 overview structural labels, keyed by annotation language. ``zh`` is the
+# default and is byte-identical to prior releases; any other declared language
+# uses the neutral English label set so labels match non-Chinese comments.
+_OVERVIEW_LABELS: dict[str, dict[str, str]] = {
+    "zh": {
+        "thesis": "核心论点", "question": "问题", "claim": "论点",
+        "evidence": "证据", "rebuttal": "反驳", "conclusion": "结论",
+        "strongest": "最强", "weakest": "最弱", "colon": "：",
+    },
+    "en": {
+        "thesis": "Thesis", "question": "Question", "claim": "Claim",
+        "evidence": "Evidence", "rebuttal": "Rebuttal", "conclusion": "Conclusion",
+        "strongest": "Strongest", "weakest": "Weakest", "colon": ": ",
+    },
+}
+
+
+def _overview_label_lang(overview: dict) -> str:
+    """Map ``overview['lang']`` to a label set: ``zh`` (default) or ``en``.
+
+    Unspecified / Chinese -> ``zh`` (preserves prior output); any other declared
+    language uses the neutral English labels so they don't clash with comments.
+    """
+    raw = str(overview.get("lang", "") or "").strip().lower()
+    if not raw or raw.startswith("zh") or raw in {"chinese", "中文", "汉语", "中"}:
+        return "zh"
+    return "en"
+
+
 def build_overview_text(overview: dict) -> str:
-    """Compose CJK overview: thesis + 5-element skeleton + strongest/weakest."""
+    """Compose the page-1 overview: thesis + 5-element skeleton + strongest/weakest.
+
+    Structural labels follow the annotation language declared in
+    ``overview['lang']`` (``zh`` default); field VALUES are authored by the
+    caller in that same language.
+    """
     if not overview:
         return ""
+    lang = _overview_label_lang(overview)
+    lbl = _OVERVIEW_LABELS[lang]
+    colon = lbl["colon"]
     thesis = str(overview.get("thesis", "")).strip()
     skel = overview.get("skeleton") or {}
     if not isinstance(skel, dict):
         skel = {}
-    parts = [f"【核心论点】{thesis}"] if thesis else []
-    label_keys = (
-        ("question", "问题"),
-        ("claim", "论点"),
-        ("evidence", "证据"),
-        ("rebuttal", "反驳"),
-        ("conclusion", "结论"),
-    )
-    for key, label in label_keys:
+    if not thesis:
+        parts: list[str] = []
+    elif lang == "zh":
+        parts = [f"【{lbl['thesis']}】{thesis}"]
+    else:
+        parts = [f"{lbl['thesis']}{colon}{thesis}"]
+    for key in ("question", "claim", "evidence", "rebuttal", "conclusion"):
         v = str(skel.get(key, "")).strip()
         if v:
-            parts.append(f"{label}：{v}")
+            parts.append(f"{lbl[key]}{colon}{v}")
     strongest = str(overview.get("strongest", "")).strip()
     weakest = str(overview.get("weakest", "")).strip()
     if strongest:
-        parts.append(f"最强：{strongest}")
+        parts.append(f"{lbl['strongest']}{colon}{strongest}")
     if weakest:
-        parts.append(f"最弱：{weakest}")
+        parts.append(f"{lbl['weakest']}{colon}{weakest}")
     return "\n".join(parts)
 
 
