@@ -20,6 +20,7 @@
 - **批量误删保护**（RC6）—— 孤儿对账加入常开删除下限：当前库空读、数据目录不可达、或删除量超过索引的 25% 时，拒绝删除并响亮告警；`--force` / `allow_mass_delete` 仅放行比例下限，空读 / 不可达即便显式 override 仍拒删。
 - **嵌入维度不匹配**（RC7）—— 在 CLI 与 `doctor` 的索引构造处捕获 `EmbeddingDimensionMismatchError` / `IndexUnavailableError`，给出清晰可操作的提示而非未捕获崩溃。
 - **配置漂移**（RC8）—— 嵌入 / 分块 / 视觉等影响索引内容的配置变化且未 `--force` 时**硬阻断**（`ConfigDriftError`），避免静默写入混合嵌入空间的索引。
+- **嵌入 429 配额级联**（Issue #15）—— 嵌入服务返回 HTTP 429（配额 / 限流）时不再被当作普通失败逐篇记下并继续硬撞已耗尽的配额、烧掉整批。现在 429 被分类为带 `provider` / `retry_after` 的 `RateLimitError`：索引进入 Phase-3 后立即中止（`break`），当前篇及之后未尝试的论文统一记为 `failed`，运行正常返回（MCP lease 正常释放、已完成的索引完整保留、下次自动续跑）。另加一个与服务商无关的兜底——连续 3 篇相同特征失败也中止（`systemic_abort`，与 `rate_limited_abort` 区分，避免把非配额级联误标成限流）。DashScope 的 `RETRIEVAL_DOCUMENT` 批次遇 429 不再降级成逐条重试；表格 / 图片路径上的 429 也会上抛中止（已提交的正文 chunk 保留）。额外以 `counts["rate_limited_abort"] / ["systemic_abort"] / ["not_indexed_due_to_abort"]` 加性透出，不新增状态、不改退出码语义。
 
 ## 如何更新 / How to Update
 
