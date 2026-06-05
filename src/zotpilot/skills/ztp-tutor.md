@@ -106,19 +106,55 @@ language for all `comment` fields and the page-1 overview, and set the overview
 (`zh`). This is independent of English proficiency — a reader may want English
 annotations yet still need the term / long-sentence layers, or vice versa.
 
+**Reading purpose — reallocates emphasis across the five dimensions (it does NOT
+raise the annotation count):** match the reader's intent and steer the limited
+budget toward the points that serve it:
+- 入门 / 背景 / `background` / 了解 → emphasize `thesis`, `concept`, big-picture
+  significance and `conclusion`; go lighter on method internals.
+- 复现 / 实现 / `implement` / `reproduce` / 跑代码 → emphasize `method`,
+  equations, experimental setup and any hyperparameters; the method section is
+  the priority surface.
+- 评审 / 审稿 / 批判 / `review` / `critique` → emphasize claim↔evidence links,
+  `rebuttal` / limitations, methodology soundness and unstated assumptions;
+  call out weak or unsupported claims explicitly.
+- 找结果 / 特定问题 / `specific finding` → emphasize the `evidence` (tables /
+  figures) bearing on the reader's question; lighter elsewhere.
+- 综述 / 定位 / `survey` / `positioning` → emphasize `thesis`, the contribution,
+  relation to prior work and `conclusion`.
+If the triggering message states a purpose for THIS paper (e.g. 「我想复现它的
+方法」), use it for this run, overriding any persona default. When no purpose is
+given anywhere, default to a balanced five-dimension reading.
+
+**Domain familiarity — sets how much background each comment carries:**
+- 新手 / 入门 / `novice` / 不熟 → comments add orienting context: what a term
+  builds on, why a result matters, how it fits the field; define field jargon
+  even when English proficiency is strong.
+- 熟悉 / 专家 / `expert` / `familiar` → skip basics; focus comments on what is
+  novel, the specific contribution, and where the work is weak or surprising.
+- Default (中等 / unstated): explain non-obvious constructs but not textbook basics.
+
+**Comment style — shapes how each `comment` reads (not what is covered):**
+- 结构化 / 要点 / `bullet` / `structured` → terse, label-led notes
+  (`论点：…` / `证据：…`), one idea per comment.
+- 叙述 / `narrative` / `prose` → short flowing prose, 1–2 sentences.
+- 提问 / `socratic` / 启发 → end with a brief check question that nudges the
+  reader to connect the point to the argument.
+- Default: clear explanatory prose.
+
 **If `persona` is `null`:**
 Ask ONCE (then stop and wait):
 
 > 未检测到阅读画像配置。告诉我你的阅读偏好我会记住，以后不再询问
-> （影响批注语言、密度与是否加术语/长难句层）：批注语言（母语）/
-> 英文水平 / 领域熟悉度 / 导读深度 / 风格偏好。或回复「跳过」用默认
-> （中文批注 / 速览 / 中等）。
+> （影响导读的语言、重点、深度与讲解方式）：阅读目的（入门/复现/评审/
+> 找结果/综述）/ 批注语言（母语）/ 英文水平 / 领域熟悉度 / 导读深度 /
+> 风格偏好。或回复「跳过」用默认（中文批注 / 速览 / 均衡五维）。
 
 **When the user provides preferences, you MUST persist them before continuing:**
-call `save_reading_persona(persona_text=...)` with the four hints formatted as
+call `save_reading_persona(persona_text=...)` with the persona hints formatted as
 markdown lines, e.g.:
 
 ```
+- 阅读目的：入门
 - 批注语言：中文
 - 英文水平：入门
 - 领域熟悉度：中等
@@ -132,8 +168,9 @@ and does **not** ask again. Confirm to the user it was saved (the tool returns
 `{saved, path, action}`). Do NOT skip this step — failing to persist is exactly
 why the user gets re-asked every run.
 
-If the user replies「跳过」/ declines: use defaults (Chinese annotations,
-sparse density, English-proficiency moderate, no term/long-sentence layer), do NOT call
+If the user replies「跳过」/ declines: use defaults (Chinese annotations, sparse
+density, balanced five dimensions, English-proficiency moderate, moderate domain
+familiarity, plain prose, no term/long-sentence layer), do NOT call
 `save_reading_persona`, and do not ask again this run.
 
 ### 2b. Existing annotations (`existing_annotations: list`)
@@ -173,6 +210,16 @@ For each dimension that the paper genuinely contains, produce at least one
 annotation. Skip a dimension only when the paper truly lacks it (e.g., a
 purely theoretical paper with no empirical section has no `evidence`).
 Never duplicate-color the same text span across two dimensions.
+
+**Personalize within the budget (Step 2a) — reallocate, don't inflate:**
+- **Reading purpose** reallocates emphasis: keep each present dimension's one
+  required annotation, then spend the remaining budget on the dimensions the
+  purpose emphasizes and trim de-emphasized ones to their minimum.
+- **Domain familiarity** sets how much background each `comment` carries
+  (novice → orienting context; expert → novelty + critique).
+- **Comment style** sets how each `comment` is phrased (structured / narrative
+  / Socratic).
+These shape the SAME annotations and respect the Step 6 density ceiling.
 
 **Per-annotation fields:**
 ```
