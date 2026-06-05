@@ -1,8 +1,9 @@
 ---
 name: ztp-tutor
 description: >
-  Deep reading guide for a single paper already in the Zotero library.
-  Writes 5-dimension color highlights with per-sentence understanding comments
+  Deep reading guide for a single paper already in the Zotero library, tailored
+  to the reader's persona (purpose, background, language). Writes 5-dimension
+  color highlights with per-sentence understanding comments
   in the reader's language (Chinese by default), figure/table/equation
   annotations, and a page-1 argument-structure
   overview directly into the Zotero-stored PDF. Original PDF is always
@@ -96,8 +97,10 @@ When no match is found, default to "moderate" and SUPPRESS those layers
 - `全面综述` / `comprehensive` / `thorough` / `全面` / `详尽` → maximal:
   annotate every independent understanding point within the hard caps.
 
-When hints conflict (e.g., `速览` but `新手`), favor the MORE CONSERVATIVE
-density to avoid over-annotation.
+Density is set by reading depth ALONE — domain familiarity changes how much
+background each comment carries, not how many there are. If `速览` collides with
+the weak-English term / long-sentence layers, stay within the sparse budget and
+keep only the most essential helps.
 
 When depth cannot be recognized, default to `速览`.
 
@@ -385,8 +388,10 @@ density rules:
     if English-weak. Aim for 8–20 total annotations for a typical paper.
   - `技术细节`: fuller method/evidence coverage. Aim for 20–50.
   - `全面综述`: every independent point. Up to the 200-annotation cap.
-- **On conflicts** between persona signals (e.g., "速览" but "新手"), always
-  choose the MORE CONSERVATIVE density.
+- **Density comes from reading depth only** — domain familiarity changes
+  per-comment background, not the annotation count. If `速览` collides with the
+  weak-English term/long-sentence layers, stay within the sparse budget and keep
+  only the most essential helps.
 - **Heavily annotated pages** (user has > 2 foreign annotations on the page):
   drop redundant annotations on that page, but do not skip all annotations.
 
