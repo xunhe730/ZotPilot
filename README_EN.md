@@ -125,15 +125,77 @@ What is different: ingestion uses a real browser session and Zotero translators,
 | Gemini | High-quality default | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
 | DashScope | Better fit for China networks | ✗ | [Alibaba Bailian](https://bailian.console.aliyun.com/) |
 | Local | Good enough baseline | ✓ | Not required |
+| OpenAI-compatible | Generic: any OpenAI-compatible embedding endpoint (SiliconFlow / Zhipu·GLM / Ollama / vLLM / self-hosted) | Depends on endpoint | Per vendor (local Ollama needs none) |
 
 > Avoid switching after the first index. Dimensions differ, so a switch requires `zotpilot index --force`.
 > Selecting `local` only switches ZotPilot into local-embedding mode. The local model is downloaded on the first real embedding call, not during `setup`.
 
-Non-interactive (agent-driven):
+For `openai-compatible`, set `embedding_base_url` to the vendor's OpenAI-compatible **root** (usually ends in `/v1`, but GLM uses `/api/paas/v4`) and you **must** set `embedding_dimensions` explicitly — it is never auto-detected, and a wrong value corrupts the index. Example configs:
+
+```jsonc
+// SiliconFlow (bge-m3, fixed 1024 dims)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://api.siliconflow.cn/v1",
+  "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024 }
+
+// Zhipu / GLM (embedding-3, non-/v1 root)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "embedding_model": "embedding-3", "embedding_dimensions": 2048 }
+
+// Ollama (local, no key)
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "http://localhost:11434/v1",
+  "embedding_model": "nomic-embed-text", "embedding_dimensions": 768 }
+```
+
+**Recommended SiliconFlow models (live-verified 2026-06, selectable in the `zotpilot setup` wizard):**
+
+| model | dimensions | notes |
+|-------|-----------|-------|
+| `BAAI/bge-m3` | `1024` (fixed) | multilingual, cheapest, default; rejects the `dimensions` param — auto-handled |
+| `Qwen/Qwen3-Embedding-0.6B` | `1024` (MRL, native 1024) | fast, low cost |
+| `Qwen/Qwen3-Embedding-8B` | `2048` (MRL, native 4096) | best quality |
+
+> These are only wizard **pre-fills**; at runtime there is a single generic `openai-compatible` code path, so you may set `embedding_model` to any model the endpoint supports, or pick "Custom" for any OpenAI-compatible endpoint.
+>
+> **What to enter / format**: `embedding_base_url` (the OpenAI-compatible root, `http(s)://…`, no `user:pass@`), `embedding_model` (the endpoint's exact model id), `embedding_dimensions` (a positive integer: a fixed-dim model's native size, or any supported size for MRL), `embedding_key` (optional — omit for local Ollama).
+>
+> **How it's guaranteed to work + clear errors**: (1) `zotpilot setup` runs a connectivity self-check (a tiny real embed) and flags a dimension mismatch on the spot; (2) at index time a C1 assertion raises `EmbeddingError` naming the exact dimension to set if the server's output differs — never silent corruption; (3) fixed-dim models that reject `dimensions` are auto-retried without it. Common errors: wrong model → `HTTP 400 Model does not exist`; bad/missing key → `HTTP 401 Api key is invalid`; local server down → `Cannot reach … is the server running?`.
+
+> **Provider-switch note**: changing the embedding provider / model / dimensions on an existing library requires `zotpilot index --force` to rebuild. The old vectors remain until then (no silent data loss), but search quality may degrade in the meantime.
+
+Interactive `zotpilot setup` is now **two layers**: pick a **vendor**, then a **model**
+(the recommended one is pre-selected — just press Enter). Vendor → model map (single source of
+truth `VENDOR_CATALOG`):
+
+| vendor (alias) | runtime provider | base_url | key | recommended model · dims |
+|---|---|---|:---:|---|
+| `google` (`gemini`) | `gemini` | — | ✓ | `gemini-embedding-001` · 768 |
+| `dashscope` | `dashscope` | — | ✓ | `text-embedding-v4` · 1024 |
+| `local` | `local` | — | ✗ | `all-MiniLM-L6-v2` · 384 |
+| `siliconflow` | `openai-compatible` | `https://api.siliconflow.cn/v1` | ✓ | `BAAI/bge-m3` · 1024 |
+| `zhipu` | `openai-compatible` | `https://open.bigmodel.cn/api/paas/v4` | ✓ | `embedding-3` · 2048 |
+| `ollama` | `openai-compatible` | `http://localhost:11434/v1` | ✗ | `nomic-embed-text` · 768 |
+| `custom` (`openai-compatible`) | `openai-compatible` | you supply | ✓ | you supply model + dims |
+
+Non-interactive (agent-driven) — one line by vendor name; omit `--embedding-model` to take the
+recommended model; fixed-base vendors auto-fill base_url and dimensions:
 
 ```bash
+zotpilot setup --list-vendors            # list all vendors/models (add --json for agents)
+zotpilot setup --non-interactive --provider siliconflow --embedding-model BAAI/bge-m3 --embedding-key <key> --verify
+zotpilot setup --non-interactive --provider zhipu --embedding-key <key> --verify      # omit model -> recommended embedding-3
 zotpilot setup --non-interactive --provider gemini   # or dashscope / local
+# the custom vendor still needs explicit base_url / model / dimensions (key optional for local Ollama):
+zotpilot setup --non-interactive --provider custom \
+  --embedding-base-url http://localhost:11434/v1 \
+  --embedding-model nomic-embed-text --embedding-dimensions 768
+# legacy scripts keep working: --provider gemini|dashscope|local|openai-compatible are accepted aliases
 ```
+
+> `--verify` (optional): after writing config, runs one self-check and prints a single JSON line
+> (`ok` / `dim_mismatch` / `auth` / `unreachable` / `error` / `skipped`) so an agent can self-heal.
 
 </details>
 

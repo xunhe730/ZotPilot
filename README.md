@@ -126,16 +126,74 @@ ZotPilot 由三部分组成：
 | Gemini | 高质量默认 | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
 | DashScope | 适合中国网络环境 | ✗ | [阿里云百炼](https://bailian.console.aliyun.com/) |
 | Local | 基本够用 | ✓ | 不需要 |
+| OpenAI-compatible | 通用：任意 OpenAI 兼容 embedding 端点（SiliconFlow / Zhipu·GLM / Ollama / vLLM / 自建） | 取决于端点 | 各厂商自取（本地 Ollama 不需要） |
 
 > 选定后不建议换。向量维度不同，换模型要 `zotpilot index --force` 重建。
 > 选 `local` 只把 ZotPilot 切到本地嵌入模式；本地模型在首次实际调用 embeddings 时才下载，不在 `setup` 阶段预下载。
 > DashScope 默认使用 OpenAI-compatible embedding endpoint；如需 DashScope 原生 `document` / `query` 非对称检索语义，可运行 `zotpilot config set dashscope_embedding_endpoint native`，然后 `zotpilot index --force` 重建索引。
 
-非交互式（agent 驱动）：
+`openai-compatible` 用 `embedding_base_url` 指向厂商的 OpenAI 兼容**根地址**（通常以 `/v1` 结尾，但 GLM 是 `/api/paas/v4`），并**必须显式指定 `embedding_dimensions`**——维度永不自动探测，填错会破坏索引。配置示例：
+
+```jsonc
+// SiliconFlow（bge-m3，固定 1024 维）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://api.siliconflow.cn/v1",
+  "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024 }
+
+// Zhipu / GLM（embedding-3，根地址非 /v1）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4",
+  "embedding_model": "embedding-3", "embedding_dimensions": 2048 }
+
+// Ollama（本地，无需 key）
+{ "embedding_provider": "openai-compatible",
+  "embedding_base_url": "http://localhost:11434/v1",
+  "embedding_model": "nomic-embed-text", "embedding_dimensions": 768 }
+```
+
+**SiliconFlow 推荐 model（已 live 实测验证 2026-06，`zotpilot setup` 向导内置可直选）：**
+
+| model | dimensions | 说明 |
+|-------|-----------|------|
+| `BAAI/bge-m3` | `1024`（固定） | 多语言、最便宜、默认首选；该模型会拒绝 `dimensions` 参数，已自动处理 |
+| `Qwen/Qwen3-Embedding-0.6B` | `1024`（MRL 可调，原生 1024） | 快、成本低 |
+| `Qwen/Qwen3-Embedding-8B` | `2048`（MRL 可调，原生 4096） | 质量最佳 |
+
+> 这些只是**向导预填**的便利项，运行时只有一个通用 `openai-compatible` 代码路径——你可以把 `embedding_model` 改成该端点支持的任意模型，或用「Custom」填任意 OpenAI 兼容端点。
+>
+> **你需要填什么 / 格式**：`embedding_base_url`（OpenAI 兼容根地址，`http(s)://…`，不可含 `user:pass@`）、`embedding_model`（端点的精确模型 id）、`embedding_dimensions`（正整数：固定维模型填其原生维度，MRL 模型填任意受支持维度）、`embedding_key`（可选，本地 Ollama 可省）。
+>
+> **如何保证可用 + 报错清晰**：① `zotpilot setup` 写入后会跑一次连通自检（真实嵌入一小段），维度对不上当场提示并可一键改正；② 入库时 C1 断言——服务器返回维度与配置不符会抛 `EmbeddingError` 并写明「应改成 N 维」，绝不静默污染索引；③ 固定维模型若拒绝 `dimensions` 参数会自动去掉重试。常见报错：填错模型 → `HTTP 400 Model does not exist`；key 错/缺 → `HTTP 401 Api key is invalid`；本地端点没起 → `Cannot reach … is the server running?`。
+
+> **切换 provider 提示**：在已建库上更换 embedding provider / model / dimensions 后，需运行 `zotpilot index --force` 重建索引；在重建前旧向量仍保留、不会被静默删除，但检索结果可能不准。
+
+交互式 `zotpilot setup` 现在是**两层选择**：先选**厂商（vendor）**，再选**模型（model，已预选推荐项，回车即可）**。厂商→模型对照表（单一数据源 `VENDOR_CATALOG`）：
+
+| vendor（别名） | 运行时 provider | base_url | 需 key | 推荐 model · 维度 |
+|---|---|---|:---:|---|
+| `google`（`gemini`） | `gemini` | — | ✓ | `gemini-embedding-001` · 768 |
+| `dashscope` | `dashscope` | — | ✓ | `text-embedding-v4` · 1024 |
+| `local` | `local` | — | ✗ | `all-MiniLM-L6-v2` · 384 |
+| `siliconflow` | `openai-compatible` | `https://api.siliconflow.cn/v1` | ✓ | `BAAI/bge-m3` · 1024 |
+| `zhipu` | `openai-compatible` | `https://open.bigmodel.cn/api/paas/v4` | ✓ | `embedding-3` · 2048 |
+| `ollama` | `openai-compatible` | `http://localhost:11434/v1` | ✗ | `nomic-embed-text` · 768 |
+| `custom`（`openai-compatible`） | `openai-compatible` | 自填 | ✓ | 自填 model + dimensions |
+
+非交互式（agent 驱动）—— 用厂商名一行搞定，省略 `--embedding-model` 即取推荐项；固定 base 的厂商自动带上 base_url 与维度：
 
 ```bash
+zotpilot setup --list-vendors            # 查看全部厂商/模型（加 --json 给 agent 解析）
+zotpilot setup --non-interactive --provider siliconflow --embedding-model BAAI/bge-m3 --embedding-key <key> --verify
+zotpilot setup --non-interactive --provider zhipu --embedding-key <key> --verify      # 省略 model 取推荐 embedding-3
 zotpilot setup --non-interactive --provider gemini   # 或 dashscope / local
+# custom 厂商仍需显式 base_url / model / dimensions（本地 Ollama 可省 key）：
+zotpilot setup --non-interactive --provider custom \
+  --embedding-base-url http://localhost:11434/v1 \
+  --embedding-model nomic-embed-text --embedding-dimensions 768
+# 兼容旧脚本：--provider gemini|dashscope|local|openai-compatible 仍作为别名有效
 ```
+
+> `--verify`（可选）：写入后做一次连通自检并打印一行 JSON（`ok` / `dim_mismatch` / `auth` / `unreachable` / `error` / `skipped`），便于 agent 自愈。
 
 </details>
 

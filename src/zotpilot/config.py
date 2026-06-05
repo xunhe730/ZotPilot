@@ -1,11 +1,15 @@
 """Configuration management."""
+import hashlib
 import json
 import logging
 import os
 import sys
 import tempfile
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import providers
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,10 @@ class Config:
     zotero_library_type: str  # "user" or "group"
     # Semantic Scholar API key (optional, increases rate limit)
     semantic_scholar_api_key: str | None
+    # OpenAI-compatible embedding provider (additive, optional; appended at end
+    # so no non-default field follows -- keeps dataclass field ordering valid)
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -132,14 +140,10 @@ class Config:
         default_chroma = str(_default_data_dir() / "chroma")
 
         provider = data.get("embedding_provider", "gemini")
-        # Provider-aware defaults for model and dimensions
-        model_defaults = {
-            "gemini": ("gemini-embedding-001", 768),
-            "dashscope": ("text-embedding-v4", 1024),
-            "local": ("all-MiniLM-L6-v2", 384),
-            "none": ("none", 0),
-        }
-        default_model, default_dims = model_defaults.get(provider, ("gemini-embedding-001", 768))
+        # Provider-aware defaults for model and dimensions (single source of truth)
+        default_model, default_dims = providers.EMBEDDING_MODEL_DEFAULTS.get(
+            provider, ("gemini-embedding-001", 768)
+        )
 
         vision_provider = data.get("vision_provider", "anthropic")
         default_vision_model = (
@@ -187,6 +191,8 @@ class Config:
             zotero_user_id=data.get("zotero_user_id"),
             zotero_library_type=data.get("zotero_library_type", "user"),
             semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
+            embedding_base_url=data.get("embedding_base_url", None),
+            embedding_api_key=data.get("embedding_api_key", None),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -233,6 +239,8 @@ class Config:
             "zotero_user_id": self.zotero_user_id,
             "zotero_library_type": self.zotero_library_type,
             "semantic_scholar_api_key": self.semantic_scholar_api_key,
+            "embedding_base_url": self.embedding_base_url,
+            "embedding_api_key": self.embedding_api_key,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -272,8 +280,37 @@ class Config:
             errors.append("GEMINI_API_KEY not set (required for embedding_provider='gemini')")
         elif self.embedding_provider == "dashscope" and not self.dashscope_api_key:
             errors.append("DASHSCOPE_API_KEY not set (required for embedding_provider='dashscope')")
-        elif self.embedding_provider not in ("gemini", "dashscope", "local", "none"):
-            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be 'gemini', 'dashscope', 'local', or 'none'")  # noqa: E501
+        elif self.embedding_provider == "openai-compatible":
+            base_url = providers._resolve_secret(
+                self.embedding_base_url, "ZOTPILOT_EMBEDDING_BASE_URL", "OPENAI_BASE_URL"
+            )
+            if not base_url:
+                errors.append(
+                    "embedding_base_url not set (required for embedding_provider='openai-compatible'); "
+                    "set it or ZOTPILOT_EMBEDDING_BASE_URL / OPENAI_BASE_URL"
+                )
+            else:
+                errors.extend(_validate_base_url(base_url))
+            if not self.embedding_model:
+                errors.append(
+                    "embedding_model not set (required for embedding_provider='openai-compatible')"
+                )
+            if self.embedding_dimensions <= 0:
+                errors.append(
+                    "embedding_dimensions must be > 0 for embedding_provider='openai-compatible' "
+                    "(set it explicitly; non-matryoshka servers ignore a requested dimension)"
+                )
+            key = providers._resolve_secret(
+                self.embedding_api_key, "ZOTPILOT_EMBEDDING_API_KEY", "OPENAI_API_KEY"
+            )
+            if not key:
+                logger.warning(
+                    "No embedding_api_key set for embedding_provider='openai-compatible'. "
+                    "This is fine for local endpoints (e.g. Ollama) but required for hosted vendors."
+                )
+        elif self.embedding_provider not in providers.EMBEDDING_PROVIDERS:
+            valid = ", ".join(repr(p) for p in providers.EMBEDDING_PROVIDERS)
+            errors.append(f"Invalid embedding_provider: {self.embedding_provider}. Must be one of: {valid}")  # noqa: E501
         if self.dashscope_embedding_endpoint not in ("compatible", "native"):
             errors.append("Invalid dashscope_embedding_endpoint: must be 'compatible' or 'native'")
 
@@ -287,3 +324,45 @@ class Config:
             errors.append("Invalid vision_model for vision_provider='anthropic'")
 
         return errors
+
+
+def _validate_base_url(url: str) -> list[str]:
+    """Validate an openai-compatible base URL (H1): scheme + no embedded creds."""
+    errors = []
+    parsed = urllib.parse.urlsplit(url.rstrip("/"))
+    if parsed.scheme not in ("http", "https"):
+        errors.append(
+            f"Invalid embedding_base_url scheme {parsed.scheme!r}: must be http or https"
+        )
+    if "@" in parsed.netloc:
+        errors.append(
+            "embedding_base_url must not contain embedded credentials (user:pass@host); "
+            "pass the API key via embedding_api_key instead"
+        )
+    return errors
+
+
+def _config_hash(config: "Config") -> str:
+    """Hash of config values that affect indexed content.
+
+    Changes to these values require re-indexing. The ``embedding_base_url`` is
+    folded in CONDITIONALLY -- only for the openai-compatible provider -- so all
+    existing providers hash byte-identically to prior releases (no forced
+    reindex on upgrade). Relocated here from ``indexer.py`` so the lightweight
+    CLI can import it without dragging in the indexer's heavy dependencies.
+    """
+    data = (
+        f"{config.chunk_size}:"
+        f"{config.chunk_overlap}:"
+        f"{config.embedding_provider}:"
+        f"{getattr(config, 'dashscope_embedding_endpoint', 'compatible')}:"
+        f"{config.embedding_dimensions}:"
+        f"{config.embedding_model}:"
+        f"{config.ocr_language}:"
+        f"{getattr(config, 'vision_enabled', True)}:"
+        f"{getattr(config, 'vision_provider', 'anthropic')}:"
+        f"{getattr(config, 'vision_model', '')}"
+    )
+    if config.embedding_provider == "openai-compatible":
+        data += f":{getattr(config, 'embedding_base_url', '') or ''}"
+    return hashlib.sha256(data.encode()).hexdigest()[:16]

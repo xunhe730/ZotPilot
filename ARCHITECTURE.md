@@ -71,6 +71,20 @@ User query
 - Queries embedded with `RETRIEVAL_QUERY` task type
 - Improves retrieval quality for Gemini embeddings
 
+### Generic OpenAI-compatible embedding provider
+- The `openai-compatible` provider (`embeddings/openai_compat.py`) targets any
+  OpenAI-compatible `/embeddings` endpoint (SiliconFlow, Zhipu/GLM, Ollama,
+  vLLM, self-hosted). Reaching a new vendor is a `base_url` + `model` +
+  `dimensions` configuration choice, not new code.
+- `embedding_dimensions` is an explicit, required user input — never
+  auto-detected. The configured value flows unchanged to the embedder, is
+  asserted against the first response vector's length, and is recorded in the
+  Chroma collection metadata (guarded at load time by
+  `EmbeddingDimensionMismatchError`).
+- `providers.py` is the single source of truth for the embedding allow-list,
+  per-provider defaults, the wizard-only vendor preset catalog, and the shared
+  `{env:VAR}` secret/URL resolver (`_resolve_secret`).
+
 ### Section-aware reranking
 - PDF headings classified into academic sections (abstract, methods, results, etc.)
 - Each section has a relevance weight in the composite score
@@ -95,7 +109,8 @@ User query
 | `indexer.py` | ~550 | Index pipeline orchestration |
 | `reranker.py` | ~230 | Composite relevance scoring |
 | `zotero_client.py` | ~450 | Zotero SQLite read access |
-| `embeddings/*.py` | ~230 | Embedding providers |
+| `embeddings/*.py` | ~230 | Embedding providers (gemini, dashscope, local, openai-compatible) |
+| `providers.py` | ~140 | Embedding provider registry, defaults, vendor presets, secret resolver |
 
 ## Data Flow
 

@@ -120,7 +120,9 @@ class TestSetup:
             patch("zotpilot._platforms.register", return_value={"codex": True}),
             patch(
                 "builtins.input",
-                side_effect=["", "1", "gemini-key", "y", "12345678", "zotero-key"],
+                # use-detected zotero, vendor=1 (Google/Gemini), model menu
+                # Enter=recommended, gemini key, configure-write=y, user id, key.
+                side_effect=["", "1", "", "gemini-key", "y", "12345678", "zotero-key"],
             ),
         ):
             args = type(
