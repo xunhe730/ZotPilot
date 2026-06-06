@@ -931,6 +931,20 @@ def test_verify_returns_error_on_missing_file(tmp_path: Path):
     assert v["verified"] is False
 
 
+def test_normalize_punctuation_spacing():
+    # page_texts (pymupdf4llm) spaces out punctuation; the PDF text layer attaches it.
+    assert normalize_quote_for_pdf("world models , internal models") == "world models, internal models"
+    assert normalize_quote_for_pdf("predict y from x .") == "predict y from x."
+    assert normalize_quote_for_pdf("depends on x , y , and z") == "depends on x, y, and z"
+    assert normalize_quote_for_pdf("function F ( x, y ) that") == "function F (x, y) that"
+    assert normalize_quote_for_pdf("the (JEPA) .") == "the (JEPA)."
+    # a normal prose parenthetical KEEPS its leading space (we only fix inner spacing,
+    # never strip space before "(" — that would break "architecture (JEPA)")
+    assert normalize_quote_for_pdf("the model (JEPA) here") == "the model (JEPA) here"
+    # normal prose and snake_case untouched
+    assert normalize_quote_for_pdf("self_supervised learning here") == "self_supervised learning here"
+
+
 def test_normalize_empty_string():
     assert normalize_quote_for_pdf("") == ""
     assert re_ligate_quote("") == ""

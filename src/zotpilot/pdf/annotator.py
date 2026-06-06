@@ -147,6 +147,11 @@ _HYPHEN_LINEBREAK_RE = re.compile(r"(\w)-\s*\n\s*(\w)")
 # intra-word "a*b" stay intact.
 _MD_EMPHASIS_RE = re.compile(r"`+|(?<![0-9A-Za-z])[*_]+|[*_]+(?![0-9A-Za-z])")
 _MD_LEADING_MARKER_RE = re.compile(r"^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
+# page_texts (pymupdf4llm) space out punctuation — "models , internal", "F ( x, y )",
+# "(JEPA) ." — while the PDF text layer attaches it ("models," "F(x," "(JEPA).").
+# Drop spaces BEFORE closing punctuation and AFTER opening brackets so quotes match.
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?%)\]}])")
+_SPACE_AFTER_OPEN_RE = re.compile(r"([(\[{])\s+")
 
 
 def normalize_quote_for_pdf(text: str) -> str:
@@ -158,6 +163,7 @@ def normalize_quote_for_pdf(text: str) -> str:
     - De-hyphenate line breaks: "meth-\nod" -> "method"
     - Apply ligature map (ﬁ→fi etc.)
     - Collapse whitespace
+    - Drop spaces around punctuation ("x , y ." -> "x, y.", "F ( x )" -> "F(x)")
     """
     if not text:
         return ""
@@ -169,6 +175,8 @@ def normalize_quote_for_pdf(text: str) -> str:
         out = out.replace(k, v)
     out = _normalize_ligatures(out)
     out = _WHITESPACE_RE.sub(" ", out).strip()
+    out = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", out)
+    out = _SPACE_AFTER_OPEN_RE.sub(r"\1", out)
     return out
 
 
