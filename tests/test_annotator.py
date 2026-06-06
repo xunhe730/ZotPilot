@@ -934,3 +934,46 @@ def test_verify_returns_error_on_missing_file(tmp_path: Path):
 def test_normalize_empty_string():
     assert normalize_quote_for_pdf("") == ""
     assert re_ligate_quote("") == ""
+
+
+def _pdf_with_text(blocks: list[tuple[float, str]]) -> pymupdf.Document:
+    """1-page in-memory PDF; each block = (textbox_width, text). A narrow width
+    forces long strings to wrap across multiple lines."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=320, height=480)
+    y = 30.0
+    for width, text in blocks:
+        page.insert_textbox(pymupdf.Rect(20, y, 20 + width, y + 190), text, fontsize=11)
+        y += 210.0
+    return doc
+
+
+def test_multiline_quote_is_placed_not_ambiguous():
+    # Regression: page.search_for(quads=True) returns one quad PER WRAPPED LINE,
+    # so a single sentence spanning 2+ lines must NOT be rejected as
+    # ambiguous_multi_match. Ambiguity is judged by true occurrence count.
+    sentence = (
+        "the joint embedding predictive architecture learns useful "
+        "representations from data without any contrastive training"
+    )
+    doc = _pdf_with_text([(170.0, sentence)])  # narrow box -> wraps to >1 line
+    spec = AnnotationSpec(
+        quote=sentence, dimension="thesis", comment="x",
+        page_hint=1, kind="highlight", subtype="dim",
+    )
+    reason = _place_single_annotation(doc, spec)
+    doc.close()
+    assert reason is None, f"multi-line quote should place, got {reason!r}"
+
+
+def test_genuinely_duplicated_quote_is_ambiguous():
+    # Flip side: a quote that truly occurs twice MUST still be ambiguous.
+    phrase = "the world model predicts the next state of the system"
+    doc = _pdf_with_text([(280.0, phrase), (280.0, phrase)])
+    spec = AnnotationSpec(
+        quote=phrase, dimension="concept", comment="x",
+        page_hint=1, kind="highlight", subtype="dim",
+    )
+    reason = _place_single_annotation(doc, spec)
+    doc.close()
+    assert reason == "ambiguous_multi_match", f"expected ambiguous, got {reason!r}"
