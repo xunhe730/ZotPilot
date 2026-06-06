@@ -147,7 +147,8 @@ claim↔evidence gaps and limitations.
 **Comment style — shapes how each `comment` reads (not what is covered):**
 - 结构化 / 要点 / `bullet` / `structured` → terse, label-led notes
   (`论点：…` / `证据：…`), one idea per comment.
-- 叙述 / `narrative` / `prose` → short flowing prose, 1–2 sentences.
+- 叙述 / `narrative` / `prose` → short flowing prose, 1–3 sentences (a novice
+  reader may need the upper end for the extra background).
 - 提问 / `socratic` / 启发 → end with a brief check question that nudges the
   reader to connect the point to the argument.
 - Default: clear explanatory prose.
@@ -234,7 +235,8 @@ Never duplicate-color the same text span across two dimensions.
 **Personalize within the budget (Step 2a) — reallocate, don't inflate:**
 - **Reading purpose** reallocates emphasis: keep each present dimension's one
   required annotation, then spend the remaining budget on the dimensions the
-  purpose emphasizes and trim de-emphasized ones to their minimum.
+  purpose emphasizes; trim de-emphasized ones to their minimum of ONE annotation
+  each — never to zero for a dimension the paper genuinely contains.
 - **Domain familiarity** sets how much background each `comment` carries
   (novice → orienting context; expert → novelty + critique).
 - **Comment style** sets how each `comment` is phrased (structured / narrative
@@ -295,8 +297,14 @@ judgment calls.
 - `page_hint` from the page where the sentence appears.
 
 ### 4d. 图 Figure
-For EVERY entry in `figures[]` (all are guaranteed to have `bbox` and
-`caption` from the extractor):
+Figures are part of the annotation budget — select which to annotate by the
+reading depth + purpose (Step 2a); do NOT auto-annotate all of them:
+- `速览` → only the 1–3 figures most central to the thesis / the reader's purpose.
+- `技术细节` → the figures bearing on method + evidence (复现 → method / setup
+  figures; 评审 → the evidence figures).
+- `全面综述` → every entry in `figures[]`.
+
+For each SELECTED figure (each has `bbox` and `caption` from the extractor):
 
 **Region note** (the primary anchor at the figure):
 - `kind="region"`, `subtype="figure"`.
@@ -340,7 +348,10 @@ For EVERY entry in `figures[]` (all are guaranteed to have `bbox` and
 - Use `kind="highlight"`, `subtype="equation"`.
 - Quote the SPECIFIC explanatory sentence that describes or derives the
   equation (the prose adjacent to the equation, not the equation glyphs
-  themselves). Choose a sentence ≥ 12 characters.
+  themselves). Choose a sentence ≥ 12 characters. Never quote a bare formula /
+  glyph string — extracted math rarely matches the PDF text layer and will fail
+  to anchor; quote the surrounding sentence and name the equation in the
+  `comment` instead.
 - `comment` = an explanation, in the annotation language, of what the equation
   means and how it connects to the argument.
 - Do NOT use `kind="region"` for equations — there is no extractor bbox.
