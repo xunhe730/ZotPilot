@@ -13,7 +13,7 @@ from .interfaces import EmbedderProtocol
 from .models import Chunk, StoredChunk
 
 if TYPE_CHECKING:
-    from .models import ExtractedTable
+    from .models import ExtractedFormula, ExtractedTable
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,10 @@ class IndexUnavailableError(Exception):
     are left 100% intact. The message is intentionally actionable and avoids
     implying user corruption.
     """
+
+
+class EmbeddingProviderUnavailableError(Exception):
+    """Raised when a vector write needs embeddings but no embedder is configured."""
 
 
 class VectorStore:
@@ -332,6 +336,54 @@ class VectorStore:
             embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
             self._guarded_add(ids, documents, embeddings, metadatas)
 
+    def add_formulas(
+        self,
+        doc_id: str,
+        doc_meta: dict,
+        formulas: list["ExtractedFormula"],
+    ) -> None:
+        """Add OCR-recognized formula chunks to the store."""
+        if not formulas:
+            return
+
+        ids = [
+            f"{doc_id}_formula_{formula.page_num:04d}_{formula.formula_index:03d}"
+            for formula in formulas
+        ]
+        documents = [formula.to_searchable_text() for formula in formulas]
+        if self.embedder is None or not hasattr(self.embedder, "embed"):
+            raise EmbeddingProviderUnavailableError(
+                "Formula indexing requires an embedding provider. "
+                "Configure embedding_provider before running formula OCR indexing."
+            )
+        embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
+
+        metadatas = []
+        for formula in formulas:
+            metadata = self._build_base_metadata(doc_id, doc_meta)
+            metadata.update({
+                "chunk_type": "formula",
+                "page_num": formula.page_num,
+                "chunk_index": -1,
+                "formula_index": formula.formula_index,
+                "latex": formula.latex,
+                "confidence": formula.confidence if formula.confidence is not None else -1.0,
+                "image_path": str(formula.image_path) if formula.image_path else "",
+                "source": formula.source,
+                "raw_text": formula.raw_text,
+                "reference_context": formula.reference_context or "",
+                "section": "formula",
+                "section_confidence": 1.0,
+            })
+            metadatas.append(metadata)
+
+        self.collection.add(
+            ids=ids,
+            documents=documents,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
+
     def _cached_embed_query(self, query: str) -> list[float]:
         """Embed a query, returning cached result if available."""
         if query in self._query_cache:
@@ -431,13 +483,23 @@ class VectorStore:
         """Remove all chunks for a document."""
         self.collection.delete(where={"doc_id": {"$eq": doc_id}})
 
+    def delete_chunks_by_type(self, doc_id: str, chunk_type: str) -> None:
+        """Remove only one chunk type for a document."""
+        self.collection.delete(where={
+            "$and": [
+                {"doc_id": {"$eq": doc_id}},
+                {"chunk_type": {"$eq": chunk_type}},
+            ]
+        })
+
     def get_indexed_doc_ids(self) -> set[str]:
         """Get set of all indexed document IDs.
 
         Memory-efficient: extracts doc_id from chunk IDs without loading metadata.
         Handles text chunks ({doc_id}_chunk_{index:04d}),
         table chunks ({doc_id}_table_{page:04d}_{table_idx:02d}),
-        and figure chunks ({doc_id}_fig_{page:03d}_{fig_idx:02d}).
+        figure chunks ({doc_id}_fig_{page:03d}_{fig_idx:02d}),
+        and formula chunks ({doc_id}_formula_{page:04d}_{formula_idx:03d}).
         """
         results = self.collection.get(include=[])  # IDs only, no documents/metadata
         if not results['ids']:
@@ -459,6 +521,8 @@ class VectorStore:
             parts = chunk_id.rsplit('_table_', 1)
         elif '_fig_' in chunk_id:
             parts = chunk_id.rsplit('_fig_', 1)
+        elif '_formula_' in chunk_id:
+            parts = chunk_id.rsplit('_formula_', 1)
         else:
             return None
         return parts[0] if len(parts) == 2 else None

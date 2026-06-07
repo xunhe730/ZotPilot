@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from zotpilot.models import RetrievalResult, ZoteroItem
+from zotpilot.models import RetrievalResult, StoredChunk, ZoteroItem
+from zotpilot.result_utils import _stored_chunk_to_retrieval_result
 
 
 def _make_rr(doc_id="DOC1", chunk_index=0, score=0.9, composite_score=0.8, text="some text"):
@@ -94,6 +95,90 @@ class TestSearchPapers:
         from zotpilot.tools.search import search_papers
         with pytest.raises(Exception, match="Invalid chunk_types"):
             search_papers(query="test", chunk_types=["invalid_type"])
+
+    def test_accepts_formula_chunk_type(self, mock_singletons):
+        from zotpilot.tools.search import search_papers
+
+        result = _make_rr(text=r"Formula on page 1\nLaTeX: \sigma = E\varepsilon")
+        result.chunk_type = "formula"
+        result.formula_index = 0
+        result.latex = r"\sigma = E\varepsilon"
+        result.confidence = 0.95
+        result.image_path = "formula.png"
+        results = [result]
+        mock_singletons["retriever"].search.return_value = results
+        mock_singletons["reranker"].rerank.return_value = results
+
+        output = search_papers(query="constitutive equation", chunk_types=["formula"])
+
+        assert len(output) == 1
+        assert output[0]["display_formula"] == "$$\n\\sigma = E\\varepsilon\n$$"
+        assert output[0]["image_path"] == "formula.png"
+        mock_singletons["retriever"].search.assert_called_once()
+        assert mock_singletons["retriever"].search.call_args.kwargs["filters"] == {
+            "chunk_type": {"$eq": "formula"}
+        }
+
+    def test_stored_formula_chunk_preserves_formula_metadata(self):
+        chunk = StoredChunk(
+            id="DOC1_formula_0001_000",
+            text=r"Formula on page 1\nLaTeX: \sigma = E\varepsilon",
+            score=0.91,
+            metadata={
+                "doc_id": "DOC1",
+                "doc_title": "Test Paper",
+                "page_num": 1,
+                "chunk_index": -1,
+                "chunk_type": "formula",
+                "formula_index": 0,
+                "latex": r"\sigma = E\varepsilon",
+                "confidence": 0.95,
+                "image_path": "formula.png",
+            },
+        )
+
+        result = _stored_chunk_to_retrieval_result(chunk)
+
+        assert result.chunk_type == "formula"
+        assert result.latex == r"\sigma = E\varepsilon"
+        assert result.image_path == "formula.png"
+
+    def test_section_type_formulas_dispatches_to_formula_search(self, mock_singletons):
+        from zotpilot.tools.search import search_papers
+
+        mock_singletons["store"].search.return_value = [
+            StoredChunk(
+                id="DOC1_formula_0001_000",
+                text=r"Formula on page 1\nLaTeX: \sigma = E\varepsilon",
+                score=0.91,
+                metadata={
+                    "doc_id": "DOC1",
+                    "doc_title": "Test Paper",
+                    "year": 2021,
+                    "page_num": 1,
+                    "formula_index": 0,
+                    "latex": r"\sigma = E\varepsilon",
+                    "confidence": 0.95,
+                    "image_path": "formula.png",
+                    "authors": "Smith, J.",
+                    "tags": "",
+                    "collections": "",
+                    "chunk_type": "formula",
+                },
+            )
+        ]
+
+        output = search_papers(
+            query="stress strain formula",
+            top_k=5,
+            section_type="formulas",
+            verbosity="standard",
+        )
+
+        assert output[0]["display_formula"] == "$$\n\\sigma = E\\varepsilon\n$$"
+        assert output[0]["latex"] == r"\sigma = E\varepsilon"
+        assert output[0]["confidence"] == 0.95
+        assert output[0]["formula_index"] == 0
 
     def test_empty_results(self, mock_singletons):
         from zotpilot.tools.search import search_papers

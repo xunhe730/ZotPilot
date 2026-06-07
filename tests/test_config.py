@@ -20,6 +20,16 @@ def _use_local_secrets(monkeypatch, tmp_path: Path) -> None:
         "ZOTERO_USER_ID",
         "OPENALEX_EMAIL",
         "S2_API_KEY",
+        "SIMPLETEX_UAT",
+        "SIMPLETEX_API_KEY",
+        "SIMPLETEX_APP_ID",
+        "SIMPLETEX_APP_SECRET",
+        "OPENAI_COMPATIBLE_API_KEY",
+        "SILICONFLOW_API_KEY",
+        "OPENAI_COMPATIBLE_EMBEDDING_API_KEY",
+        "SILICONFLOW_EMBEDDING_API_KEY",
+        "OPENAI_COMPATIBLE_VISION_API_KEY",
+        "SILICONFLOW_VISION_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ZOTPILOT_SECRET_BACKEND", "local-file")
@@ -35,6 +45,9 @@ class TestConfigLoadDefaults:
         assert cfg.dashscope_embedding_endpoint == "compatible"
         assert cfg.vision_provider == "anthropic"
         assert cfg.vision_model == "claude-haiku-4-5-20251001"
+        assert cfg.formula_ocr_enabled is False
+        assert cfg.formula_ocr_provider == "simpletex"
+        assert cfg.formula_ocr_max_formulas_per_doc == 0
         assert cfg.gemini_api_key is None
         assert cfg.zotero_api_key is None
         assert cfg.zotero_user_id is None
@@ -282,7 +295,6 @@ class TestConfigValidation:
 
         assert any("Invalid dashscope_embedding_endpoint" in e for e in errors)
 
-
 class TestOpenAICompatConfigSchema:
     """Phase 2: openai-compatible Config fields, back-compat, validation."""
 
@@ -515,3 +527,28 @@ class TestGeminiBaseUrlValidation:
         errors = cfg.validate()
 
         assert not any("gemini_base_url" in e for e in errors)
+
+    def test_validate_formula_ocr_requires_credentials_when_enabled(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        cfg.zotero_data_dir = tmp_path
+        (tmp_path / "zotero.sqlite").touch()
+        cfg.embedding_provider = "local"
+        cfg.formula_ocr_enabled = True
+
+        errors = cfg.validate()
+
+        assert any("SimpleTex credentials not set" in e for e in errors)
+
+    def test_validate_formula_ocr_accepts_uat_token(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg = Config.load(path=tmp_path / "nonexistent.json")
+        cfg.zotero_data_dir = tmp_path
+        (tmp_path / "zotero.sqlite").touch()
+        cfg.embedding_provider = "local"
+        cfg.formula_ocr_enabled = True
+        cfg.formula_ocr_api_key = "uat-token"
+
+        errors = cfg.validate()
+
+        assert not any("SimpleTex credentials not set" in e for e in errors)

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_DEFAULT_VISION_MODEL = "claude-haiku-4-5-20251001"
 DASHSCOPE_DEFAULT_VISION_MODEL = "qwen3-vl-flash"
+SIMPLETEX_DEFAULT_FORMULA_ENDPOINT = "https://server.simpletex.cn/api/latex_ocr"
 
 
 def _default_config_dir() -> Path:
@@ -116,6 +117,16 @@ class Config:
     # so no non-default field follows -- keeps dataclass field ordering valid)
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
+    # Formula OCR settings (disabled by default to avoid consuming paid quota)
+    formula_ocr_enabled: bool = False
+    formula_ocr_provider: str = "simpletex"
+    formula_ocr_api_key: str | None = None  # SimpleTex UAT token
+    formula_ocr_endpoint: str = SIMPLETEX_DEFAULT_FORMULA_ENDPOINT
+    formula_ocr_max_formulas_per_doc: int = 0  # 0 = no explicit per-document cap
+    formula_ocr_min_confidence: float = 0.0
+    formula_ocr_request_interval_seconds: float = 0.55
+    simpletex_app_id: str | None = None
+    simpletex_app_secret: str | None = None
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -197,6 +208,21 @@ class Config:
             semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
             embedding_base_url=data.get("embedding_base_url", None),
             embedding_api_key=data.get("embedding_api_key", None),
+            formula_ocr_enabled=data.get("formula_ocr_enabled", False),
+            formula_ocr_provider=data.get("formula_ocr_provider", "simpletex"),
+            formula_ocr_api_key=data.get("formula_ocr_api_key"),
+            formula_ocr_endpoint=data.get(
+                "formula_ocr_endpoint",
+                SIMPLETEX_DEFAULT_FORMULA_ENDPOINT,
+            ),
+            formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 0),
+            formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.0),
+            formula_ocr_request_interval_seconds=data.get(
+                "formula_ocr_request_interval_seconds",
+                0.55,
+            ),
+            simpletex_app_id=data.get("simpletex_app_id"),
+            simpletex_app_secret=data.get("simpletex_app_secret"),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -246,6 +272,15 @@ class Config:
             "semantic_scholar_api_key": self.semantic_scholar_api_key,
             "embedding_base_url": self.embedding_base_url,
             "embedding_api_key": self.embedding_api_key,
+            "formula_ocr_enabled": self.formula_ocr_enabled,
+            "formula_ocr_provider": self.formula_ocr_provider,
+            "formula_ocr_api_key": self.formula_ocr_api_key,
+            "formula_ocr_endpoint": self.formula_ocr_endpoint,
+            "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
+            "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
+            "formula_ocr_request_interval_seconds": self.formula_ocr_request_interval_seconds,
+            "simpletex_app_id": self.simpletex_app_id,
+            "simpletex_app_secret": self.simpletex_app_secret,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -337,6 +372,22 @@ class Config:
                 )
             elif not parsed.netloc:
                 errors.append(f"gemini_base_url is malformed: {self.gemini_base_url}")
+
+        if self.formula_ocr_provider != "simpletex":
+            errors.append("Invalid formula_ocr_provider: must be 'simpletex'")
+        if self.formula_ocr_enabled and not (
+            self.formula_ocr_api_key or (self.simpletex_app_id and self.simpletex_app_secret)
+        ):
+            errors.append(
+                "SimpleTex credentials not set "
+                "(formula_ocr_api_key or simpletex_app_id/simpletex_app_secret required)"
+            )
+        if self.formula_ocr_max_formulas_per_doc < 0:
+            errors.append("formula_ocr_max_formulas_per_doc must be >= 0")
+        if not 0.0 <= self.formula_ocr_min_confidence <= 1.0:
+            errors.append("formula_ocr_min_confidence must be between 0.0 and 1.0")
+        if self.formula_ocr_request_interval_seconds < 0:
+            errors.append("formula_ocr_request_interval_seconds must be >= 0")
 
         return errors
 

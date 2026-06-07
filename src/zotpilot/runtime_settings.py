@@ -13,16 +13,29 @@ from .secret_store import describe_backend, get_secret
 SECRET_FIELDS: tuple[str, ...] = (
     "gemini_api_key",
     "dashscope_api_key",
+    "openai_compatible_api_key",
+    "embedding_api_key",
+    "vision_api_key",
     "anthropic_api_key",
     "zotero_api_key",
     "semantic_scholar_api_key",
-    "embedding_api_key",
+    "formula_ocr_api_key",
+    "simpletex_app_id",
+    "simpletex_app_secret",
 )
 
 ENV_TO_FIELD: dict[str, str] = {
     "GEMINI_API_KEY": "gemini_api_key",
     "GEMINI_BASE_URL": "gemini_base_url",
     "DASHSCOPE_API_KEY": "dashscope_api_key",
+    "OPENAI_COMPATIBLE_API_KEY": "openai_compatible_api_key",
+    "SILICONFLOW_API_KEY": "openai_compatible_api_key",
+    "OPENAI_COMPATIBLE_EMBEDDING_API_KEY": "embedding_api_key",
+    "SILICONFLOW_EMBEDDING_API_KEY": "embedding_api_key",
+    "OPENAI_COMPATIBLE_VISION_API_KEY": "vision_api_key",
+    "SILICONFLOW_VISION_API_KEY": "vision_api_key",
+    "OPENAI_COMPATIBLE_BASE_URL": "openai_compatible_base_url",
+    "SILICONFLOW_BASE_URL": "openai_compatible_base_url",
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "ZOTERO_API_KEY": "zotero_api_key",
     "ZOTERO_USER_ID": "zotero_user_id",
@@ -32,6 +45,10 @@ ENV_TO_FIELD: dict[str, str] = {
     # over the generic OPENAI_API_KEY (it is listed last so it wins the loop).
     "OPENAI_API_KEY": "embedding_api_key",
     "ZOTPILOT_EMBEDDING_API_KEY": "embedding_api_key",
+    "SIMPLETEX_UAT": "formula_ocr_api_key",
+    "SIMPLETEX_API_KEY": "formula_ocr_api_key",
+    "SIMPLETEX_APP_ID": "simpletex_app_id",
+    "SIMPLETEX_APP_SECRET": "simpletex_app_secret",
 }
 
 

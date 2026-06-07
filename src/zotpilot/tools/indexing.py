@@ -36,6 +36,16 @@ def _parse_json_string_list(value: Any) -> Any:
     return value
 
 
+def _validate_item_keys_param(value: Any, *, name: str = "item_keys") -> list[str] | None:
+    """Return item keys after JSON coercion, rejecting scalar strings."""
+    value = _parse_json_string_list(value)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+        raise ToolError(f"{name} must be a list of item key strings or a JSON array of strings.")
+    return value
+
+
 def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
     """Return unindexed Zotero papers and their total count."""
     zotero = _get_zotero()
@@ -221,6 +231,7 @@ def index_library(
     if not _index_lock.acquire(blocking=False):
         raise ToolError("Indexing in progress, please wait.")
     lease = None
+    lease_acquired = False
     try:
         from dataclasses import replace as dc_replace
 
@@ -228,7 +239,7 @@ def index_library(
 
         # Direct Python callers can still bypass FastMCP/Pydantic dispatch, so
         # keep the same string->list coercion here for consistency.
-        item_keys = _parse_json_string_list(item_keys)
+        item_keys = _validate_item_keys_param(item_keys)
 
         _config = _get_config()
 
@@ -248,6 +259,7 @@ def index_library(
         # Acquire mutual-exclusion lease
         try:
             acquire_lease(lease)
+            lease_acquired = True
         except LeaseContentionError as e:
             raise ToolError(str(e))
 
@@ -357,7 +369,111 @@ def index_library(
 
         return response
     finally:
-        if lease is not None:
+        if lease is not None and lease_acquired:
+            release_lease(lease)
+        _index_lock.release()
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def index_formulas(
+    item_key: Annotated[str | None, Field(description="Add or refresh formula chunks for this item key")] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Add or refresh formula chunks for these item keys"),
+    ] = None,
+    limit: Annotated[int, Field(description="Max papers to process when no item key is given", ge=1, le=50)] = 5,
+    refresh_existing: Annotated[
+        bool,
+        Field(description="Delete existing formula chunks for each target paper before writing new formula chunks"),
+    ] = True,
+) -> dict:
+    """Backfill only formula chunks. Existing text, table, and figure chunks are left untouched."""
+    if not _index_lock.acquire(blocking=False):
+        raise ToolError("Indexing in progress, please wait.")
+    lease = None
+    lease_acquired = False
+    try:
+        from ..indexer import Indexer
+
+        item_keys = _validate_item_keys_param(item_keys)
+        _config = _get_config()
+        if not _config.formula_ocr_enabled:
+            raise ToolError("Formula OCR is disabled. Set formula_ocr_enabled=true before calling index_formulas.")
+
+        errors = _config.validate()
+        if errors:
+            raise ToolError(f"Config errors: {'; '.join(errors)}")
+
+        index_data_root = Path(_config.chroma_db_path).parent
+        lease = IndexLease(index_data_root / "index_lease.json")
+        try:
+            acquire_lease(lease)
+            lease_acquired = True
+        except LeaseContentionError as e:
+            raise ToolError(str(e))
+
+        zotero = _get_zotero()
+        all_items = [item for item in zotero.get_all_items_with_pdfs() if item.pdf_path and item.pdf_path.exists()]
+        by_key = {item.item_key: item for item in all_items}
+
+        requested_keys: list[str] = []
+        if item_key:
+            requested_keys.append(item_key)
+        if item_keys:
+            requested_keys.extend(str(key) for key in item_keys)
+
+        missing_keys: list[str] = []
+        if requested_keys:
+            seen: set[str] = set()
+            target_items = []
+            for key in requested_keys:
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = by_key.get(key)
+                if item is None:
+                    missing_keys.append(key)
+                    continue
+                target_items.append(item)
+        else:
+            target_items = all_items[:limit]
+
+        indexer = Indexer(_config)
+        results = []
+        total_formulas = 0
+        failed = 0
+        for item in target_items:
+            try:
+                n_formulas = indexer.index_formula_chunks(item, refresh_existing=refresh_existing)
+                total_formulas += n_formulas
+                results.append({
+                    "item_key": item.item_key,
+                    "title": item.title,
+                    "status": "indexed",
+                    "n_formulas": n_formulas,
+                })
+            except Exception as exc:
+                failed += 1
+                results.append({
+                    "item_key": item.item_key,
+                    "title": item.title,
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                })
+
+        _get_store().clear_query_cache()
+        return {
+            "results": results,
+            "processed": len(target_items),
+            "failed": failed,
+            "formula_chunks": total_formulas,
+            "missing_item_keys": missing_keys,
+            "refresh_existing": refresh_existing,
+            "notice": "Formula-only backfill completed; existing text/table/figure chunks were not deleted.",
+        }
+    finally:
+        if lease is not None and lease_acquired:
             release_lease(lease)
         _index_lock.release()
 
