@@ -762,15 +762,39 @@ def cmd_index(args):
     except Exception:
         pass
 
-    indexer = Indexer(config)
-    result = indexer.index_all(
-        force_reindex=args.force,
-        limit=args.limit,
-        item_key=args.item_key,
-        title_pattern=args.title,
-        max_pages=max_pages,
-        batch_size=batch_size,
+    # Acquire the cross-process indexing lease (same as the MCP path) so a CLI
+    # run can't write the Chroma collection concurrently with another indexer —
+    # concurrent writers corrupt the index (the P0 class this lease guards).
+    from .index_authority import (
+        IndexJournal,
+        IndexLease,
+        LeaseContentionError,
+        acquire_lease,
+        release_lease,
     )
+
+    index_data_root = Path(config.chroma_db_path).parent
+    journal = IndexJournal(index_data_root / "index_journal.json")
+    lease = IndexLease(index_data_root / "index_lease.json")
+    try:
+        acquire_lease(lease)
+    except LeaseContentionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    indexer = Indexer(config)
+    try:
+        result = indexer.index_all(
+            force_reindex=args.force,
+            limit=args.limit,
+            item_key=args.item_key,
+            title_pattern=args.title,
+            max_pages=max_pages,
+            batch_size=batch_size,
+            journal=journal,
+        )
+    finally:
+        release_lease(lease)
 
     print("\nIndexing complete:")
     print(f"  Indexed:         {result['indexed']}")

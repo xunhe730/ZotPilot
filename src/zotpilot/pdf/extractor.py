@@ -80,9 +80,12 @@ def _should_run_full_document_ocr(
 _NATIVE_FLOOR_FRACTION = 0.5
 _NATIVE_FLOOR_MIN_CHARS = 200  # only second-guess pymupdf4llm when native is substantial
 _NATIVE_FFFD_FRACTION = 0.005  # >0.5% replacement chars introduced by pymupdf4llm (not in native)
+_OCR_MIN_CHARS_PER_PAGE = 50  # below this per page, text is "near-empty" in absolute terms
 
 
-def _should_prefer_native(md_chars: int, native_total: int, md_fffd: int = 0, native_fffd: int = 0) -> bool:
+def _should_prefer_native(
+    md_chars: int, native_total: int, page_count: int, md_fffd: int = 0, native_fffd: int = 0
+) -> bool:
     """True when the native text layer is clearly better than pymupdf4llm's output.
 
     Two failure modes, both caused by pymupdf4llm's over-eager internal OCR:
@@ -93,8 +96,13 @@ def _should_prefer_native(md_chars: int, native_total: int, md_fffd: int = 0, na
     ~empty) are still left to the gated OCR fallback."""
     if native_total <= _NATIVE_FLOOR_MIN_CHARS:
         return False
-    if md_chars < _NATIVE_FLOOR_FRACTION * native_total:
+    # (1) Require BOTH a small fraction of native AND near-empty in absolute terms,
+    # so legitimately header/footer/reference-stripped markdown (which stays
+    # substantial) is NOT discarded — only an actual clobber-to-near-empty is.
+    near_empty_abs = md_chars < _OCR_MIN_CHARS_PER_PAGE * max(page_count, 1)
+    if md_chars < _NATIVE_FLOOR_FRACTION * native_total and near_empty_abs:
         return True
+    # (2) introduced garble
     if native_fffd == 0 and md_chars > 0 and (md_fffd / md_chars) > _NATIVE_FFFD_FRACTION:
         return True
     return False
@@ -387,7 +395,6 @@ def extract_document(
         page_chunks = _native_page_chunks(native_texts)
     markdown_elapsed = time.perf_counter() - markdown_started
 
-    _OCR_MIN_CHARS_PER_PAGE = 50
     total_chars = sum(len(chunk.get("text", "").strip()) for chunk in page_chunks)
 
     # pymupdf4llm's internal OCR can clobber a good native layer (near-empty) or
@@ -396,7 +403,7 @@ def extract_document(
     # genuinely-scanned PDFs (native ~empty) still flow to the gated OCR fallback.
     md_fffd = sum(chunk.get("text", "").count("�") for chunk in page_chunks)
     native_fffd = sum(t.count("�") for t in native_texts)
-    if _should_prefer_native(total_chars, native_total, md_fffd, native_fffd):
+    if _should_prefer_native(total_chars, native_total, len(page_chunks), md_fffd, native_fffd):
         logger.warning(
             "pymupdf4llm output worse than native for %s (chars %d vs %d, fffd %d vs %d); using native",
             pdf_path.name, total_chars, native_total, md_fffd, native_fffd,

@@ -36,19 +36,24 @@ class TestNativeFloor:
     output; we fall back to native text when it under-extracts."""
 
     def test_prefers_native_when_md_clobbered(self):
-        # to_markdown returned 0 chars but native layer has 5037 → use native
-        assert _should_prefer_native(md_chars=0, native_total=5037) is True
-        assert _should_prefer_native(md_chars=50, native_total=5037) is True
+        # to_markdown returned ~0 chars but native layer has 5037 → use native
+        assert _should_prefer_native(md_chars=0, native_total=5037, page_count=3) is True
+        assert _should_prefer_native(md_chars=50, native_total=5037, page_count=3) is True
 
     def test_keeps_markdown_when_comparable(self):
         # to_markdown stripped headers/footers but kept most text → keep markdown
-        assert _should_prefer_native(md_chars=4000, native_total=5000) is False
-        assert _should_prefer_native(md_chars=2600, native_total=5000) is False  # 52% > 50%
+        assert _should_prefer_native(md_chars=4000, native_total=5000, page_count=10) is False
+        assert _should_prefer_native(md_chars=2600, native_total=5000, page_count=10) is False  # 52% > 50%
+
+    def test_keeps_markdown_when_legitimately_stripped(self):
+        # md is <50% of raw native (headers/footers/refs stripped) BUT still
+        # substantial in absolute terms → NOT a clobber; keep structured markdown.
+        assert _should_prefer_native(md_chars=3000, native_total=7000, page_count=10) is False
 
     def test_does_not_fire_for_scanned_pdf(self):
         # native layer itself near-empty (scanned) → leave to the gated OCR fallback
-        assert _should_prefer_native(md_chars=10, native_total=150) is False
-        assert _should_prefer_native(md_chars=0, native_total=0) is False
+        assert _should_prefer_native(md_chars=10, native_total=150, page_count=5) is False
+        assert _should_prefer_native(md_chars=0, native_total=0, page_count=5) is False
 
     def test_native_page_chunks_shape(self):
         chunks = _native_page_chunks(["page one", "page two"])
@@ -65,15 +70,15 @@ class TestNativeFloorGarble:
 
     def test_prefers_native_when_md_injects_garble(self):
         # native clean (0 fffd), md introduced 278 fffd over 11001 chars (2.5%)
-        assert _should_prefer_native(md_chars=11001, native_total=10177, md_fffd=278, native_fffd=0) is True
+        assert _should_prefer_native(11001, 10177, 20, md_fffd=278, native_fffd=0) is True
 
     def test_keeps_markdown_when_few_stray_fffd(self):
         # a couple stray replacement chars (<0.5%) is not worth losing structure
-        assert _should_prefer_native(md_chars=11000, native_total=10000, md_fffd=5, native_fffd=0) is False
+        assert _should_prefer_native(11000, 10000, 20, md_fffd=5, native_fffd=0) is False
 
     def test_keeps_markdown_when_native_also_garbled(self):
         # native layer itself has replacement chars (genuine bad font) -> no gain
-        assert _should_prefer_native(md_chars=11000, native_total=10000, md_fffd=300, native_fffd=250) is False
+        assert _should_prefer_native(11000, 10000, 20, md_fffd=300, native_fffd=250) is False
 
 
 class TestInternalOcrDisabled:
