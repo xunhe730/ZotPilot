@@ -74,3 +74,27 @@ class TestNativeFloorGarble:
     def test_keeps_markdown_when_native_also_garbled(self):
         # native layer itself has replacement chars (genuine bad font) -> no gain
         assert _should_prefer_native(md_chars=11000, native_total=10000, md_fffd=300, native_fffd=250) is False
+
+
+class TestInternalOcrDisabled:
+    """The internal-OCR disable must patch get_textpage_ocr and always restore it."""
+
+    def test_patches_then_restores(self):
+        import pymupdf
+
+        from zotpilot.pdf.extractor import _internal_ocr_disabled
+        orig = pymupdf.Page.get_textpage_ocr
+        with _internal_ocr_disabled():
+            assert pymupdf.Page.get_textpage_ocr is not orig
+        assert pymupdf.Page.get_textpage_ocr is orig
+
+    def test_restores_on_exception(self):
+        import pymupdf
+        import pytest
+
+        from zotpilot.pdf.extractor import _internal_ocr_disabled
+        orig = pymupdf.Page.get_textpage_ocr
+        with pytest.raises(ValueError):
+            with _internal_ocr_disabled():
+                raise ValueError("boom")
+        assert pymupdf.Page.get_textpage_ocr is orig

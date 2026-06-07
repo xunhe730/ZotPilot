@@ -5,6 +5,7 @@ ML-based layout detection (tables, figures, headers, footers, OCR).
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from collections import defaultdict
@@ -97,6 +98,31 @@ def _should_prefer_native(md_chars: int, native_total: int, md_fffd: int = 0, na
     if native_fffd == 0 and md_chars > 0 and (md_fffd / md_chars) > _NATIVE_FFFD_FRACTION:
         return True
     return False
+
+
+@contextlib.contextmanager
+def _internal_ocr_disabled():
+    """Disable pymupdf4llm's internal per-page OCR for one to_markdown call.
+
+    pymupdf4llm OCRs pages its heuristic deems "photo-like", but on many PDFs
+    (especially CJK) those pages have a perfectly good text layer — the OCR is
+    slow, uses the wrong language, and its Tesseract calls can abort a long run.
+    We discard that OCR output anyway (see the native-floor below), so we make
+    the OCR a no-op here: get_textpage_ocr raises, pymupdf4llm yields empty for
+    that page, and the native-floor falls back to the clean native text. Docs
+    that never trigger OCR are unaffected. The real OCR path is restored on exit
+    so the gated OCR fallback (for genuinely-scanned PDFs) still works.
+    """
+    orig = pymupdf.Page.get_textpage_ocr
+
+    def _disabled(*_args, **_kwargs):
+        raise RuntimeError("zotpilot: pymupdf4llm internal OCR disabled")
+
+    pymupdf.Page.get_textpage_ocr = _disabled  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        pymupdf.Page.get_textpage_ocr = orig  # type: ignore[method-assign]
 
 
 def _native_page_chunks(native_texts: list[str]) -> list[dict]:
@@ -351,7 +377,8 @@ def extract_document(
 
     markdown_started = time.perf_counter()
     try:
-        page_chunks: list[dict] = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
+        with _internal_ocr_disabled():
+            page_chunks: list[dict] = pymupdf4llm.to_markdown(str(pdf_path), **kwargs)
     except Exception as e:
         logger.warning(
             "pymupdf4llm.to_markdown failed for %s (%s); falling back to native text",
