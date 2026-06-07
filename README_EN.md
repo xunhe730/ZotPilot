@@ -42,6 +42,21 @@
 
 ---
 
+## v0.5.1 — Deep Reading · Flexible Embeddings · Safer Indexing
+
+**`/ztp-tutor` deep reading**: have the agent read one paper from your library and write **per-sentence notes** — long-sentence translations, term explanations, methodology commentary — together with 5-dimension color highlights and figure/table annotations **directly into the Zotero PDF**, read side-by-side in place, like a tutor that unpacks the whole paper for you, fully local. Annotation language / depth follow your reading persona (with none, the agent asks first); the original PDF is backed up before any write.
+
+<div align="center">
+  <img src="assets/ztp-tutor-demo.png" alt="Color highlights and per-sentence notes ztp-tutor writes into the Zotero PDF" width="100%">
+  <br><sub>Highlights and per-sentence notes written straight into the Zotero PDF, viewed in place in the reader</sub>
+</div>
+
+**Flexible embeddings**: a new generic OpenAI-compatible embedding provider, with built-in configs for SiliconFlow, Zhipu GLM, Ollama, and more — or point it at any endpoint with a custom model and dimensions.
+
+**Safer, more accurate indexing**: automatic rate-limit retry, a cross-process lock, a source-level fix for a class of CJK PDF garble (pymupdf4llm's internal OCR misfiring), cached vision results to avoid re-paying, and a new `doctor --recover-index` to rebuild the index at zero embedding cost.
+
+---
+
 ## v0.5.0 — Research Workflow
 
 The main change in this release: agents can now actually collect papers for you, not just search what's already in your library.
@@ -50,7 +65,7 @@ The new **Connector browser extension** lets the agent save papers through your 
 
 The full research workflow runs with `/ztp-research`: OpenAlex search, candidate confirmation, Connector ingestion, auto-tagging and filing, per-paper report. The agent handles each step in sequence.
 
-This release also trims the tool count from 33 to 18, fixes a range of edge-case bugs, and hardens incremental indexing so it correctly resumes from where it stopped after an interruption.
+This release also restructures and trims the MCP tool set (a three-layer design; deprecated aliases stay until v0.6.0), fixes a range of edge-case bugs, and hardens incremental indexing so it correctly resumes from where it stopped after an interruption.
 
 ---
 
@@ -62,7 +77,7 @@ zotpilot setup                 # interactive config + skill deploy + MCP registe
 # Restart your AI client
 ```
 
-Then tell your agent "search my library for X" or "survey recent papers on Y". It will chain 18 MCP tools and 4 packaged skills to complete the job.
+Then tell your agent "search my library for X" or "survey recent papers on Y". It will chain 20 MCP tools and 5 packaged skills to complete the job.
 
 **Prerequisites**: [Zotero 8](https://www.zotero.org/download/) installed and launched at least once · Python 3.10+ · a supported AI agent client (Claude Code / Codex / OpenCode). The ingestion workflow also needs the [Connector browser extension](#install-details).
 
@@ -76,18 +91,19 @@ ZotPilot has three parts:
 
 | Component | Role |
 |------|------|
-| **MCP Server** | 18 atomic tools for semantic search, citation graph, ingestion, and library management |
+| **MCP Server** | ~20 atomic tools for semantic search, citation graph, ingestion, deep-reading annotation, and library management |
 | **Connector** | Chrome extension; the agent saves papers through your real browser session and keeps institution-access PDFs |
 | **Agent Skills** | Chain the tools into complete research workflows instead of isolated calls |
 
-### Four skills covering the research flow
+### Five skills covering the research flow
 
 | Skill | What it does |
 |-------|--------------|
 | `ztp-research` | Local library + OpenAlex search → candidate confirmation → Connector ingest → auto tag & collection → per-paper report |
 | `ztp-review` | Review, cluster, compare, and draft from papers already in your library |
+| `ztp-tutor` | Deep-read one paper: 5-dimension highlights + per-sentence notes + figure/table annotations written straight into the Zotero PDF (language / depth follow your reading persona; with none, the agent asks first); auto-backup before any write, reversible |
 | `ztp-profile` | Profile your library structure: topics, venue tiers, time span, tag usage |
-| `ztp-setup` | Guides the agent to call `zotpilot setup` / `upgrade` / `doctor` for installation, updates, and troubleshooting. It is not a CLI command |
+| `ztp-setup` | Guides the agent to call `zotpilot setup` / `upgrade` / `doctor` for installation, updates, and troubleshooting (it is not a CLI command) |
 
 ### Five core capabilities
 
@@ -118,84 +134,38 @@ What is different: ingestion uses a real browser session and Zotero translators,
 ## Install details
 
 <details>
-<summary><b>Embedding provider selection</b></summary>
+<summary><b>Embedding model selection</b></summary>
 
-| Provider | Experience | Offline | Get API key |
-|----------|------|:---:|-------------|
-| Gemini | High-quality default | ✗ | [Google AI Studio](https://aistudio.google.com/apikey) |
-| DashScope | Better fit for China networks | ✗ | [Alibaba Bailian](https://bailian.console.aliyun.com/) |
-| Local | Good enough baseline | ✓ | Not required |
-| OpenAI-compatible | Generic: any OpenAI-compatible embedding endpoint (SiliconFlow / Zhipu·GLM / Ollama / vLLM / self-hosted) | Depends on endpoint | Per vendor (local Ollama needs none) |
+`zotpilot setup` is two layers: pick a **vendor**, then a **model** (the recommended one is pre-selected — just press Enter). Cloud, local, and self-hosted endpoints share one runtime, so you can switch by cost / privacy / network freely. `siliconflow` / `zhipu` / `ollama` / `custom` all use the generic `openai-compatible` path, differing only by `base_url`.
 
-> Avoid switching after the first index. Dimensions differ, so a switch requires `zotpilot index --force`.
-> Selecting `local` only switches ZotPilot into local-embedding mode. The local model is downloaded on the first real embedding call, not during `setup`.
+| vendor (alias) | runtime provider | recommended model · dims | base_url | key |
+|---|---|---|---|:---:|
+| `google` (`gemini`) | gemini | `gemini-embedding-001` · 768 | — | ✓ |
+| `dashscope` | dashscope | `text-embedding-v4` · 1024 | — | ✓ |
+| `local` | local | `all-MiniLM-L6-v2` · 384 | — | ✗ |
+| `siliconflow` | openai-compatible | `BAAI/bge-m3` · 1024 | `…siliconflow.cn/v1` | ✓ |
+| `zhipu` | openai-compatible | `embedding-3` · 2048 | `…bigmodel.cn/api/paas/v4` | ✓ |
+| `ollama` | openai-compatible | `nomic-embed-text` · 768 | `localhost:11434/v1` | ✗ |
+| `custom` | openai-compatible | you supply model + dims | you supply | endpoint-dependent |
 
-For `openai-compatible`, set `embedding_base_url` to the vendor's OpenAI-compatible **root** (usually ends in `/v1`, but GLM uses `/api/paas/v4`) and you **must** set `embedding_dimensions` explicitly — it is never auto-detected, and a wrong value corrupts the index. Example configs:
+- **SiliconFlow** also offers `Qwen/Qwen3-Embedding-0.6B` (1024) and `Qwen/Qwen3-Embedding-8B` (2048).
+- **DashScope** uses an OpenAI-compatible endpoint by default; for native document / query asymmetric retrieval, run `zotpilot config set dashscope_embedding_endpoint native` then `zotpilot index --force` to rebuild.
+- **`custom`** targets any OpenAI-compatible endpoint (vLLM, other clouds, self-hosted): give the root URL (usually ends in `/v1`, except GLM which uses `/api/paas/v4`), the model id, and the dimensions; local endpoints need no key.
+- **`local`** downloads its model on the first real embed, not during `setup`.
 
-```jsonc
-// SiliconFlow (bge-m3, fixed 1024 dims)
-{ "embedding_provider": "openai-compatible",
-  "embedding_base_url": "https://api.siliconflow.cn/v1",
-  "embedding_model": "BAAI/bge-m3", "embedding_dimensions": 1024 }
-
-// Zhipu / GLM (embedding-3, non-/v1 root)
-{ "embedding_provider": "openai-compatible",
-  "embedding_base_url": "https://open.bigmodel.cn/api/paas/v4",
-  "embedding_model": "embedding-3", "embedding_dimensions": 2048 }
-
-// Ollama (local, no key)
-{ "embedding_provider": "openai-compatible",
-  "embedding_base_url": "http://localhost:11434/v1",
-  "embedding_model": "nomic-embed-text", "embedding_dimensions": 768 }
-```
-
-**Recommended SiliconFlow models (live-verified 2026-06, selectable in the `zotpilot setup` wizard):**
-
-| model | dimensions | notes |
-|-------|-----------|-------|
-| `BAAI/bge-m3` | `1024` (fixed) | multilingual, cheapest, default; rejects the `dimensions` param — auto-handled |
-| `Qwen/Qwen3-Embedding-0.6B` | `1024` (MRL, native 1024) | fast, low cost |
-| `Qwen/Qwen3-Embedding-8B` | `2048` (MRL, native 4096) | best quality |
-
-> These are only wizard **pre-fills**; at runtime there is a single generic `openai-compatible` code path, so you may set `embedding_model` to any model the endpoint supports, or pick "Custom" for any OpenAI-compatible endpoint.
->
-> **What to enter / format**: `embedding_base_url` (the OpenAI-compatible root, `http(s)://…`, no `user:pass@`), `embedding_model` (the endpoint's exact model id), `embedding_dimensions` (a positive integer: a fixed-dim model's native size, or any supported size for MRL), `embedding_key` (optional — omit for local Ollama).
->
-> **How it's guaranteed to work + clear errors**: (1) `zotpilot setup` runs a connectivity self-check (a tiny real embed) and flags a dimension mismatch on the spot; (2) at index time a C1 assertion raises `EmbeddingError` naming the exact dimension to set if the server's output differs — never silent corruption; (3) fixed-dim models that reject `dimensions` are auto-retried without it. Common errors: wrong model → `HTTP 400 Model does not exist`; bad/missing key → `HTTP 401 Api key is invalid`; local server down → `Cannot reach … is the server running?`.
-
-> **Provider-switch note**: changing the embedding provider / model / dimensions on an existing library requires `zotpilot index --force` to rebuild. The old vectors remain until then (no silent data loss), but search quality may degrade in the meantime.
-
-Interactive `zotpilot setup` is now **two layers**: pick a **vendor**, then a **model**
-(the recommended one is pre-selected — just press Enter). Vendor → model map (single source of
-truth `VENDOR_CATALOG`):
-
-| vendor (alias) | runtime provider | base_url | key | recommended model · dims |
-|---|---|---|:---:|---|
-| `google` (`gemini`) | `gemini` | — | ✓ | `gemini-embedding-001` · 768 |
-| `dashscope` | `dashscope` | — | ✓ | `text-embedding-v4` · 1024 |
-| `local` | `local` | — | ✗ | `all-MiniLM-L6-v2` · 384 |
-| `siliconflow` | `openai-compatible` | `https://api.siliconflow.cn/v1` | ✓ | `BAAI/bge-m3` · 1024 |
-| `zhipu` | `openai-compatible` | `https://open.bigmodel.cn/api/paas/v4` | ✓ | `embedding-3` · 2048 |
-| `ollama` | `openai-compatible` | `http://localhost:11434/v1` | ✗ | `nomic-embed-text` · 768 |
-| `custom` (`openai-compatible`) | `openai-compatible` | you supply | ✓ | you supply model + dims |
-
-Non-interactive (agent-driven) — one line by vendor name; omit `--embedding-model` to take the
-recommended model; fixed-base vendors auto-fill base_url and dimensions:
+Non-interactive (agent-friendly; omit `--embedding-model` to take the recommended one; fixed-base vendors auto-fill base_url and dimensions):
 
 ```bash
-zotpilot setup --list-vendors            # list all vendors/models (add --json for agents)
-zotpilot setup --non-interactive --provider siliconflow --embedding-model BAAI/bge-m3 --embedding-key <key> --verify
-zotpilot setup --non-interactive --provider zhipu --embedding-key <key> --verify      # omit model -> recommended embedding-3
-zotpilot setup --non-interactive --provider gemini   # or dashscope / local
-# the custom vendor still needs explicit base_url / model / dimensions (key optional for local Ollama):
+zotpilot setup --list-vendors [--json]                         # list all vendors/models
+zotpilot setup --non-interactive --provider gemini             # or dashscope / local
+zotpilot setup --non-interactive --provider siliconflow --embedding-key <key> --verify
 zotpilot setup --non-interactive --provider custom \
   --embedding-base-url http://localhost:11434/v1 \
   --embedding-model nomic-embed-text --embedding-dimensions 768
 # legacy scripts keep working: --provider gemini|dashscope|local|openai-compatible are accepted aliases
 ```
 
-> `--verify` (optional): after writing config, runs one self-check and prints a single JSON line
-> (`ok` / `dim_mismatch` / `auth` / `unreachable` / `error` / `skipped`) so an agent can self-heal.
+> **Switching models means rebuilding**: dimensions differ, so after changing provider / model / dimensions run `zotpilot index --force` (old vectors are kept until then — no silent loss). You never guess the dimension: `setup` does a real-embed self-check and indexing asserts the dimension, raising with the exact value to set if the server disagrees — never silent corruption. Add `--verify` to print one JSON line (`ok` / `dim_mismatch` / `auth` / `unreachable`) so an agent can self-heal.
 
 </details>
 
@@ -214,7 +184,10 @@ Environment variables remain available as temporary overrides and take precedenc
 ```bash
 export GEMINI_API_KEY=<your-key>           # or DASHSCOPE_API_KEY
 export ANTHROPIC_API_KEY=<your-key>        # optional: complex-table vision extraction
+export GEMINI_BASE_URL=<https-proxy>       # optional: custom Gemini endpoint (proxy / restricted region)
 ```
+
+> `GEMINI_BASE_URL` must be `https://`, and your `GEMINI_API_KEY` is sent to it — point it only at an HTTPS proxy you trust. Leave it unset to use the official endpoint.
 
 `config.json` may contain API keys. Do not commit it, paste it publicly, or sync it to untrusted locations. On shared machines, prefer interactive `zotpilot setup` so keys are not left in shell history.
 
@@ -371,19 +344,19 @@ Agent ──→ MCP tools ───┬── semantic search ──→ ChromaDB 
 - **Write ops**: tags / collections / notes go through Zotero's official Web API and sync back to the desktop client.
 
 <details>
-<summary><b>MCP tool list (18)</b></summary>
+<summary><b>MCP tool list (20 in the core profile)</b></summary>
 
 | Category | Tools |
 |------|------|
 | Search | `search_papers`, `search_topic`, `search_boolean`, `advanced_search` |
-| Read | `get_passage_context`, `get_paper_details`, `get_notes`, `get_annotations`, `browse_library`, `profile_library` |
-| Discover | `search_academic_databases` |
-| Ingest | `ingest_by_identifiers` |
+| Read | `get_passage_context`, `get_paper_details`, `get_notes`, `get_annotations`, `browse_library` |
+| Deep reading | `get_paper_for_tutor`, `annotate_pdf`, `save_reading_persona` |
+| Discover / Ingest | `search_academic_databases`, `ingest_by_identifiers` |
 | Organize | `manage_tags`, `manage_collections`, `create_note` |
 | Citations | `get_citations` |
 | Index | `index_library`, `get_index_stats` |
 
-`search_papers` supports `section_type` for tables / figures. `ingest_by_identifiers` accepts mixed DOI / arXiv ID / URL input.
+`search_papers` supports `section_type` for tables / figures. `ingest_by_identifiers` accepts mixed DOI / arXiv ID / URL input. The whole-library profiler `profile_library` is exposed only in the `full` profile (`ZOTPILOT_TOOL_PROFILE=full`).
 
 </details>
 
