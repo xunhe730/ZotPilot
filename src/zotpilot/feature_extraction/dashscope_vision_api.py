@@ -6,11 +6,15 @@ import base64
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING
 
 import httpx
 import pymupdf
 
 from .vision_api import TableVisionSpec
+
+if TYPE_CHECKING:
+    from .vision_cache import VisionResultCache
 from .vision_extract import (
     VISION_COMPACT_SYSTEM,
     VISION_FIRST_SYSTEM,
@@ -62,6 +66,7 @@ class DashScopeVisionAPI:
         max_workers: int = 3,
         timeout: float = 120.0,
         prompt_mode: str = "compact",
+        result_cache: "VisionResultCache | None" = None,
     ) -> None:
         self._api_key = api_key or os.environ.get("DASHSCOPE_API_KEY")
         if not self._api_key:
@@ -72,6 +77,9 @@ class DashScopeVisionAPI:
         self._max_workers = max_workers
         self._timeout = timeout
         self._prompt_mode = prompt_mode
+        # Content-addressed cache of parsed results so re-runs don't re-pay the
+        # vision API for tables already transcribed from unchanged PDFs.
+        self._result_cache = result_cache
         self._total_input_tokens = 0
         self._total_output_tokens = 0
 
@@ -162,26 +170,45 @@ class DashScopeVisionAPI:
             return _failed_response(str(exc))
 
     def extract_tables_batch(self, specs: list[TableVisionSpec]) -> list[AgentResponse]:
-        """Extract tables via concurrent DashScope/Qwen-VL requests."""
+        """Extract tables via concurrent DashScope/Qwen-VL requests.
+
+        Result-cached: specs already transcribed on a prior run (content-addressed,
+        so unchanged PDFs hit) skip the paid request. Only cache misses are sent;
+        only successful parses are cached so a transient failure stays retriable.
+        """
         if not specs:
             return []
 
-        prepared: list[tuple[TableVisionSpec, list[tuple[str, str]]]] = []
-        for spec in specs:
-            prepared.append((spec, self._prepare_table(spec)))
+        cache = self._result_cache
+        variant = f"{self._model}|{self._prompt_mode}|{self._max_tokens}"
+        keys: list[str | None] = [cache.content_key(s, variant) if cache else None for s in specs]
+        cached: list[AgentResponse | None] = [cache.get(k) if cache else None for k in keys]
 
+        miss_indices = [i for i, hit in enumerate(cached) if hit is None]
         responses: dict[int, AgentResponse] = {}
-        with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
-            futures = {
-                pool.submit(self._extract_one, spec, images): idx
-                for idx, (spec, images) in enumerate(prepared)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    responses[idx] = future.result()
-                except Exception as exc:
-                    logger.error("Unexpected DashScope vision error for %s: %s", specs[idx].table_id, exc)
-                    responses[idx] = _failed_response(str(exc))
+        if miss_indices:
+            prepared = [(i, self._prepare_table(specs[i])) for i in miss_indices]
+            with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
+                futures = {
+                    pool.submit(self._extract_one, specs[i], images): i
+                    for i, images in prepared
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        responses[idx] = future.result()
+                    except Exception as exc:
+                        logger.error("Unexpected DashScope vision error for %s: %s", specs[idx].table_id, exc)
+                        responses[idx] = _failed_response(str(exc))
+            if cache:
+                for i in miss_indices:
+                    if responses[i].parse_success:
+                        cache.put(keys[i], responses[i])
 
-        return [responses[i] for i in range(len(specs))]
+        if cache:
+            logger.info(
+                "Vision result cache: %d hit, %d miss (of %d specs)",
+                len(specs) - len(miss_indices), len(miss_indices), len(specs),
+            )
+
+        return [hit if hit is not None else responses[i] for i, hit in enumerate(cached)]

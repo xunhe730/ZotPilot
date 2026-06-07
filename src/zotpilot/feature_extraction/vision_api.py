@@ -13,8 +13,12 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
+
+if TYPE_CHECKING:
+    from .vision_cache import VisionResultCache
 
 try:
     import anthropic
@@ -145,6 +149,7 @@ class VisionAPI:
         cache: bool = True,
         prompt_mode: str = "compact",
         max_output_tokens: int = _DEFAULT_VISION_MAX_TOKENS,
+        result_cache: "VisionResultCache | None" = None,
     ) -> None:
         if anthropic is None:
             raise ImportError("anthropic package required: pip install anthropic")
@@ -152,7 +157,10 @@ class VisionAPI:
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
         self._cost_log_path = Path(cost_log_path)
-        self._cache = cache
+        self._cache = cache  # Anthropic prompt caching (ephemeral system block)
+        # Content-addressed cache of parsed results so re-runs don't re-pay the
+        # vision API for unchanged PDFs (distinct from `cache` above).
+        self._result_cache = result_cache
         self._prompt_mode = prompt_mode
         self._max_output_tokens = max_output_tokens
         self._session_id = datetime.now(timezone.utc).isoformat()
@@ -393,25 +401,51 @@ class VisionAPI:
         if not specs:
             return []
 
-        requests: list[dict] = []
-        for spec in specs:
-            images = self._prepare_table(spec)
-            requests.append(self._build_request(spec, images))
+        # Result-cache lookup: skip the paid API for specs already transcribed on
+        # a prior run (content-addressed, so unchanged PDFs hit). cached[i] is the
+        # hit (or None for a miss); only misses are submitted below.
+        cache = self._result_cache
+        # Fold every setting that changes the model's output into the cache key so
+        # a config change busts stale entries (max_output_tokens can truncate a
+        # large table → a cached full parse must not be served under a lower cap).
+        variant = f"{self._model}|{self._prompt_mode}|{self._max_output_tokens}"
+        keys: list[str | None] = [cache.content_key(s, variant) if cache else None for s in specs]
+        cached: list[AgentResponse | None] = [cache.get(k) if cache else None for k in keys]
 
-        results = self._submit_and_poll(requests)
+        miss_indices = [i for i, hit in enumerate(cached) if hit is None]
+        fresh: dict[int, AgentResponse] = {}
+        if miss_indices:
+            requests: list[dict] = []
+            for i in miss_indices:
+                images = self._prepare_table(specs[i])
+                requests.append(self._build_request(specs[i], images))
 
-        responses: list[AgentResponse] = []
-        for spec in specs:
-            raw_text = results.get(f"{spec.table_id}__transcriber")
-            if raw_text is not None:
-                responses.append(parse_agent_response(raw_text, "transcriber"))
-            else:
-                responses.append(AgentResponse(
-                    headers=[], rows=[], footnotes="",
-                    table_label=None, caption="",
-                    is_incomplete=False, incomplete_reason="",
-                    raw_shape=(0, 0), parse_success=False,
-                    raw_response="",
-                    recrop_needed=False, recrop_bbox_pct=None,
-                ))
-        return responses
+            results = self._submit_and_poll(requests)
+
+            for i in miss_indices:
+                spec = specs[i]
+                raw_text = results.get(f"{spec.table_id}__transcriber")
+                if raw_text is not None:
+                    resp = parse_agent_response(raw_text, "transcriber")
+                else:
+                    resp = AgentResponse(
+                        headers=[], rows=[], footnotes="",
+                        table_label=None, caption="",
+                        is_incomplete=False, incomplete_reason="",
+                        raw_shape=(0, 0), parse_success=False,
+                        raw_response="",
+                        recrop_needed=False, recrop_bbox_pct=None,
+                    )
+                fresh[i] = resp
+                # Cache only successful parses — caching a failure would freeze a
+                # transient error and prevent a retry on the next run.
+                if cache and resp.parse_success:
+                    cache.put(keys[i], resp)
+
+        if cache:
+            logger.info(
+                "Vision result cache: %d hit, %d miss (of %d specs)",
+                len(specs) - len(miss_indices), len(miss_indices), len(specs),
+            )
+
+        return [hit if hit is not None else fresh[i] for i, hit in enumerate(cached)]
