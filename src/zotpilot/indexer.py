@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .index_authority import (
     reconcile_orphaned_index_docs,
     record_table_failure,
 )
+from .index_progress import ProgressSink, emit_progress
 from .journal_ranker import JournalRanker
 from .models import ZoteroItem
 from .pdf import extract_document
@@ -55,6 +57,40 @@ def _failure_signature(e: Exception) -> str:
     msg = re.sub(r"[Bb]atch \d+/\d+", "Batch N/M", str(e))
     msg = re.sub(r"\d+\s*(texts?|chars?)", r"N \1", msg)
     return f"{type(e).__name__}:{msg}"
+
+
+_PROGRESS_COUNT_KEYS = (
+    "indexed",
+    "failed",
+    "empty",
+    "skipped",
+    "already_indexed",
+    "total_to_index",
+    "batch_size",
+    "has_more",
+    "rate_limited_abort",
+    "systemic_abort",
+    "not_indexed_due_to_abort",
+    "skipped_long",
+    "vision_pending_tables",
+    "vision_estimated_cost_usd",
+    "vision_budget_skipped",
+)
+
+
+def _progress_counts(counts: dict) -> dict[str, object]:
+    """Keep run-finished progress payload compact and JSON-friendly."""
+    payload: dict[str, object] = {}
+    for key in _PROGRESS_COUNT_KEYS:
+        if key in counts:
+            payload[key] = counts[key]
+    if "quality_distribution" in counts:
+        payload["quality_distribution"] = counts["quality_distribution"]
+    if "extraction_stats" in counts:
+        payload["extraction_stats"] = counts["extraction_stats"]
+    if "skipped_no_pdf" in counts:
+        payload["skipped_no_pdf_count"] = len(counts["skipped_no_pdf"])
+    return payload
 
 
 class ConfigDriftError(RuntimeError):
@@ -237,6 +273,7 @@ class Indexer:
         max_pages: int = 0,
         batch_size: int | None = None,
         journal: IndexJournal | None = None,
+        progress_sink: ProgressSink | None = None,
     ) -> dict:
         """
         Index all PDFs in Zotero library.
@@ -249,10 +286,26 @@ class Indexer:
             max_pages: Skip PDFs longer than N pages (0 = no limit)
             batch_size: Process at most N items per call (None/0 = all at once)
             journal: Optional IndexJournal for commit tracking
+            progress_sink: Optional sink for structured progress events
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
         """
+        run_id = uuid.uuid4().hex
+
+        def progress(event_type: str, **payload: object) -> None:
+            emit_progress(progress_sink, event_type, run_id=run_id, **payload)
+
+        progress(
+            "run_started",
+            force_reindex=force_reindex,
+            limit=limit,
+            item_key=item_key,
+            item_keys=item_keys,
+            title_filter=bool(title_pattern),
+            max_pages=max_pages,
+            batch_size=batch_size,
+        )
         items = self.zotero.get_all_items_with_pdfs()
         skipped_no_pdf: list[dict] = []
         kept_items: list = []
@@ -260,11 +313,20 @@ class Indexer:
             if i.pdf_path and i.pdf_path.exists():
                 kept_items.append(i)
             else:
+                item_title = getattr(i, "title", None) or ""
                 skipped_no_pdf.append({
                     "item_key": i.item_key,
-                    "title": getattr(i, "title", None) or "",
+                    "title": item_title,
                     "reason": "no_pdf_attachment",
                 })
+                progress(
+                    "paper_finished",
+                    phase="planning",
+                    item_key=i.item_key,
+                    title=item_title,
+                    status="skipped",
+                    reason="no_pdf_attachment",
+                )
         items = kept_items
         if skipped_no_pdf:
             logger.info(
@@ -303,19 +365,23 @@ class Indexer:
             items = [i for i in items if i.item_key == item_key]
             if not items:
                 logger.error(f"No item found with key: {item_key}")
-                return {
+                empty_result = {
                     "results": [], "indexed": 0, "failed": 0, "empty": 0,
                     "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
                 }
+                progress("run_finished", **_progress_counts(empty_result))
+                return empty_result
 
         if item_keys:
             items = [i for i in items if i.item_key in item_keys]
             if not items:
                 logger.error("No items found matching item_keys")
-                return {
+                empty_result = {
                     "results": [], "indexed": 0, "failed": 0, "empty": 0,
                     "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
                 }
+                progress("run_finished", **_progress_counts(empty_result))
+                return empty_result
 
         if title_pattern:
             if len(title_pattern) > 200:
@@ -360,6 +426,7 @@ class Indexer:
                 stored_hash,
                 config_hash,
             )
+            progress("run_failed", reason="config_drift")
             raise ConfigDriftError(
                 "Index configuration has changed since the last run (chunk size/overlap, embedding "
                 "provider/model/dimensions, OCR, or vision settings). Continuing would mix incompatible "
@@ -383,6 +450,13 @@ class Indexer:
                     reindex_reasons[item.item_key] = reason
                     logger.info(f"Reindexing {item.item_key}: {reason}")
                 else:
+                    progress(
+                        "paper_finished",
+                        phase="planning",
+                        item_key=item.item_key,
+                        title=item.title,
+                        status="already_indexed",
+                    )
                     continue
 
             if item.item_key in empty_docs:
@@ -391,6 +465,14 @@ class Indexer:
                     results.append(IndexResult(
                         item.item_key, item.title, "skipped",
                         reason="no extractable text (unchanged PDF)"))
+                    progress(
+                        "paper_finished",
+                        phase="planning",
+                        item_key=item.item_key,
+                        title=item.title,
+                        status="skipped",
+                        reason="no extractable text (unchanged PDF)",
+                    )
                     continue
                 else:
                     del empty_docs[item.item_key]
@@ -413,6 +495,15 @@ class Indexer:
                         results.append(IndexResult(
                             item.item_key, item.title, "skipped",
                             reason=f"too long ({pages} pages, max {max_pages})"))
+                        progress(
+                            "paper_finished",
+                            phase="planning",
+                            item_key=item.item_key,
+                            title=item.title,
+                            status="skipped",
+                            reason=f"too long ({pages} pages, max {max_pages})",
+                            pages=pages,
+                        )
                     else:
                         short_items.append(item)
                 except Exception:
@@ -452,6 +543,17 @@ class Indexer:
             f"{len(indexed_ids)} already indexed, "
             f"{n_skipped} skipped (empty/unchanged)"
         )
+        progress(
+            "plan_ready",
+            to_index=len(to_index),
+            reindex_count=reindex_count,
+            already_indexed=len(indexed_ids),
+            skipped=n_skipped,
+            skipped_no_pdf_count=len(skipped_no_pdf),
+            skipped_long=len(long_items),
+            batch_size=batch_size,
+            has_more=deferred_by_batch,
+        )
         if not to_index:
             logger.info("Nothing to index \u2014 all papers are up to date")
 
@@ -472,8 +574,19 @@ class Indexer:
         phase1_start = time.perf_counter()
         log_interval = 5  # log every N papers
 
+        progress("phase_started", phase="extraction", total=total_to_extract)
         for i, item in enumerate(tqdm(to_index, desc="Extracting"), 1):
             t0 = time.perf_counter()
+            extraction_status = "extracted"
+            extraction_reason = ""
+            progress(
+                "paper_started",
+                phase="extraction",
+                item_key=item.item_key,
+                title=item.title,
+                position=i,
+                total=total_to_extract,
+            )
             try:
                 if self.journal is not None and item.item_key in reindex_reasons:
                     mark_in_progress(self.journal, item.item_key)
@@ -491,11 +604,24 @@ class Indexer:
                 doc_extractions[item.item_key] = (item, extraction)
             except Exception as e:
                 logger.error(f"Failed to extract {item.item_key}: {type(e).__name__}: {e}")
+                extraction_status = "failed"
+                extraction_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=extraction_reason))
 
             elapsed = time.perf_counter() - t0
+            progress(
+                "paper_finished",
+                phase="extraction",
+                item_key=item.item_key,
+                title=item.title,
+                position=i,
+                total=total_to_extract,
+                status=extraction_status,
+                reason=extraction_reason,
+                elapsed_seconds=elapsed,
+            )
             extraction_times.append(elapsed)
             logger.info("Extraction timing [%s]: total=%.1fs", item.item_key, elapsed)
 
@@ -518,6 +644,12 @@ class Indexer:
                 f"Extraction complete: {total_to_extract} papers in "
                 f"{phase1_elapsed:.1f}s ({phase1_elapsed / total_to_extract:.1f}s avg)"
             )
+        progress(
+            "phase_finished",
+            phase="extraction",
+            total=total_to_extract,
+            elapsed_seconds=phase1_elapsed,
+        )
 
         # ---- Phase 2: Resolve vision batch (one API call for all papers) ----
         vision_pending_tables = 0
@@ -536,6 +668,13 @@ class Indexer:
             pending_docs = sum(
                 1 for v in doc_extractions.values()
                 if v[1].pending_vision is not None and v[1].pending_vision.specs
+            )
+            progress(
+                "phase_started",
+                phase="vision",
+                total=pending_count,
+                pending_docs=pending_docs,
+                estimated_cost_usd=vision_estimated_cost_usd,
             )
             over_table_cap = (
                 self.config.vision_max_tables_per_run is not None
@@ -566,6 +705,14 @@ class Indexer:
                 for _item, extraction in doc_extractions.values():
                     if extraction.pending_vision is not None:
                         _finalize_document_no_tables(extraction)
+                progress(
+                    "phase_finished",
+                    phase="vision",
+                    total=pending_count,
+                    status="skipped",
+                    reason=vision_skip_reason,
+                    estimated_cost_usd=vision_estimated_cost_usd,
+                )
             else:
                 phase2_start = time.perf_counter()
                 resolve_pending_vision(
@@ -578,6 +725,14 @@ class Indexer:
                         f"Vision complete: {pending_count} tables in "
                         f"{phase2_elapsed / 60:.1f}min ({phase2_elapsed / max(pending_count, 1):.1f}s avg/table)"
                     )
+                progress(
+                    "phase_finished",
+                    phase="vision",
+                    total=pending_count,
+                    status="completed",
+                    elapsed_seconds=phase2_elapsed,
+                    estimated_cost_usd=vision_estimated_cost_usd,
+                )
 
         # ---- Phase 3: Index each document (chunk, store, etc.) ----
         total_to_store = len(doc_extractions)
@@ -594,8 +749,17 @@ class Indexer:
         consecutive_same = 0
         last_failure_sig: str | None = None
 
+        progress("phase_started", phase="indexing", total=total_to_store)
         for idx, (item_key, (item, extraction)) in enumerate(extraction_items, 1):
             t0 = time.perf_counter()
+            progress(
+                "paper_started",
+                phase="indexing",
+                item_key=item.item_key,
+                title=item.title,
+                position=idx,
+                total=total_to_store,
+            )
             try:
                 n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction_with_retry(
                     item, extraction
@@ -614,25 +778,72 @@ class Indexer:
                         item.item_key, item.title, "indexed",
                         n_chunks=n_chunks, n_tables=n_tables,
                         quality_grade=quality_grade))
+                    progress(
+                        "paper_finished",
+                        phase="indexing",
+                        item_key=item.item_key,
+                        title=item.title,
+                        position=idx,
+                        total=total_to_store,
+                        status="indexed",
+                        n_chunks=n_chunks,
+                        n_tables=n_tables,
+                        quality_grade=quality_grade,
+                    )
                 else:
                     empty_docs[item.item_key] = self._pdf_hash(item.pdf_path)
                     results.append(IndexResult(
                         item.item_key, item.title, "empty", reason=reason,
                         quality_grade=quality_grade))
+                    progress(
+                        "paper_finished",
+                        phase="indexing",
+                        item_key=item.item_key,
+                        title=item.title,
+                        position=idx,
+                        total=total_to_store,
+                        status="empty",
+                        reason=reason,
+                        n_chunks=n_chunks,
+                        n_tables=n_tables,
+                        quality_grade=quality_grade,
+                    )
                 logger.debug(f"Completed {item.item_key}: {n_chunks} chunks, {n_tables} tables, quality {quality_grade}")  # noqa: E501
             except RateLimitError as e:
                 logger.error(f"Rate limit hit on {item.item_key}: {e}")
+                failure_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=failure_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=item.item_key,
+                    title=item.title,
+                    position=idx,
+                    total=total_to_store,
+                    status="failed",
+                    reason=failure_reason,
+                )
                 rate_limited_abort = True
                 abort_index = idx
                 break  # stop the run; remaining papers are untried. MUST break, not raise — see D1/D2.
             except Exception as e:
                 logger.error(f"Failed to index {item.item_key}: {type(e).__name__}: {e}")
+                failure_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=failure_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=item.item_key,
+                    title=item.title,
+                    position=idx,
+                    total=total_to_store,
+                    status="failed",
+                    reason=failure_reason,
+                )
                 sig = _failure_signature(e)
                 if sig == last_failure_sig:
                     consecutive_same += 1
@@ -659,9 +870,18 @@ class Indexer:
         # Append the never-attempted tail after the break so results/failed/counts agree (关键1).
         if abort_index is not None:
             for _k, (_it, _ex) in extraction_items[abort_index:]:
+                abort_tail_reason = "AbortNotAttempted: skipped after early abort (quota/systemic)"
                 results.append(IndexResult(
                     _it.item_key, _it.title, "failed",
-                    reason="AbortNotAttempted: skipped after early abort (quota/systemic)"))
+                    reason=abort_tail_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=_it.item_key,
+                    title=_it.title,
+                    status="failed",
+                    reason=abort_tail_reason,
+                )
 
         # Single source of truth for the abort count — reused by the log and the counts block.
         aborted = rate_limited_abort or systemic_abort
@@ -671,18 +891,39 @@ class Indexer:
             else 0
         )
 
+        abort_cause = ""
+        if rate_limited_abort:
+            abort_cause = "rate_limit"
+        elif systemic_abort:
+            abort_cause = "consecutive_failures"
+
         phase3_elapsed = time.perf_counter() - phase3_start
         if aborted:
-            cause = "rate limit" if rate_limited_abort else "consecutive failures"
+            log_cause = "rate limit" if rate_limited_abort else "consecutive failures"
             logger.warning(
                 f"Indexing aborted while processing {abort_index}/{total_to_store} papers "
-                f"({cause}); {not_indexed_due_to_abort} not attempted"
+                f"({log_cause}); {not_indexed_due_to_abort} not attempted"
+            )
+            progress(
+                "run_aborted",
+                phase="indexing",
+                cause=abort_cause,
+                abort_index=abort_index,
+                total=total_to_store,
+                not_indexed_due_to_abort=not_indexed_due_to_abort,
             )
         elif total_to_store > 0:
             logger.info(
                 f"Indexing complete: {total_to_store} papers in "
                 f"{phase3_elapsed:.1f}s ({phase3_elapsed / total_to_store:.1f}s avg)"
             )
+        progress(
+            "phase_finished",
+            phase="indexing",
+            total=total_to_store,
+            status="aborted" if aborted else "completed",
+            elapsed_seconds=phase3_elapsed,
+        )
 
         self._save_empty_docs(empty_docs)
 
@@ -754,6 +995,7 @@ class Indexer:
                     final_reconciliation["deleted_count"],
                 )
 
+        progress("run_finished", **_progress_counts(counts))
         return {"results": results, **counts}
 
     def _index_document_detailed(self, item: ZoteroItem) -> tuple[int, int, str, dict, str]:

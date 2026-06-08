@@ -11,6 +11,7 @@ import base64
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, cast
 
 import pymupdf
 
@@ -166,7 +167,7 @@ class LocalVisionAPI:
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
-                messages=messages,
+                messages=cast(Any, messages),
                 max_tokens=self._max_tokens,
                 temperature=0.0,
             )

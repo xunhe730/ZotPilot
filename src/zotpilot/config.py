@@ -55,6 +55,26 @@ def profile_path() -> Path:
     return canonical
 
 
+def index_data_dir(config: "Config") -> Path:
+    """Directory that stores index-adjacent state files."""
+    return Path(config.chroma_db_path).expanduser().parent
+
+
+def index_journal_path(config: "Config") -> Path:
+    """Path to the crash-recovery index journal."""
+    return index_data_dir(config) / "index_journal.json"
+
+
+def index_lease_path(config: "Config") -> Path:
+    """Path to the cross-process indexing lease."""
+    return index_data_dir(config) / "index_lease.json"
+
+
+def index_progress_path(config: "Config") -> Path:
+    """Path to the append-only indexing progress stream."""
+    return index_data_dir(config) / "index_progress.jsonl"
+
+
 def _old_config_path() -> Path:
     """Legacy deep-zotero config path."""
     if sys.platform == "win32":

@@ -67,7 +67,7 @@ class TestIndexerReDoSIntegration:
             pytest.skip("Indexer dependencies not fully available")
 
         from pathlib import Path
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         config = MagicMock()
         config.zotero_data_dir = Path("/fake")
@@ -413,7 +413,7 @@ class TestSkipTracking:
     def test_config_drift_without_force_blocks(self, tmp_path):
         """AC6 / RC8: a config-hash mismatch without force must BLOCK with a clear
         error, not silently proceed into a mixed embedding-space index."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         import pytest
 
