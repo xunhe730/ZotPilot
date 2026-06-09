@@ -38,8 +38,9 @@ class Retriever:
 
         results = []
         for hit in hits:
+            chunk_type = hit.metadata.get("chunk_type", "text")
             # Get adjacent chunks
-            if context_window > 0:
+            if context_window > 0 and chunk_type == "text":
                 adjacent = self.store.get_adjacent_chunks(
                     hit.metadata.get("doc_id", "unknown"),
                     hit.metadata.get("chunk_index", -1),
@@ -81,6 +82,14 @@ class Retriever:
                 section=hit.metadata.get("section", "unknown"),
                 section_confidence=hit.metadata.get("section_confidence", 1.0),
                 journal_quartile=journal_quartile,
+                chunk_type=chunk_type,
+                formula_latex=hit.metadata.get("formula_latex", ""),
+                formula_equation_number=hit.metadata.get("formula_equation_number", ""),
+                formula_variable_gloss=hit.metadata.get("formula_variable_gloss", ""),
+                formula_provider=hit.metadata.get("formula_provider", ""),
+                formula_source=hit.metadata.get("formula_source", ""),
+                formula_confidence=hit.metadata.get("formula_confidence"),
+                reference_context=hit.metadata.get("reference_context", ""),
                 context_before=context_before,
                 context_after=context_after,
             ))

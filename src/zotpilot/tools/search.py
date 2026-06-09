@@ -1,4 +1,4 @@
-"""Search tools: semantic, topic, boolean, tables, figures."""
+"""Search tools: semantic, topic, boolean, tables, figures, formulas."""
 import json
 import logging
 import time
@@ -59,15 +59,15 @@ def search_papers(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
-    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table, formula. Omit for all.")] = None,  # noqa: E501
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, figure, formula, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
     required_terms: Annotated[list[str] | None, Field(description="Words that must appear in passage (case-insensitive whole-word match)")] = None,  # noqa: E501
     verbosity: Annotated[
         Literal["minimal", "standard", "full"],
         Field(description="Response detail level"),
     ] = "minimal",
-    section_type: Annotated[Literal["text", "tables", "figures"] | None, Field(description="Filter by content type (tables or figures)")] = None,  # noqa: E501
+    section_type: Annotated[Literal["text", "tables", "figures", "formulas"] | None, Field(description="Filter by content type (tables, figures, or formulas)")] = None,  # noqa: E501
 ) -> list[dict]:
     """Semantic search over paper chunks. Returns passages ranked by composite score (similarity × section × journal). Use chunk_types for content type, section_weights for paper location, required_terms for exact keyword filtering."""  # noqa: E501
     store = _get_store_optional()
@@ -79,8 +79,10 @@ def search_papers(
     start = time.perf_counter()
 
     # Validate section_type before dispatching
-    if section_type is not None and section_type not in ("text", "tables", "figures"):
-        raise ToolError(f"Invalid section_type: {section_type}. Must be 'text', 'tables', or 'figures'.")
+    if section_type is not None and section_type not in ("text", "tables", "figures", "formulas"):
+        raise ToolError(
+            f"Invalid section_type: {section_type}. Must be 'text', 'tables', 'figures', or 'formulas'."
+        )
 
     if section_type == "tables":
         return search_tables(
@@ -93,6 +95,12 @@ def search_papers(
             query=query, top_k=top_k, year_min=year_min, year_max=year_max,
             author=author, tag=tag, collection=collection,
             verbosity=verbosity
+        )
+    if section_type == "formulas":
+        return search_formulas(
+            query=query, top_k=top_k, year_min=year_min, year_max=year_max,
+            author=author, tag=tag, collection=collection,
+            journal_weights=journal_weights, verbosity=verbosity
         )
 
     # Validate chunk_types if provided
@@ -164,8 +172,8 @@ def search_topic(
     author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
     tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
     collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
-    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table. Omit for all.")] = None,  # noqa: E501
-    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, unknown")] = None,  # noqa: E501
+    chunk_types: Annotated[list[str] | None, Field(description="Content types to include: text, figure, table, formula. Omit for all.")] = None,  # noqa: E501
+    section_weights: Annotated[dict[str, float] | None, Field(description="Section relevance 0.0-1.0. Keys: abstract, introduction, background, methods, results, discussion, conclusion, references, appendix, preamble, table, figure, formula, unknown")] = None,  # noqa: E501
     journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
     verbosity: Annotated[
         Literal["minimal", "standard", "full"],
@@ -240,7 +248,7 @@ def search_topic(
     if len(queries) > 1:
         seen: dict[tuple, object] = {}
         for r in all_chunks:
-            key = (r.doc_id, r.chunk_index)
+            key = (r.doc_id, r.chunk_type, r.chunk_index)
             existing = seen.get(key)
             if existing is None:
                 seen[key] = r
@@ -521,6 +529,100 @@ def search_figures(
             })
 
     logger.debug(f"search_figures: {time.perf_counter() - start:.3f}s")
+    return output
+
+
+@mcp.tool(tags=tool_tags("extended", "search"))
+def search_formulas(
+    query: Annotated[str, Field(description="Search query for formula meaning or surrounding context")],
+    top_k: Annotated[int, Field(description="Number of formulas to return", ge=1, le=30)] = 10,
+    year_min: Annotated[int | None, Field(description="Minimum publication year")] = None,
+    year_max: Annotated[int | None, Field(description="Maximum publication year")] = None,
+    author: Annotated[str | None, Field(description="Filter by author name (case-insensitive substring)")] = None,
+    tag: Annotated[str | None, Field(description="Filter by Zotero tag (case-insensitive substring)")] = None,
+    collection: Annotated[str | None, Field(description="Filter by collection name (substring)")] = None,
+    journal_weights: Annotated[dict[str, float] | None, Field(description="Journal quartile weights 0.0-1.0. Keys: Q1, Q2, Q3, Q4, unknown")] = None,  # noqa: E501
+    verbosity: Annotated[
+        Literal["minimal", "standard", "full"],
+        Field(description="Response detail level"),
+    ] = "minimal",
+) -> list[dict]:
+    """Search formula chunks semantically. Results include LaTeX plus natural-language context."""
+    store = _get_store_optional()
+    if store is None:
+        raise ToolError(
+            "Semantic search requires indexing. Run `index_library` first, "
+            "or configure an embedding provider in config."
+        )
+    start = time.perf_counter()
+
+    if journal_weights is not None:
+        errors = validate_journal_weights(journal_weights)
+        if errors:
+            raise ToolError(f"Invalid journal_weights: {'; '.join(errors)}")
+
+    top_k = max(1, min(top_k, 30))
+    store = _get_store()
+    reranker = _get_reranker()
+    _config = _get_config()
+    live_doc_ids = _current_pdf_doc_ids()
+
+    type_filter = {"chunk_type": {"$eq": "formula"}}
+    year_filter = _build_chromadb_filters(year_min, year_max)
+    filters = {"$and": [type_filter, year_filter]} if year_filter else type_filter
+
+    base_fetch = min(top_k * _config.oversample_multiplier, 90)
+    fetch_k = base_fetch * 2 if _has_text_filters(author, tag, collection) else base_fetch
+
+    results = store.search(query=query, top_k=fetch_k, filters=filters)
+    results = [r for r in results if r.metadata.get("doc_id", "") in live_doc_ids]
+    results = _apply_text_filters(results, author, tag, collection)
+
+    retrieval_results = [_stored_chunk_to_retrieval_result(r) for r in results]
+    if _config.rerank_enabled:
+        top_results = reranker.rerank(retrieval_results, journal_weights=journal_weights)[:top_k]
+    else:
+        top_results = [replace(r, composite_score=r.score) for r in retrieval_results][:top_k]
+
+    result_by_id = {r.id: r for r in results}
+    output = []
+    for r in top_results:
+        original = result_by_id.get(r.chunk_id)
+        meta = original.metadata if original else {}
+        output.append({
+            "doc_id": r.doc_id,
+            "doc_title": r.doc_title,
+            "year": r.year,
+            "page_num": r.page_num,
+            "formula_index": meta.get("formula_index", r.chunk_index),
+            "equation_number": meta.get("formula_equation_number", ""),
+            "latex": meta.get("formula_latex", r.formula_latex),
+            "passage": r.text,
+            "reference_context": meta.get("reference_context", ""),
+            "variable_gloss": meta.get("formula_variable_gloss", ""),
+            "relevance_score": round(r.score, 3),
+            "composite_score": round(r.composite_score, 3) if r.composite_score is not None else None,
+        })
+
+        if verbosity in {"standard", "full"}:
+            output[-1].update({
+                "authors": r.authors,
+                "citation_key": r.citation_key,
+                "publication": r.publication,
+                "journal_quartile": r.journal_quartile,
+                "formula_confidence": meta.get("formula_confidence"),
+                "formula_provider": meta.get("formula_provider", ""),
+                "formula_source": meta.get("formula_source", ""),
+            })
+        if verbosity == "full":
+            output[-1].update({
+                "raw_text": meta.get("formula_raw_text", ""),
+                "bbox": meta.get("bbox", ""),
+                "tags": meta.get("tags", ""),
+                "collections": meta.get("collections", ""),
+            })
+
+    logger.debug(f"search_formulas: {time.perf_counter() - start:.3f}s")
     return output
 
 

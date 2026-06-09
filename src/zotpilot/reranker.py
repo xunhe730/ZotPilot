@@ -17,6 +17,8 @@ DEFAULT_SECTION_WEIGHTS: dict[str, float] = {
     "results": 1.0,
     "conclusion": 1.0,
     "table": 0.9,  # Tables are high-value structured content
+    "figure": 0.85,
+    "formula": 0.85,
     "methods": 0.85,
     "abstract": 0.75,
     "background": 0.7,

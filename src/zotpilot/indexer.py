@@ -144,6 +144,7 @@ class Indexer:
         self._empty_docs_path = config.chroma_db_path / "empty_docs.json"
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
         self.journal: IndexJournal | None = None
+        self._formula_provider = None
         vision_provider = getattr(config, "vision_provider", "anthropic")
         if vision_provider not in ("anthropic", "dashscope"):
             vision_provider = "anthropic"
@@ -171,6 +172,102 @@ class Indexer:
             )
         else:
             self._vision_api = None
+
+    def _assert_config_hash_current(self) -> None:
+        """Block incremental backfills when the embedding-space hash drifted."""
+        config_hash = _config_hash(self.config)
+        if not self._config_hash_path.exists():
+            raise ConfigDriftError(
+                "Cannot backfill formulas before the text index config hash exists. "
+                "Run index_library() first so formulas share the same embedding space."
+            )
+        stored_hash = self._config_hash_path.read_text().strip()
+        if stored_hash != config_hash:
+            raise ConfigDriftError(
+                "Cannot backfill formulas because the current config hash differs from the "
+                "stored index hash. Rebuild the index with index_library(force_reindex=True) "
+                "before adding formula chunks."
+            )
+
+    def _get_formula_provider(self):
+        """Create the configured formula OCR provider lazily."""
+        if self._formula_provider is None:
+            from .feature_extraction.formula_ocr import create_formula_ocr_provider
+
+            self._formula_provider = create_formula_ocr_provider(self.config.formula_ocr_provider)
+        return self._formula_provider
+
+    def _recognize_formulas_for_item(self, item: ZoteroItem):
+        """Run text-layer formula OCR for one item if possible."""
+        if item.pdf_path is None or not item.pdf_path.exists():
+            return []
+        from .feature_extraction.formula_ocr import recognize_formulas
+
+        return recognize_formulas(
+            item.pdf_path,
+            self._get_formula_provider(),
+            max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
+            max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
+            min_confidence=self.config.formula_ocr_min_confidence,
+        )
+
+    def index_formulas(
+        self,
+        *,
+        item_key: str | None = None,
+        item_keys: list[str] | None = None,
+        limit: int | None = None,
+        refresh_existing: bool = True,
+    ) -> dict:
+        """Backfill formula chunks for already-indexed documents."""
+        if not self.config.formula_ocr_enabled:
+            raise ValueError("formula_ocr_enabled must be true before running formula backfill")
+        self._assert_config_hash_current()
+
+        indexed_ids = self.store.get_indexed_doc_ids()
+        items = [
+            item for item in self.zotero.get_all_items_with_pdfs()
+            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
+        ]
+        if item_key:
+            items = [item for item in items if item.item_key == item_key]
+        if item_keys:
+            wanted = set(item_keys)
+            items = [item for item in items if item.item_key in wanted]
+        if limit:
+            items = items[:limit]
+
+        results = []
+        for item in items:
+            journal_quartile = self.journal_ranker.lookup(item.publication)
+            doc_meta = {
+                "title": item.title,
+                "authors": item.authors,
+                "year": item.year,
+                "citation_key": item.citation_key,
+                "publication": item.publication,
+                "journal_quartile": journal_quartile or "",
+                "doi": item.doi,
+                "tags": item.tags,
+                "collections": item.collections,
+                "pdf_hash": self._pdf_hash(item.pdf_path),
+                "quality_grade": "",
+            }
+            if refresh_existing:
+                self.store.delete_chunks_by_type(item.item_key, "formula")
+            formulas = self._recognize_formulas_for_item(item)
+            self.store.add_formulas(item.item_key, doc_meta, formulas)
+            results.append({
+                "item_key": item.item_key,
+                "title": item.title,
+                "n_formulas": len(formulas),
+            })
+
+        return {
+            "processed": len(results),
+            "formulas_indexed": sum(row["n_formulas"] for row in results),
+            "results": results,
+        }
 
     # ------------------------------------------------------------------
     # Empty-doc tracking (keyed by item_key -> pdf file hash)
@@ -1175,6 +1272,25 @@ class Indexer:
         # so we don't clear the marker we just wrote at the end.
         recorded_failure_this_run = False
 
+        # Store formulas if explicitly enabled. Phase A only covers text-layer
+        # candidates; image/vector formulas are intentionally left for later.
+        n_formulas = 0
+        if getattr(self.config, "formula_ocr_enabled", False) is True:
+            try:
+                formulas = list(getattr(extraction, "formulas", []) or [])
+                if not formulas:
+                    formulas = self._recognize_formulas_for_item(item)
+                self.store.add_formulas(item_key, doc_meta, formulas)
+                n_formulas = len(formulas)
+                logger.debug(f"  Extracted {n_formulas} formulas")
+            except RateLimitError:
+                raise
+            except Exception as e:
+                logger.warning(f"Formula OCR/storage failed for {item_key}: {e}")
+                if journal is not None:
+                    record_table_failure(journal, item_key, f"formula storage: {e}")
+                    recorded_failure_this_run = True
+
         # Store tables if enabled (skip layout artifacts)
         n_tables = 0
         real_tables = [t for t in extraction.tables if not t.artifact_type]
@@ -1209,14 +1325,14 @@ class Indexer:
                     record_table_failure(journal, item_key, f"figure storage: {e}")
                     recorded_failure_this_run = True
 
-        # Tables and figures stored cleanly this run: clear any stale marker from a
+        # Tables, figures, and formulas stored cleanly this run: clear any stale marker from a
         # prior run. Skipped when this run recorded its own failure (keep that),
         # and a re-raised RateLimitError above never reaches here, so a
         # quota-aborted run keeps the doc's prior marker intact.
         if journal is not None and not recorded_failure_this_run:
             clear_table_failure(journal, item_key)
 
-        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
+        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, {n_formulas} formulas, quality {quality_grade}")  # noqa: E501
         return len(chunks), n_tables, "", extraction.stats, quality_grade
 
     def index_document(self, item: ZoteroItem) -> int:

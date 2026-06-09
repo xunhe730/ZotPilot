@@ -1,6 +1,6 @@
 """ChromaDB filter builders and post-retrieval text filters."""
 
-VALID_CHUNK_TYPES = {"text", "figure", "table"}
+VALID_CHUNK_TYPES = {"text", "figure", "table", "formula"}
 
 
 def _build_chromadb_filters(
@@ -17,7 +17,7 @@ def _build_chromadb_filters(
     Args:
         year_min: Minimum publication year
         year_max: Maximum publication year
-        chunk_types: Filter to specific chunk types (text, figure, table)
+        chunk_types: Filter to specific chunk types (text, figure, table, formula)
 
     Returns:
         ChromaDB where clause dict, or None if no filters

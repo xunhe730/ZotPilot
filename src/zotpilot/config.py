@@ -137,6 +137,12 @@ class Config:
     # so no non-default field follows -- keeps dataclass field ordering valid)
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
+    # Formula OCR settings (optional, local-first, excluded from index config hash)
+    formula_ocr_enabled: bool = False
+    formula_ocr_provider: str = "local"
+    formula_ocr_max_formulas_per_doc: int = 40
+    formula_ocr_max_formulas_per_page: int = 6
+    formula_ocr_min_confidence: float = 0.6
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -218,6 +224,11 @@ class Config:
             semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
             embedding_base_url=data.get("embedding_base_url", None),
             embedding_api_key=data.get("embedding_api_key", None),
+            formula_ocr_enabled=data.get("formula_ocr_enabled", False),
+            formula_ocr_provider=data.get("formula_ocr_provider", "local"),
+            formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
+            formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
+            formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -267,6 +278,11 @@ class Config:
             "semantic_scholar_api_key": self.semantic_scholar_api_key,
             "embedding_base_url": self.embedding_base_url,
             "embedding_api_key": self.embedding_api_key,
+            "formula_ocr_enabled": self.formula_ocr_enabled,
+            "formula_ocr_provider": self.formula_ocr_provider,
+            "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
+            "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
+            "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -358,6 +374,21 @@ class Config:
                 )
             elif not parsed.netloc:
                 errors.append(f"gemini_base_url is malformed: {self.gemini_base_url}")
+
+        from .feature_extraction.formula_ocr import FORMULA_OCR_PROVIDERS
+
+        if self.formula_ocr_provider not in FORMULA_OCR_PROVIDERS:
+            valid = ", ".join(repr(p) for p in FORMULA_OCR_PROVIDERS)
+            errors.append(
+                f"Invalid formula_ocr_provider: {self.formula_ocr_provider}. "
+                f"Must be one of: {valid}"
+            )
+        if self.formula_ocr_max_formulas_per_doc < 0:
+            errors.append("formula_ocr_max_formulas_per_doc must be >= 0")
+        if self.formula_ocr_max_formulas_per_page < 0:
+            errors.append("formula_ocr_max_formulas_per_page must be >= 0")
+        if not 0.0 <= self.formula_ocr_min_confidence <= 1.0:
+            errors.append("formula_ocr_min_confidence must be between 0.0 and 1.0")
 
         return errors
 

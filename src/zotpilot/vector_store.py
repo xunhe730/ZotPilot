@@ -10,7 +10,7 @@ import chromadb
 from chromadb.config import Settings
 
 from .interfaces import EmbedderProtocol
-from .models import Chunk, StoredChunk
+from .models import Chunk, ExtractedFormula, StoredChunk
 
 if TYPE_CHECKING:
     from .models import ExtractedTable
@@ -332,6 +332,50 @@ class VectorStore:
             embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
             self._guarded_add(ids, documents, embeddings, metadatas)
 
+    def add_formulas(
+        self,
+        doc_id: str,
+        doc_meta: dict,
+        formulas: list[ExtractedFormula],
+    ) -> None:
+        """Add formula chunks to the store."""
+        if not formulas:
+            return
+
+        ids = []
+        documents = []
+        metadatas = []
+
+        for formula in formulas:
+            chunk_id = f"{doc_id}_formula_{formula.formula_index:04d}"
+            text = formula.to_searchable_text()
+            metadata = self._build_base_metadata(doc_id, doc_meta)
+            metadata.update({
+                "chunk_type": "formula",
+                "page_num": formula.page_num,
+                "chunk_index": formula.formula_index,
+                "formula_index": formula.formula_index,
+                "formula_latex": formula.latex,
+                "formula_confidence": formula.confidence if formula.confidence is not None else 0.0,
+                "formula_has_confidence": formula.confidence is not None,
+                "formula_raw_text": formula.raw_text,
+                "formula_equation_number": formula.equation_number,
+                "formula_variable_gloss": formula.variable_gloss,
+                "formula_provider": formula.provider,
+                "formula_source": formula.source,
+                "bbox": ",".join(f"{v:.2f}" for v in formula.bbox),
+                "reference_context": formula.reference_context or "",
+                "section": "formula",
+                "section_confidence": 1.0,
+            })
+
+            ids.append(chunk_id)
+            documents.append(text)
+            metadatas.append(metadata)
+
+        embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
+        self._guarded_add(ids, documents, embeddings, metadatas)
+
     def _cached_embed_query(self, query: str) -> list[float]:
         """Embed a query, returning cached result if available."""
         if query in self._query_cache:
@@ -431,13 +475,27 @@ class VectorStore:
         """Remove all chunks for a document."""
         self.collection.delete(where={"doc_id": {"$eq": doc_id}})
 
+    def delete_chunks_by_type(self, doc_id: str, chunk_type: str) -> None:
+        """Remove chunks of a specific type for a document."""
+        valid_chunk_types = {"text", "table", "figure", "formula"}
+        if chunk_type not in valid_chunk_types:
+            valid = ", ".join(sorted(valid_chunk_types))
+            raise ValueError(f"Invalid chunk_type {chunk_type!r}. Valid values: {valid}")
+        self.collection.delete(where={
+            "$and": [
+                {"doc_id": {"$eq": doc_id}},
+                {"chunk_type": {"$eq": chunk_type}},
+            ]
+        })
+
     def get_indexed_doc_ids(self) -> set[str]:
         """Get set of all indexed document IDs.
 
         Memory-efficient: extracts doc_id from chunk IDs without loading metadata.
         Handles text chunks ({doc_id}_chunk_{index:04d}),
         table chunks ({doc_id}_table_{page:04d}_{table_idx:02d}),
-        and figure chunks ({doc_id}_fig_{page:03d}_{fig_idx:02d}).
+        figure chunks ({doc_id}_fig_{page:03d}_{fig_idx:02d}),
+        and formula chunks ({doc_id}_formula_{formula_idx:04d}).
         """
         results = self.collection.get(include=[])  # IDs only, no documents/metadata
         if not results['ids']:
@@ -459,6 +517,8 @@ class VectorStore:
             parts = chunk_id.rsplit('_table_', 1)
         elif '_fig_' in chunk_id:
             parts = chunk_id.rsplit('_fig_', 1)
+        elif '_formula_' in chunk_id:
+            parts = chunk_id.rsplit('_formula_', 1)
         else:
             return None
         return parts[0] if len(parts) == 2 else None
@@ -482,10 +542,10 @@ class VectorStore:
         )
 
     def count_chunk_types(self, doc_ids: set[str]) -> dict[str, int]:
-        """Exact text/table/figure chunk counts for the given docs, derived from
+        """Exact text/table/figure/formula chunk counts for the given docs, derived from
         chunk-ID prefixes. Unlike the metadata sample in get_index_stats this is
         not capped, so it reports the true distribution for large indexes."""
-        counts = {"text": 0, "table": 0, "figure": 0}
+        counts = {"text": 0, "table": 0, "figure": 0, "formula": 0}
         if not doc_ids:
             return counts
         results = self.collection.get(include=[])  # IDs only
@@ -498,6 +558,8 @@ class VectorStore:
                 counts["table"] += 1
             elif "_fig_" in chunk_id:
                 counts["figure"] += 1
+            elif "_formula_" in chunk_id:
+                counts["formula"] += 1
         return counts
 
     def get_document_meta(self, doc_id: str) -> dict | None:

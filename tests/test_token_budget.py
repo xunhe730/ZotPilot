@@ -322,6 +322,62 @@ class TestContextAndIndexingContracts:
         assert compact["passages"][0]["section_confidence"] == 0.9
         assert len(json.dumps(compact, ensure_ascii=False)) < 2000
 
+    def test_get_passage_context_formula_branch(self):
+        from zotpilot.tools.context import get_passage_context
+
+        store = MagicMock()
+        store.collection.get.side_effect = [
+            {
+                "ids": ["DOC1_formula_0000"],
+                "documents": ["Formula on page 3 (1)\nContext: energy equation.\nLaTeX: E = mc^2"],
+                "metadatas": [
+                    {
+                        "doc_title": "Paper",
+                        "citation_key": "auth2024",
+                        "journal_quartile": "Q1",
+                        "page_num": 3,
+                        "formula_latex": r"E = mc^2",
+                        "formula_equation_number": "(1)",
+                        "formula_variable_gloss": "where m is mass",
+                        "reference_context": "Energy is defined by the following equation.",
+                    }
+                ],
+            },
+            {
+                "ids": ["DOC1_chunk_0002"],
+                "documents": ["Energy is defined by the following equation in our method."],
+                "metadatas": [
+                    {
+                        "chunk_index": 2,
+                        "page_num": 3,
+                        "section": "methods",
+                        "section_confidence": 0.9,
+                    }
+                ],
+            },
+        ]
+        config = _make_config()
+
+        with (
+            patch("zotpilot.tools.context._get_config", return_value=config),
+            patch("zotpilot.tools.context._get_store", return_value=store),
+            patch(
+                "zotpilot.tools.context._get_zotero",
+                return_value=MagicMock(
+                    get_all_items_with_pdfs=MagicMock(return_value=[_make_pdf_item_with_key("DOC1")])
+                ),
+            ),
+        ):
+            result = get_passage_context("DOC1", 0, chunk_type="formula", include_merged=True)
+
+        assert result["chunk_type"] == "formula"
+        assert result["latex"] == r"E = mc^2"
+        assert result["equation_number"] == "(1)"
+        assert result["variable_gloss"] == "where m is mass"
+        assert result["passages"][0]["chunk_type"] == "formula"
+        assert result["passages"][1]["chunk_type"] == "text"
+        assert "Energy is defined" in result["merged_text"]
+
     def test_table_context_early_return_keeps_empty_merged_text(self):
         from zotpilot.tools.context import get_passage_context
 
@@ -365,7 +421,7 @@ class TestContextAndIndexingContracts:
         store = MagicMock()
         store.get_indexed_doc_ids.return_value = {"KEY0"}
         store.count_chunks_for_doc_ids.return_value = 120
-        store.count_chunk_types.return_value = {"text": 100, "table": 5, "figure": 15}
+        store.count_chunk_types.return_value = {"text": 100, "table": 5, "figure": 15, "formula": 0}
         store.collection.get.return_value = {"metadatas": []}
         zotero = MagicMock()
         zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(200)]

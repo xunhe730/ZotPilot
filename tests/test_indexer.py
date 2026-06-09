@@ -27,6 +27,114 @@ class TestConfigHash:
 
         assert _config_hash(base) != _config_hash(native)
 
+    def test_formula_ocr_settings_do_not_affect_index_hash(self):
+        from zotpilot.indexer import _config_hash
+
+        base = SimpleNamespace(
+            chunk_size=400,
+            chunk_overlap=100,
+            embedding_provider="local",
+            dashscope_embedding_endpoint="compatible",
+            embedding_dimensions=384,
+            embedding_model="local",
+            ocr_language="eng",
+            vision_enabled=False,
+            vision_provider="anthropic",
+            vision_model="",
+            formula_ocr_enabled=False,
+            formula_ocr_provider="local",
+        )
+        formula_enabled = SimpleNamespace(
+            **{
+                **base.__dict__,
+                "formula_ocr_enabled": True,
+                "formula_ocr_max_formulas_per_doc": 12,
+                "formula_ocr_min_confidence": 0.8,
+            }
+        )
+
+        assert _config_hash(base) == _config_hash(formula_enabled)
+
+
+class TestFormulaBackfill:
+    def _hash_config(self):
+        return SimpleNamespace(
+            chunk_size=400,
+            chunk_overlap=100,
+            embedding_provider="local",
+            dashscope_embedding_endpoint="compatible",
+            embedding_dimensions=384,
+            embedding_model="local",
+            ocr_language="eng",
+            vision_enabled=False,
+            vision_provider="anthropic",
+            vision_model="",
+            formula_ocr_enabled=True,
+            formula_ocr_provider="local",
+            formula_ocr_max_formulas_per_doc=40,
+            formula_ocr_max_formulas_per_page=6,
+            formula_ocr_min_confidence=0.6,
+        )
+
+    def test_backfill_requires_existing_matching_config_hash(self, tmp_path):
+        from zotpilot.indexer import ConfigDriftError, Indexer, _config_hash
+
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer._config_hash_path = tmp_path / "config_hash.txt"
+
+        with pytest.raises(ConfigDriftError, match="config hash exists"):
+            indexer._assert_config_hash_current()
+
+        indexer._config_hash_path.write_text("stale")
+        with pytest.raises(ConfigDriftError, match="differs"):
+            indexer._assert_config_hash_current()
+
+        indexer._config_hash_path.write_text(_config_hash(indexer.config))
+        indexer._assert_config_hash_current()
+
+    def test_index_formulas_backfills_already_indexed_docs(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem(
+            item_key="DOC1",
+            title="Paper",
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+            citation_key="auth2024",
+            publication="Nature",
+        )
+
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        result = indexer.index_formulas()
+
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 1
+        indexer._assert_config_hash_current.assert_called_once()
+        indexer.store.delete_chunks_by_type.assert_called_once_with("DOC1", "formula")
+        indexer.store.add_formulas.assert_called_once()
+
 
 class TestTitlePatternValidation:
     """Test P0-3: ReDoS protection on title_pattern in Indexer.index_all()."""

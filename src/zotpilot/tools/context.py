@@ -1,6 +1,6 @@
 """Context expansion tools."""
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
@@ -15,6 +15,10 @@ def get_passage_context(
     chunk_index: Annotated[int, Field(description="Chunk index from search results")],
     window: Annotated[int, Field(description="Chunks before/after to include", ge=1, le=5)] = 2,
     include_merged: Annotated[bool, Field(description="Return merged text instead of per-passage text")] = False,
+    chunk_type: Annotated[
+        Literal["text", "formula"] | None,
+        Field(description="Set to formula for formula chunks"),
+    ] = None,
     table_page: Annotated[int | None, Field(description="Page number of table (for table context)")] = None,
     table_index: Annotated[int | None, Field(description="Index of table on page")] = None,
 ) -> dict:
@@ -33,6 +37,8 @@ def get_passage_context(
     # Handle table context lookup
     if table_page is not None and table_index is not None:
         return _get_table_reference_context(store, doc_id, table_page, table_index, window, include_merged)
+    if chunk_type == "formula":
+        return _get_formula_reference_context(store, doc_id, chunk_index, include_merged)
 
     # Standard text chunk context
     chunks = store.get_adjacent_chunks(doc_id, chunk_index, window=window)
@@ -187,4 +193,85 @@ def _get_table_reference_context(
         "window": window,
         "passages": passages,
         **({"merged_text": "\n\n".join(c.text for c in context_chunks)} if include_merged else {}),
+    }
+
+
+def _get_formula_reference_context(
+    store,
+    doc_id: str,
+    formula_index: int,
+    include_merged: bool,
+) -> dict:
+    """Return formula metadata plus same-page text context."""
+    formula_chunk_id = f"{doc_id}_formula_{formula_index:04d}"
+    formula_results = store.collection.get(
+        ids=[formula_chunk_id],
+        include=["documents", "metadatas"],
+    )
+    if not formula_results["ids"]:
+        raise ToolError(f"Formula not found: formula_index={formula_index}")
+
+    formula_text = formula_results["documents"][0]
+    formula_meta = formula_results["metadatas"][0]
+    page_num = formula_meta.get("page_num", 0)
+
+    text_results = store.collection.get(
+        where={
+            "$and": [
+                {"doc_id": {"$eq": doc_id}},
+                {"chunk_type": {"$eq": "text"}},
+                {"page_num": {"$eq": page_num}},
+            ]
+        },
+        include=["documents", "metadatas"],
+    )
+
+    passages = [
+        {
+            "chunk_index": formula_index,
+            "page": page_num,
+            "section": "formula",
+            "chunk_type": "formula",
+            "is_center": True,
+            "equation_number": formula_meta.get("formula_equation_number", ""),
+            "latex": formula_meta.get("formula_latex", ""),
+            "reference_context": formula_meta.get("reference_context", ""),
+            "variable_gloss": formula_meta.get("formula_variable_gloss", ""),
+            **({} if include_merged else {"text": formula_text}),
+        }
+    ]
+
+    for text, meta in zip(text_results.get("documents") or [], text_results.get("metadatas") or []):
+        passages.append({
+            "chunk_index": meta.get("chunk_index", -1),
+            "page": meta.get("page_num", 0),
+            "section": meta.get("section", "unknown"),
+            "section_confidence": meta.get("section_confidence", 1.0),
+            "chunk_type": "text",
+            "is_center": False,
+            **({} if include_merged else {"text": text}),
+        })
+
+    merged_parts = [formula_text]
+    if formula_meta.get("reference_context"):
+        merged_parts.append(formula_meta.get("reference_context", ""))
+    merged_parts.extend(text_results.get("documents") or [])
+
+    return {
+        "doc_id": doc_id,
+        "doc_title": formula_meta.get("doc_title", "Unknown"),
+        "citation_key": formula_meta.get("citation_key", ""),
+        "section": "formula",
+        "section_confidence": 1.0,
+        "journal_quartile": formula_meta.get("journal_quartile") or None,
+        "center_chunk_index": formula_index,
+        "chunk_type": "formula",
+        "formula_index": formula_index,
+        "formula_page": page_num,
+        "equation_number": formula_meta.get("formula_equation_number", ""),
+        "latex": formula_meta.get("formula_latex", ""),
+        "reference_context": formula_meta.get("reference_context", ""),
+        "variable_gloss": formula_meta.get("formula_variable_gloss", ""),
+        "passages": passages,
+        **({"merged_text": "\n\n".join(p for p in merged_parts if p)} if include_merged else {}),
     }

@@ -61,6 +61,7 @@ class DocumentExtraction:
     figures: list[ExtractedFigure]
     stats: dict
     quality_grade: str
+    formulas: list[ExtractedFormula] = field(default_factory=list)
     completeness: ExtractionCompleteness | None = None
     vision_details: list[dict] | None = None
     pending_vision: object | None = field(default=None, repr=False)
@@ -85,6 +86,38 @@ class ExtractedFigure:
         if self.reference_context:
             text += f"\n{self.reference_context}"
         return text
+
+
+@dataclass
+class ExtractedFormula:
+    """A formula extracted from a PDF."""
+    page_num: int
+    formula_index: int
+    bbox: tuple[float, float, float, float]
+    latex: str
+    confidence: float | None = None
+    raw_text: str = ""
+    reference_context: str | None = None
+    equation_number: str = ""
+    variable_gloss: str = ""
+    source: str = "text_block"
+    provider: str = "local"
+
+    def to_searchable_text(self) -> str:
+        """Return natural-language-first text for embedding."""
+        label = f"Formula on page {self.page_num}"
+        if self.equation_number:
+            label += f" {self.equation_number}"
+
+        parts = [label]
+        if self.reference_context:
+            parts.append(f"Context: {self.reference_context}")
+        if self.variable_gloss:
+            parts.append(f"Variable notes: {self.variable_gloss}")
+        if self.raw_text and self.raw_text not in (self.reference_context or ""):
+            parts.append(f"Detected formula text: {self.raw_text}")
+        parts.append(f"LaTeX: {self.latex}")
+        return "\n".join(p for p in parts if p)
 
 
 @dataclass
@@ -308,6 +341,14 @@ class RetrievalResult:
     tags: str = ""
     collections: str = ""
     journal_quartile: str | None = None
+    chunk_type: str = "text"
+    formula_latex: str = ""
+    formula_equation_number: str = ""
+    formula_variable_gloss: str = ""
+    formula_provider: str = ""
+    formula_source: str = ""
+    formula_confidence: float | None = None
+    reference_context: str = ""
     composite_score: float | None = None  # Reranked score (similarity x section x journal)
     context_before: list[str] = field(default_factory=list)
     context_after: list[str] = field(default_factory=list)

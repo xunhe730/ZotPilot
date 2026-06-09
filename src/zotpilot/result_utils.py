@@ -22,14 +22,22 @@ def _stored_chunk_to_retrieval_result(chunk) -> RetrievalResult:
         tags=meta.get("tags", ""),
         collections=meta.get("collections", ""),
         journal_quartile=meta.get("journal_quartile"),
+        chunk_type=meta.get("chunk_type", "text"),
+        formula_latex=meta.get("formula_latex", ""),
+        formula_equation_number=meta.get("formula_equation_number", ""),
+        formula_variable_gloss=meta.get("formula_variable_gloss", ""),
+        formula_provider=meta.get("formula_provider", ""),
+        formula_source=meta.get("formula_source", ""),
+        formula_confidence=meta.get("formula_confidence"),
+        reference_context=meta.get("reference_context", ""),
     )
 
 
 def _merge_results_by_chunk(primary: list, secondary: list, top_k: int) -> list:
-    """Merge two result lists, keeping the best composite_score per unique (doc_id, chunk_index)."""
+    """Merge result lists, keeping the best score per unique stored chunk."""
     seen: dict[tuple, object] = {}
     for r in primary + secondary:
-        key = (r.doc_id, r.chunk_index)
+        key = (r.doc_id, r.chunk_type, r.chunk_index)
         existing = seen.get(key)
         if existing is None:
             seen[key] = r
@@ -59,8 +67,22 @@ def _result_to_dict(r, verbosity: str = "full") -> dict:
         "relevance_score": round(r.score, 3),
         "composite_score": round(r.composite_score, 3) if r.composite_score is not None else None,
         "section": r.section,
+        "chunk_type": r.chunk_type,
         "passage": r.text,
     }
+
+    if r.chunk_type == "formula":
+        formula_payload = {
+            "formula_latex": r.formula_latex,
+            "equation_number": r.formula_equation_number,
+            "variable_gloss": r.formula_variable_gloss,
+            "reference_context": r.reference_context,
+            "formula_provider": r.formula_provider,
+            "formula_source": r.formula_source,
+        }
+        if r.formula_confidence is not None:
+            formula_payload["formula_confidence"] = round(float(r.formula_confidence), 3)
+        result.update(formula_payload)
 
     if verbosity != "minimal" and (r.context_before or r.context_after):
         result.update({

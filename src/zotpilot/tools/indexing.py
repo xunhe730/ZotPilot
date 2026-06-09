@@ -362,6 +362,61 @@ def index_library(
         _index_lock.release()
 
 
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def index_formulas(
+    item_key: Annotated[str | None, Field(description="Backfill formulas for one Zotero item key")] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Backfill formulas for these Zotero item keys"),
+    ] = None,
+    limit: Annotated[int | None, Field(description="Max already-indexed papers to process", ge=1)] = None,
+    refresh_existing: Annotated[
+        bool,
+        Field(description="Delete existing formula chunks before writing new ones"),
+    ] = True,
+) -> dict:
+    """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
+    if not _index_lock.acquire(blocking=False):
+        raise ToolError("Indexing in progress, please wait.")
+    lease = None
+    try:
+        from ..indexer import ConfigDriftError, Indexer
+        from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
+
+        item_keys = _parse_json_string_list(item_keys)
+        _config = _get_config()
+        errors = _config.validate()
+        if errors:
+            raise ToolError(f"Config errors: {'; '.join(errors)}")
+        if not _config.formula_ocr_enabled:
+            raise ToolError("formula_ocr_enabled must be true before running index_formulas")
+
+        index_data_root = Path(_config.chroma_db_path).parent
+        lease = IndexLease(index_data_root / "index_lease.json")
+        try:
+            acquire_lease(lease)
+        except LeaseContentionError as e:
+            raise ToolError(str(e))
+
+        try:
+            result = Indexer(_config).index_formulas(
+                item_key=item_key,
+                item_keys=item_keys,
+                limit=limit,
+                refresh_existing=refresh_existing,
+            )
+        except (ConfigDriftError, IndexUnavailableError, EmbeddingDimensionMismatchError) as e:
+            raise ToolError(str(e)) from e
+
+        _get_store().clear_query_cache()
+        return result
+    finally:
+        if lease is not None:
+            release_lease(lease)
+        _index_lock.release()
+
+
 @mcp.tool(tags=tool_tags("core", "indexing"))
 def get_index_stats(
     limit: Annotated[int, Field(description="Papers per page for the unindexed paper list", ge=0, le=200)] = 50,
@@ -486,8 +541,8 @@ def get_index_stats(
                 {"doc_id": d, "reason": r} for d, r in list(incomplete.items())[:50]
             ]
             result["_notice_incomplete"] = (
-                f"⚠️ {len(incomplete)} indexed paper(s) are missing table/figure chunks "
-                "(text indexed OK but table/figure storage failed). Re-run with "
+                f"⚠️ {len(incomplete)} indexed paper(s) are missing table/figure/formula chunks "
+                "(text indexed OK but secondary chunk storage failed). Re-run with "
                 "index_library(item_keys=[...], force_reindex=True) to backfill them."
             )
     except Exception as e:
