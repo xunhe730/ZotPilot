@@ -18,13 +18,6 @@ class ProgressSink(Protocol):
         """Record one progress event."""
 
 
-class NullProgressSink:
-    """Progress sink that intentionally records nothing."""
-
-    def emit(self, event_type: str, **payload: object) -> None:
-        return None
-
-
 class JsonlProgressSink:
     """Append-only JSONL sink for index progress events."""
 

@@ -57,6 +57,7 @@ def profile_path() -> Path:
 
 def index_data_dir(config: "Config") -> Path:
     """Directory that stores index-adjacent state files."""
+    # Also normalize direct Config-like objects used by tests or API callers.
     return Path(config.chroma_db_path).expanduser().parent
 
 

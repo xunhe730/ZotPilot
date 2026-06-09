@@ -126,6 +126,32 @@ def test_index_cli_help_exposes_progress_jsonl(capsys):
     assert "--progress-jsonl" in capsys.readouterr().out
 
 
+def test_progress_counts_keeps_allowlisted_summary_fields():
+    from zotpilot.indexer import _progress_counts
+
+    counts = {
+        "indexed": 2,
+        "failed": 1,
+        "total_to_index": 4,
+        "rate_limited_abort": False,
+        "quality_distribution": {"A": 2},
+        "extraction_stats": {"total_pages": 10},
+        "skipped_no_pdf": [{"item_key": "NO1"}, {"item_key": "NO2"}],
+        "long_documents": [{"item_key": "LONG1", "pages": 200}],
+        "results": ["not-jsonl-summary"],
+    }
+
+    assert _progress_counts(counts) == {
+        "indexed": 2,
+        "failed": 1,
+        "total_to_index": 4,
+        "rate_limited_abort": False,
+        "quality_distribution": {"A": 2},
+        "extraction_stats": {"total_pages": 10},
+        "skipped_no_pdf_count": 2,
+    }
+
+
 def test_index_all_emits_structured_progress_without_pdf_paths(tmp_path):
     item = _make_item("K1", "Readable Paper")
     indexer = _make_indexer(tmp_path, [item])
