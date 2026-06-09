@@ -1,4 +1,10 @@
-"""Formula OCR provider registry and text-layer formula detection."""
+"""Formula OCR provider registry and text-layer display-equation detection.
+
+Phase A intentionally works at PyMuPDF text-block granularity: candidate crops
+cover the whole block bbox and target display equations in PDFs with a text
+layer. Inline math, image/vector-only equations, and full-page fallback remain
+out of scope for this local-first pass.
+"""
 from __future__ import annotations
 
 import logging
@@ -118,7 +124,12 @@ def extract_formula_candidates(
     max_formulas_per_page: int = 6,
     min_confidence: float = 0.6,
 ) -> list[FormulaCandidate]:
-    """Detect scene-1 text-layer formula candidates from a PDF."""
+    """Detect block-level text-layer display-equation candidates from a PDF.
+
+    Crops are rendered from whole PyMuPDF text blocks. If a publisher combines
+    prose and a display equation in one block, nearby prose may be included in
+    the OCR crop; line-level segmentation is left for a later phase.
+    """
     candidates: list[FormulaCandidate] = []
     with pymupdf.open(str(pdf_path)) as doc:
         for page_index, page in enumerate(doc):

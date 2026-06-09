@@ -170,6 +170,28 @@ zotpilot setup --non-interactive --provider custom \
 </details>
 
 <details>
+<summary><b>Formula OCR (optional)</b></summary>
+
+Formula indexing is optional and disabled by default. Install the extra before enabling local formula OCR:
+
+```bash
+pip install "zotpilot[formula]"
+# editable/dev install:
+pip install -e ".[formula,dev]"
+```
+
+Then enable it and rerun indexing:
+
+```bash
+zotpilot config set formula_ocr_enabled true
+zotpilot index
+```
+
+This phase targets **display formulas in PDFs with a text layer**. ZotPilot detects local formula candidates, stores them as formula chunks, and makes them searchable together with text, tables, and figures. The default `local` provider runs on your machine and does not send formula crops or LaTeX to any external service. Inline math, image/vector-only formulas, full-page fallback, SimpleTex, and cloud vision formula recognition are left for later phases.
+
+</details>
+
+<details>
 <summary><b>API keys and environment</b></summary>
 
 There are two layers:

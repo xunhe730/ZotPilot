@@ -197,6 +197,21 @@ class Indexer:
             self._formula_provider = create_formula_ocr_provider(self.config.formula_ocr_provider)
         return self._formula_provider
 
+    def _ensure_formula_provider_available(self) -> None:
+        """Fail fast when formula OCR is enabled but its optional extra is missing."""
+        if getattr(self.config, "formula_ocr_enabled", False) is not True:
+            return
+        try:
+            self._get_formula_provider()
+        except RuntimeError as e:
+            provider_name = getattr(self.config, "formula_ocr_provider", "unknown")
+            raise RuntimeError(
+                f"Formula OCR provider {provider_name!r} is unavailable. "
+                "Install the optional dependency with `pip install zotpilot[formula]` "
+                "(or `uv pip install -e .[formula]` for an editable checkout), "
+                "then rerun indexing; or set formula_ocr_enabled=false."
+            ) from e
+
     def _recognize_formulas_for_item(self, item: ZoteroItem):
         """Run text-layer formula OCR for one item if possible."""
         if item.pdf_path is None or not item.pdf_path.exists():
@@ -222,6 +237,7 @@ class Indexer:
         """Backfill formula chunks for already-indexed documents."""
         if not self.config.formula_ocr_enabled:
             raise ValueError("formula_ocr_enabled must be true before running formula backfill")
+        self._ensure_formula_provider_available()
         self._assert_config_hash_current()
 
         indexed_ids = self.store.get_indexed_doc_ids()
@@ -388,6 +404,8 @@ class Indexer:
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
         """
+        self._ensure_formula_provider_available()
+
         run_id = uuid.uuid4().hex
 
         def progress(event_type: str, **payload: object) -> None:
@@ -1269,8 +1287,10 @@ class Indexer:
                     fig.reference_context = ctx
 
         # Tracks a swallowed (non-quota) table/figure failure recorded THIS run,
-        # so we don't clear the marker we just wrote at the end.
-        recorded_failure_this_run = False
+        # so we don't clear the marker we just wrote at the end. Formula OCR is
+        # tracked separately and must not poison table/figure completeness.
+        table_figure_failure_this_run = False
+        formula_failure_this_run = False
 
         # Store formulas if explicitly enabled. Phase A only covers text-layer
         # candidates; image/vector formulas are intentionally left for later.
@@ -1287,9 +1307,7 @@ class Indexer:
                 raise
             except Exception as e:
                 logger.warning(f"Formula OCR/storage failed for {item_key}: {e}")
-                if journal is not None:
-                    record_table_failure(journal, item_key, f"formula storage: {e}")
-                    recorded_failure_this_run = True
+                formula_failure_this_run = True
 
         # Store tables if enabled (skip layout artifacts)
         n_tables = 0
@@ -1305,7 +1323,7 @@ class Indexer:
                 logger.warning(f"Table storage failed for {item_key}: {e}")
                 if journal is not None:
                     record_table_failure(journal, item_key, f"table storage: {e}")
-                    recorded_failure_this_run = True
+                    table_figure_failure_this_run = True
         if n_artifacts:
             logger.debug(f"  Skipped {n_artifacts} artifact table(s)")
         logger.debug(f"  Extracted {n_tables} tables")
@@ -1323,13 +1341,20 @@ class Indexer:
                 logger.warning(f"Figure storage failed for {item_key}: {e}")
                 if journal is not None:
                     record_table_failure(journal, item_key, f"figure storage: {e}")
-                    recorded_failure_this_run = True
+                    table_figure_failure_this_run = True
 
-        # Tables, figures, and formulas stored cleanly this run: clear any stale marker from a
-        # prior run. Skipped when this run recorded its own failure (keep that),
-        # and a re-raised RateLimitError above never reaches here, so a
-        # quota-aborted run keeps the doc's prior marker intact.
-        if journal is not None and not recorded_failure_this_run:
+        if formula_failure_this_run:
+            logger.debug(
+                "Formula OCR/storage failed for %s independently of table/figure state",
+                item_key,
+            )
+
+        # Tables and figures stored cleanly this run: clear any stale marker
+        # from a prior run. Skipped when this run recorded its own table/figure
+        # failure (keep that), and a re-raised RateLimitError above never
+        # reaches here, so a quota-aborted run keeps the doc's prior marker
+        # intact. Formula OCR failures are intentionally independent.
+        if journal is not None and not table_figure_failure_this_run:
             clear_table_failure(journal, item_key)
 
         logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, {n_formulas} formulas, quality {quality_grade}")  # noqa: E501
