@@ -187,7 +187,7 @@ zotpilot config set formula_ocr_enabled true
 zotpilot index
 ```
 
-This phase targets **display formulas in PDFs with a text layer**. ZotPilot detects local formula candidates, stores them as formula chunks, and makes them searchable together with text, tables, and figures. The default `local` provider runs on your machine and does not send formula crops or LaTeX to any external service. Inline math, image/vector-only formulas, full-page fallback, SimpleTex, and cloud vision formula recognition are left for later phases.
+This phase targets **display formulas in PDFs with a text layer**. ZotPilot detects local formula candidates, stores them as formula chunks, and makes them searchable together with text, tables, and figures. The default `local` provider runs on your machine and does not send formula crops or LaTeX to any external service; the first run downloads RapidLaTeXOCR model weights from the network (tens of MB), and later runs can stay offline. Inline math, image/vector-only formulas, full-page fallback, SimpleTex, and cloud vision formula recognition are left for later phases.
 
 </details>
 

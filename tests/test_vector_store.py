@@ -65,6 +65,36 @@ class TestVectorStore:
         # Should include the center and at least one neighbor
         indices = {c.metadata["chunk_index"] for c in chunks}
         assert 1 in indices
+        assert {c.metadata["chunk_type"] for c in chunks} == {"text"}
+
+    def test_get_adjacent_chunks_excludes_formula_chunks(self, populated_store):
+        from zotpilot.models import ExtractedFormula
+
+        doc_meta = populated_store.get_document_meta("TEST001")
+        populated_store.add_formulas(
+            "TEST001",
+            doc_meta,
+            [
+                ExtractedFormula(
+                    page_num=2,
+                    formula_index=0,
+                    bbox=(1, 2, 3, 4),
+                    latex=r"E = mc^2",
+                ),
+                ExtractedFormula(
+                    page_num=2,
+                    formula_index=1,
+                    bbox=(4, 5, 6, 7),
+                    latex=r"F = ma",
+                ),
+            ],
+        )
+
+        chunks = populated_store.get_adjacent_chunks("TEST001", 1, window=1)
+
+        assert chunks
+        assert all(chunk.metadata["chunk_type"] == "text" for chunk in chunks)
+        assert all(not chunk.text.startswith("Formula on page") for chunk in chunks)
 
     def test_search(self, populated_store):
         results = populated_store.search("neural networks", top_k=3)

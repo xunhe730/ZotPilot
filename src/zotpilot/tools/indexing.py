@@ -265,7 +265,7 @@ def index_library(
 
         effective_max_pages = max_pages if max_pages is not None else config.max_pages
 
-        from ..indexer import ConfigDriftError
+        from ..indexer import ConfigDriftError, FormulaProviderUnavailableError
         from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
 
         try:
@@ -280,7 +280,12 @@ def index_library(
                 batch_size=batch_size if batch_size > 0 else None,
                 journal=journal,
             )
-        except (ConfigDriftError, IndexUnavailableError, EmbeddingDimensionMismatchError) as e:
+        except (
+            ConfigDriftError,
+            FormulaProviderUnavailableError,
+            IndexUnavailableError,
+            EmbeddingDimensionMismatchError,
+        ) as e:
             raise ToolError(str(e)) from e
 
         # Clear query embedding cache so new documents are findable
@@ -381,7 +386,7 @@ def index_formulas(
         raise ToolError("Indexing in progress, please wait.")
     lease = None
     try:
-        from ..indexer import ConfigDriftError, Indexer
+        from ..indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
         from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
 
         item_keys = _parse_json_string_list(item_keys)
@@ -406,7 +411,12 @@ def index_formulas(
                 limit=limit,
                 refresh_existing=refresh_existing,
             )
-        except (ConfigDriftError, IndexUnavailableError, EmbeddingDimensionMismatchError) as e:
+        except (
+            ConfigDriftError,
+            FormulaProviderUnavailableError,
+            IndexUnavailableError,
+            EmbeddingDimensionMismatchError,
+        ) as e:
             raise ToolError(str(e)) from e
 
         _get_store().clear_query_cache()
@@ -541,7 +551,7 @@ def get_index_stats(
                 {"doc_id": d, "reason": r} for d, r in list(incomplete.items())[:50]
             ]
             result["_notice_incomplete"] = (
-                f"⚠️ {len(incomplete)} indexed paper(s) are missing table/figure/formula chunks "
+                f"⚠️ {len(incomplete)} indexed paper(s) are missing table/figure chunks "
                 "(text indexed OK but secondary chunk storage failed). Re-run with "
                 "index_library(item_keys=[...], force_reindex=True) to backfill them."
             )

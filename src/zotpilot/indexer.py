@@ -102,6 +102,10 @@ class ConfigDriftError(RuntimeError):
     """
 
 
+class FormulaProviderUnavailableError(RuntimeError):
+    """Raised when formula OCR is enabled but its provider cannot be used."""
+
+
 # NOTE: _config_hash is defined in config.py (Decision 4 relocation) so the
 # lightweight CLI can import it without the indexer's heavy deps. It is imported
 # above and remains accessible as `indexer._config_hash` for existing callers.
@@ -201,11 +205,13 @@ class Indexer:
         """Fail fast when formula OCR is enabled but its optional extra is missing."""
         if getattr(self.config, "formula_ocr_enabled", False) is not True:
             return
+        provider_name = getattr(self.config, "formula_ocr_provider", "unknown")
         try:
-            self._get_formula_provider()
+            from .feature_extraction.formula_ocr import ensure_formula_ocr_provider_dependency
+
+            ensure_formula_ocr_provider_dependency(provider_name)
         except RuntimeError as e:
-            provider_name = getattr(self.config, "formula_ocr_provider", "unknown")
-            raise RuntimeError(
+            raise FormulaProviderUnavailableError(
                 f"Formula OCR provider {provider_name!r} is unavailable. "
                 "Install the optional dependency with `pip install zotpilot[formula]` "
                 "(or `uv pip install -e .[formula]` for an editable checkout), "
@@ -269,14 +275,25 @@ class Indexer:
                 "pdf_hash": self._pdf_hash(item.pdf_path),
                 "quality_grade": "",
             }
-            if refresh_existing:
-                self.store.delete_chunks_by_type(item.item_key, "formula")
             formulas = self._recognize_formulas_for_item(item)
-            self.store.add_formulas(item.item_key, doc_meta, formulas)
+            existing_formula_count = self._count_existing_formulas(item.item_key) if refresh_existing else 0
+            kept_existing = 0
+            if refresh_existing and formulas:
+                self.store.delete_chunks_by_type(item.item_key, "formula")
+            elif refresh_existing and existing_formula_count > 0:
+                kept_existing = existing_formula_count
+                logger.warning(
+                    "Formula backfill found 0 formulas for %s; keeping %d existing formula chunk(s)",
+                    item.item_key,
+                    existing_formula_count,
+                )
+            if formulas:
+                self.store.add_formulas(item.item_key, doc_meta, formulas)
             results.append({
                 "item_key": item.item_key,
                 "title": item.title,
                 "n_formulas": len(formulas),
+                "existing_formulas_kept": kept_existing,
             })
 
         return {
@@ -284,6 +301,20 @@ class Indexer:
             "formulas_indexed": sum(row["n_formulas"] for row in results),
             "results": results,
         }
+
+    def _count_existing_formulas(self, item_key: str) -> int:
+        """Best-effort count of existing formula chunks for one document."""
+        counter = getattr(self.store, "count_chunk_types", None)
+        if counter is None:
+            return 0
+        try:
+            counts = counter({item_key})
+        except Exception:
+            return 0
+        if not isinstance(counts, dict):
+            return 0
+        value = counts.get("formula", 0)
+        return int(value) if isinstance(value, int) else 0
 
     # ------------------------------------------------------------------
     # Empty-doc tracking (keyed by item_key -> pdf file hash)

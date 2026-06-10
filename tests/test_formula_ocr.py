@@ -4,6 +4,7 @@ from zotpilot.feature_extraction.formula_ocr import (
     _coerce_provider_result,
     _dedupe_candidates,
     _extract_block_signals,
+    _extract_equation_number,
     is_high_quality_formula_latex,
 )
 from zotpilot.models import ExtractedFormula
@@ -40,6 +41,13 @@ def test_formula_candidate_confidence_uses_font_and_span_flags_as_boosts():
 
     assert plain_score >= 0.6
     assert math_score > plain_score
+
+
+def test_equation_number_detection_avoids_plain_step_numbers():
+    assert _extract_equation_number("E = mc^2 (1)") == "(1)"
+    assert _extract_equation_number("Eq. (3)") == "(3)"
+    assert _extract_equation_number("Follow step (3)") == ""
+    assert _extract_equation_number("(1) (2)") == ""
 
 
 def test_extract_block_signals_collects_text_fonts_and_flags():

@@ -700,6 +700,8 @@ class TestGetIndexStatsSurfacesIncomplete:
         assert result["incomplete_table_docs_count"] == 1  # K9 filtered (not current)
         assert result["incomplete_table_docs"] == [{"doc_id": "K1", "reason": "table storage: boom"}]
         assert "_notice_incomplete" in result
+        assert "table/figure chunks" in result["_notice_incomplete"]
+        assert "formula chunks" not in result["_notice_incomplete"]
 
 
 class TestTableMarkerOrdering:

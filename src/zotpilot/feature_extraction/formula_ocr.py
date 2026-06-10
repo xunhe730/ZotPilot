@@ -7,6 +7,7 @@ out of scope for this local-first pass.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import re
 from dataclasses import dataclass
@@ -33,7 +34,11 @@ MATH_FONT_HINTS = (
 )
 MATH_SYMBOL_RE = re.compile(r"[=+\-*/<>≤≥≈≠∑∏∫√∞∂∇α-ωΑ-Ω_{}^]|\\[A-Za-z]+")
 WORD_RE = re.compile(r"[A-Za-z]{3,}")
-EQUATION_NUMBER_RE = re.compile(r"(?:Eq\.?\s*)?\((\d+(?:\.\d+)?)\)")
+EQUATION_NUMBER_RE = re.compile(
+    r"(?:\bEq\.?\s*\((?P<eq>\d+(?:\.\d+)?)\)|"
+    r"[=+\-*/<>≤≥≈≠∑∏∫√∞∂∇_{}^][^()\n]{0,160}\((?P<tail>\d+(?:\.\d+)?)\)\s*$)",
+    re.IGNORECASE,
+)
 NOISE_RE = re.compile(r"\b(?:abstract|references|figure|table|copyright|doi|keywords)\b", re.IGNORECASE)
 VARIABLE_GLOSS_RE = re.compile(r"\bwhere\b[^.。;；]{0,260}|其中[^.。;；]{0,260}|式中[^.。;；]{0,260}", re.IGNORECASE)
 
@@ -89,6 +94,18 @@ class LocalFormulaOCRProvider:
 FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider]] = {
     "local": LocalFormulaOCRProvider,
 }
+
+
+def ensure_formula_ocr_provider_dependency(name: str) -> None:
+    """Check lightweight provider availability without constructing the OCR model."""
+    if name not in FORMULA_OCR_PROVIDERS:
+        valid = ", ".join(sorted(FORMULA_OCR_PROVIDERS))
+        raise ValueError(f"Unknown formula OCR provider {name!r}. Valid providers: {valid}")
+    if name == "local" and importlib.util.find_spec("rapid_latex_ocr") is None:
+        raise RuntimeError(
+            "Formula OCR local provider requires the optional dependency "
+            "`zotpilot[formula]` (rapid-latex-ocr>=0.0.9)."
+        )
 
 
 def create_formula_ocr_provider(name: str) -> FormulaOCRProvider:
@@ -384,7 +401,10 @@ def _extract_variable_gloss(page_text: str, raw_text: str) -> str:
 
 def _extract_equation_number(raw_text: str) -> str:
     match = EQUATION_NUMBER_RE.search(raw_text)
-    return f"({match.group(1)})" if match else ""
+    if match is None:
+        return ""
+    number = match.group("eq") or match.group("tail")
+    return f"({number})" if number else ""
 
 
 def _normalize_space(text: str) -> str:

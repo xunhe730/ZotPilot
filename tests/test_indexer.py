@@ -138,6 +138,25 @@ class TestFormulaBackfill:
         indexer.store.add_formulas.assert_called_once()
 
     def test_formula_provider_preflight_has_actionable_install_hint(self):
+        from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
+
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            formula_ocr_enabled=True,
+            formula_ocr_provider="local",
+        )
+        indexer._get_formula_provider = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.importlib.util.find_spec", return_value=None):
+            with pytest.raises(FormulaProviderUnavailableError) as exc_info:
+                indexer._ensure_formula_provider_available()
+
+        message = str(exc_info.value)
+        assert "zotpilot[formula]" in message
+        assert "formula_ocr_enabled=false" in message
+        indexer._get_formula_provider.assert_not_called()
+
+    def test_formula_provider_preflight_does_not_load_model_when_available(self):
         from zotpilot.indexer import Indexer
 
         indexer = Indexer.__new__(Indexer)
@@ -145,15 +164,12 @@ class TestFormulaBackfill:
             formula_ocr_enabled=True,
             formula_ocr_provider="local",
         )
-        indexer._get_formula_provider = MagicMock(side_effect=RuntimeError("missing extra"))
+        indexer._get_formula_provider = MagicMock()
 
-        with pytest.raises(RuntimeError) as exc_info:
+        with patch("zotpilot.feature_extraction.formula_ocr.importlib.util.find_spec", return_value=object()):
             indexer._ensure_formula_provider_available()
 
-        message = str(exc_info.value)
-        assert "zotpilot[formula]" in message
-        assert "formula_ocr_enabled=false" in message
-        indexer._get_formula_provider.assert_called_once()
+        indexer._get_formula_provider.assert_not_called()
 
     def test_formula_provider_preflight_skips_when_disabled(self):
         from zotpilot.indexer import Indexer
@@ -165,6 +181,43 @@ class TestFormulaBackfill:
         indexer._ensure_formula_provider_available()
 
         indexer._get_formula_provider.assert_not_called()
+
+    def test_formula_backfill_keeps_existing_chunks_when_refresh_finds_none(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem(
+            item_key="DOC1",
+            title="Paper",
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+            citation_key="auth2024",
+            publication="Nature",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 2}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[])
+
+        result = indexer.index_formulas(refresh_existing=True)
+
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 0
+        assert result["results"][0]["existing_formulas_kept"] == 2
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
 
     def test_formula_failure_does_not_block_table_failure_cleanup(self, tmp_path):
         from zotpilot.index_authority import IndexJournal, mark_committed, record_table_failure
@@ -236,6 +289,55 @@ class TestFormulaBackfill:
         mock_record_failure.assert_not_called()
         assert item.item_key not in journal.table_failures
         assert "table_failure" not in journal.committed[item.item_key]
+
+    def test_formula_provider_error_is_tool_error_for_index_formulas(self, tmp_path):
+        from zotpilot.indexer import FormulaProviderUnavailableError
+        from zotpilot.state import ToolError
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = []
+        config.formula_ocr_enabled = True
+        config.chroma_db_path = tmp_path / "chroma"
+
+        class FakeIndexer:
+            def __init__(self, _config):
+                pass
+
+            def index_formulas(self, **_kwargs):
+                raise FormulaProviderUnavailableError("Install `zotpilot[formula]`")
+
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch.object(idx_mod, "acquire_lease"), \
+             patch.object(idx_mod, "release_lease"), \
+             patch("zotpilot.indexer.Indexer", FakeIndexer):
+            with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
+                idx_mod.index_formulas()
+
+    def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):
+        from zotpilot.indexer import FormulaProviderUnavailableError
+        from zotpilot.state import ToolError
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = []
+        config.chroma_db_path = tmp_path / "chroma"
+        config.max_pages = 0
+        config.vision_enabled = False
+
+        class FakeIndexer:
+            def __init__(self, _config):
+                pass
+
+            def index_all(self, **_kwargs):
+                raise FormulaProviderUnavailableError("Install `zotpilot[formula]`")
+
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch.object(idx_mod, "acquire_lease"), \
+             patch.object(idx_mod, "release_lease"), \
+             patch("zotpilot.indexer.Indexer", FakeIndexer):
+            with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
+                idx_mod.index_library(batch_size=0)
 
 
 class TestTitlePatternValidation:

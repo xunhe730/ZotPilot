@@ -453,6 +453,7 @@ class VectorStore:
             where={
                 "$and": [
                     {"doc_id": {"$eq": doc_id}},
+                    {"chunk_type": {"$eq": "text"}},
                     {"chunk_index": {"$gte": chunk_index - window}},
                     {"chunk_index": {"$lte": chunk_index + window}}
                 ]

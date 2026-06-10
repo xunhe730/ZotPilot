@@ -189,7 +189,7 @@ zotpilot config set formula_ocr_enabled true
 zotpilot index
 ```
 
-当前阶段只面向**有文字层 PDF 中的 display formulas**：ZotPilot 会在本地识别候选公式块、写入公式 chunk，并和正文 / 表格 / 图表一起参与语义检索。默认 `local` provider 全程在本机运行，不会把公式图片或 LaTeX 发送到外部服务。inline math、纯图片 / 矢量公式、整页 fallback、SimpleTex 或云端 vision 公式识别留到后续阶段。
+当前阶段只面向**有文字层 PDF 中的 display formulas**：ZotPilot 会在本地识别候选公式块、写入公式 chunk，并和正文 / 表格 / 图表一起参与语义检索。默认 `local` provider 全程在本机运行，不会把公式图片或 LaTeX 发送到外部服务；首次使用会联网下载 RapidLaTeXOCR 模型权重（约数十 MB），之后可离线运行。inline math、纯图片 / 矢量公式、整页 fallback、SimpleTex 或云端 vision 公式识别留到后续阶段。
 
 </details>
 

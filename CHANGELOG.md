@@ -6,7 +6,8 @@
 - **公式语义索引 Phase A / formula semantic indexing Phase A** —— 新增本地公式 OCR 入库与检索的首阶段能力，面向有文字层 PDF 中的 display formulas；公式 chunk 默认本地识别与存储，不发生数据外传。Formula chunks are stored alongside text/table/figure chunks for semantic retrieval; inline math, image/vector-only equations, full-page fallback, and cloud/SimpleTex providers remain later-phase work.
 
 ### Fixed
-- **公式 OCR 依赖与失败状态 / formula OCR dependency and failure state** —— 启用公式 OCR 但缺少 `zotpilot[formula]` extra 时现在会在索引开始即报出可操作安装提示；单篇公式 OCR/storage 失败不再写入 `table_failure`，也不会阻止已修复的表格/图表 failure marker 被清理。When formula OCR is enabled without the optional extra, indexing now fails fast with an install hint; formula failures are kept independent from table/figure completeness markers.
+- **公式 OCR 依赖与失败状态 / formula OCR dependency and failure state** —— 启用公式 OCR 但缺少 `zotpilot[formula]` extra 时现在会在索引开始即报出可操作安装提示，并在 MCP 工具层渲染为 `ToolError`；单篇公式 OCR/storage 失败不再写入 `table_failure`，也不会阻止已修复的表格/图表 failure marker 被清理。When formula OCR is enabled without the optional extra, indexing now fails fast with an install hint rendered as a `ToolError`; formula failures are kept independent from table/figure completeness markers.
+- **公式 backfill 与正文上下文隔离 / formula backfill and text-context isolation** —— `index_formulas(refresh_existing=True)` 现在先识别到新公式再替换旧公式，避免 OCR 空结果静默删除已有公式；正文邻接 context 只扩展 `chunk_type="text"`，不会把同一论文的公式 chunk 塞进正文前后文。Formula backfill now recognizes before replacing old chunks, and text context expansion filters adjacent chunks to text only.
 
 ## [0.5.2] - 2026-06-08
 

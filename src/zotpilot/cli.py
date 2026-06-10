@@ -721,7 +721,7 @@ def cmd_setup(args):
 
 def cmd_index(args):
     """Index Zotero library."""
-    from .indexer import Indexer
+    from .indexer import FormulaProviderUnavailableError, Indexer
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -806,6 +806,9 @@ def cmd_index(args):
             journal=journal,
             progress_sink=progress_sink,
         )
+    except FormulaProviderUnavailableError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     finally:
         release_lease(lease)
 
