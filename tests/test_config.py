@@ -20,6 +20,13 @@ def _use_local_secrets(monkeypatch, tmp_path: Path) -> None:
         "ZOTERO_USER_ID",
         "OPENALEX_EMAIL",
         "S2_API_KEY",
+        "SIMPLETEX_UAT",
+        "SIMPLETEX_TOKEN",
+        "ZOTPILOT_SIMPLETEX_TOKEN",
+        "SIMPLETEX_APP_ID",
+        "ZOTPILOT_SIMPLETEX_APP_ID",
+        "SIMPLETEX_APP_SECRET",
+        "ZOTPILOT_SIMPLETEX_APP_SECRET",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ZOTPILOT_SECRET_BACKEND", "local-file")
@@ -43,6 +50,13 @@ class TestConfigLoadDefaults:
         assert cfg.formula_ocr_max_formulas_per_doc == 40
         assert cfg.formula_ocr_max_formulas_per_page == 6
         assert cfg.formula_ocr_min_confidence == 0.6
+        assert cfg.formula_ocr_simpletex_token is None
+        assert cfg.formula_ocr_simpletex_app_id is None
+        assert cfg.formula_ocr_simpletex_app_secret is None
+        assert cfg.formula_ocr_simpletex_endpoint == "https://server.simpletex.net/api/latex_ocr"
+        assert cfg.formula_ocr_simpletex_timeout == 30.0
+        assert cfg.formula_ocr_simpletex_min_interval == 0.55
+        assert cfg.formula_ocr_simpletex_max_retries == 2
 
 
 class TestConfigLoadFromFile:
@@ -161,6 +175,22 @@ class TestRuntimeResolution:
 
         assert resolved.config.gemini_base_url == "https://env.example.com"
         assert resolved.sources["gemini_base_url"] == "env-override"
+
+    def test_simpletex_env_override(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"formula_ocr_provider": "simpletex"}))
+        monkeypatch.setenv("ZOTPILOT_SIMPLETEX_TOKEN", "env-token")
+        monkeypatch.setenv("ZOTPILOT_SIMPLETEX_APP_ID", "env-app-id")
+        monkeypatch.setenv("ZOTPILOT_SIMPLETEX_APP_SECRET", "env-app-secret")
+
+        resolved = resolve_runtime_settings(config_file)
+
+        assert resolved.config.formula_ocr_simpletex_token == "env-token"
+        assert resolved.config.formula_ocr_simpletex_app_id == "env-app-id"
+        assert resolved.config.formula_ocr_simpletex_app_secret == "env-app-secret"
+        assert resolved.sources["formula_ocr_simpletex_token"] == "env-override"
+        assert resolved.sources["formula_ocr_simpletex_app_secret"] == "env-override"
 
     def test_runtime_loads_config_secrets(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -402,7 +432,7 @@ class TestOpenAICompatConfigSchema:
 
         errors = cfg.validate()
 
-        assert any("Invalid formula_ocr_provider" in e and "'local'" in e for e in errors)
+        assert any("Invalid formula_ocr_provider" in e and "'simpletex'" in e for e in errors)
 
     def test_validate_formula_limits(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(
@@ -411,6 +441,8 @@ class TestOpenAICompatConfigSchema:
             formula_ocr_max_formulas_per_doc=-1,
             formula_ocr_max_formulas_per_page=-1,
             formula_ocr_min_confidence=1.5,
+            formula_ocr_simpletex_min_interval=-0.1,
+            formula_ocr_simpletex_max_retries=-1,
         )
 
         errors = cfg.validate()
@@ -418,6 +450,34 @@ class TestOpenAICompatConfigSchema:
         assert any("formula_ocr_max_formulas_per_doc" in e for e in errors)
         assert any("formula_ocr_max_formulas_per_page" in e for e in errors)
         assert any("formula_ocr_min_confidence" in e for e in errors)
+        assert any("formula_ocr_simpletex_min_interval" in e for e in errors)
+        assert any("formula_ocr_simpletex_max_retries" in e for e in errors)
+
+    def test_validate_simpletex_requires_auth(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_ocr_provider="simpletex")
+
+        errors = cfg.validate()
+
+        assert any("SimpleTex formula OCR requires" in e for e in errors)
+
+    def test_validate_simpletex_accepts_token_env(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_ocr_provider="simpletex")
+        monkeypatch.setenv("ZOTPILOT_SIMPLETEX_TOKEN", "uat-token")
+
+        assert cfg.validate() == []
+
+    def test_validate_simpletex_rejects_insecure_endpoint(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(
+            tmp_path,
+            monkeypatch,
+            formula_ocr_provider="simpletex",
+            formula_ocr_simpletex_token="uat-token",
+            formula_ocr_simpletex_endpoint="http://server.simpletex.net/api/latex_ocr",
+        )
+
+        errors = cfg.validate()
+
+        assert any("formula_ocr_simpletex_endpoint" in e for e in errors)
 
 
 class TestConfigHashOpenAICompat:

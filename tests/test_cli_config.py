@@ -20,6 +20,13 @@ def _use_local_secrets(monkeypatch, tmp_path: Path) -> Path:
         "ZOTERO_USER_ID",
         "OPENALEX_EMAIL",
         "S2_API_KEY",
+        "SIMPLETEX_UAT",
+        "SIMPLETEX_TOKEN",
+        "ZOTPILOT_SIMPLETEX_TOKEN",
+        "SIMPLETEX_APP_ID",
+        "ZOTPILOT_SIMPLETEX_APP_ID",
+        "SIMPLETEX_APP_SECRET",
+        "ZOTPILOT_SIMPLETEX_APP_SECRET",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("ZOTPILOT_SECRET_BACKEND", "local-file")
@@ -80,6 +87,12 @@ class TestConfigSet:
     def test_string_field(self):
         assert _coerce_value("zotero_api_key", "my-key") == "my-key"
 
+    def test_formula_ocr_scalars(self):
+        assert _coerce_value("formula_ocr_enabled", "true") is True
+        assert _coerce_value("formula_ocr_simpletex_timeout", "12.5") == 12.5
+        assert _coerce_value("formula_ocr_simpletex_min_interval", "0.25") == 0.25
+        assert _coerce_value("formula_ocr_simpletex_max_retries", "3") == 3
+
 
 class TestConfigCommand:
     def test_secret_fields_store_in_config_json(self, tmp_path, monkeypatch, capsys):
@@ -107,6 +120,14 @@ class TestConfigCommand:
         _run_config(["set", "gemini_api_key", "top-secret"], cfg_path, monkeypatch, capsys)
         out = _run_config(["get", "gemini_api_key"], cfg_path, monkeypatch, capsys)
         assert "top-secret" not in out.out
+        assert "****" in out.out
+
+    def test_config_get_masks_simpletex_token(self, tmp_path, monkeypatch, capsys):
+        _use_local_secrets(monkeypatch, tmp_path)
+        cfg_path = tmp_path / "config.json"
+        _run_config(["set", "formula_ocr_simpletex_token", "simpletex-secret"], cfg_path, monkeypatch, capsys)
+        out = _run_config(["get", "formula_ocr_simpletex_token"], cfg_path, monkeypatch, capsys)
+        assert "simpletex-secret" not in out.out
         assert "****" in out.out
 
     def test_config_unset_removes_secret(self, tmp_path, monkeypatch, capsys):

@@ -1207,6 +1207,7 @@ def _mask_secret(v: str) -> str:
 _SENSITIVE_FIELDS = {
     "gemini_api_key", "dashscope_api_key", "anthropic_api_key",
     "zotero_api_key", "semantic_scholar_api_key", "embedding_api_key",
+    "formula_ocr_simpletex_token", "formula_ocr_simpletex_app_secret",
 }
 
 _SENSITIVE_REGISTER_FLAGS = {
@@ -1221,6 +1222,13 @@ _SCALAR_TYPES = {
     "oversample_multiplier": int, "oversample_topic_factor": int,
     "stats_sample_limit": int, "max_pages": int, "vision_enabled": bool,
     "embedding_dimensions": int, "preflight_enabled": bool,
+    "formula_ocr_enabled": bool,
+    "formula_ocr_max_formulas_per_doc": int,
+    "formula_ocr_max_formulas_per_page": int,
+    "formula_ocr_min_confidence": float,
+    "formula_ocr_simpletex_timeout": float,
+    "formula_ocr_simpletex_min_interval": float,
+    "formula_ocr_simpletex_max_retries": int,
 }
 
 
@@ -1325,6 +1333,13 @@ _ENV_TO_CONFIG = {
     "ZOTERO_USER_ID": "zotero_user_id",
     "OPENALEX_EMAIL": "openalex_email",
     "S2_API_KEY": "semantic_scholar_api_key",
+    "SIMPLETEX_UAT": "formula_ocr_simpletex_token",
+    "SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "ZOTPILOT_SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "ZOTPILOT_SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
+    "ZOTPILOT_SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
 }
 
 

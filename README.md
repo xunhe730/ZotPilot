@@ -189,7 +189,19 @@ zotpilot config set formula_ocr_enabled true
 zotpilot index
 ```
 
-当前阶段只面向**有文字层 PDF 中的 display formulas**：ZotPilot 会在本地识别候选公式块、写入公式 chunk，并和正文 / 表格 / 图表一起参与语义检索。默认 `local` provider 全程在本机运行，不会把公式图片或 LaTeX 发送到外部服务；首次使用会联网下载 RapidLaTeXOCR 模型权重（约数十 MB），之后可离线运行。inline math、纯图片 / 矢量公式、整页 fallback、SimpleTex 或云端 vision 公式识别留到后续阶段。
+当前阶段只面向**有文字层 PDF 中的 display formulas**：ZotPilot 会在本地识别候选公式块、写入公式 chunk，并和正文 / 表格 / 图表一起参与语义检索。默认 `local` provider 全程在本机运行，不会把公式图片或 LaTeX 发送到外部服务；首次使用会联网下载 RapidLaTeXOCR 模型权重（约数十 MB），之后可离线运行。
+
+如果你愿意使用云端公式识别，也可以显式切换到 SimpleTex provider。它会把公式裁剪图发送到配置的 SimpleTex HTTPS endpoint，因此只建议在你接受该数据外发边界时启用：
+
+```bash
+zotpilot config set formula_ocr_provider simpletex
+zotpilot config set formula_ocr_simpletex_token <your-uat-token>
+# 或使用 APP 鉴权：
+zotpilot config set formula_ocr_simpletex_app_id <your-app-id>
+zotpilot config set formula_ocr_simpletex_app_secret <your-app-secret>
+```
+
+默认 endpoint 是标准版 `https://server.simpletex.net/api/latex_ocr`，并按标准版限流预设 `formula_ocr_simpletex_min_interval=0.55` 与 `formula_ocr_simpletex_max_retries=2`；如需更快的轻量版，可设置 `formula_ocr_simpletex_endpoint` 为 `https://server.simpletex.net/api/latex_ocr_turbo`，并按你的配额调整最小请求间隔。inline math、纯图片 / 矢量公式和整页 fallback 仍留到后续阶段。
 
 </details>
 

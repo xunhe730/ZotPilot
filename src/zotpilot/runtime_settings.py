@@ -17,6 +17,8 @@ SECRET_FIELDS: tuple[str, ...] = (
     "zotero_api_key",
     "semantic_scholar_api_key",
     "embedding_api_key",
+    "formula_ocr_simpletex_token",
+    "formula_ocr_simpletex_app_secret",
 )
 
 ENV_TO_FIELD: dict[str, str] = {
@@ -32,6 +34,13 @@ ENV_TO_FIELD: dict[str, str] = {
     # over the generic OPENAI_API_KEY (it is listed last so it wins the loop).
     "OPENAI_API_KEY": "embedding_api_key",
     "ZOTPILOT_EMBEDDING_API_KEY": "embedding_api_key",
+    "SIMPLETEX_UAT": "formula_ocr_simpletex_token",
+    "SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "ZOTPILOT_SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "ZOTPILOT_SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
+    "ZOTPILOT_SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
 }
 
 

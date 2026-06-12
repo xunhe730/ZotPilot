@@ -198,7 +198,10 @@ class Indexer:
         if self._formula_provider is None:
             from .feature_extraction.formula_ocr import create_formula_ocr_provider
 
-            self._formula_provider = create_formula_ocr_provider(self.config.formula_ocr_provider)
+            self._formula_provider = create_formula_ocr_provider(
+                self.config.formula_ocr_provider,
+                config=self.config,
+            )
         return self._formula_provider
 
     def _ensure_formula_provider_available(self) -> None:

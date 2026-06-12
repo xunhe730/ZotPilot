@@ -1,10 +1,20 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+
 from zotpilot.feature_extraction.formula_ocr import (
     FormulaCandidate,
+    SimpleTexFormulaOCRProvider,
     _candidate_confidence,
     _coerce_provider_result,
+    _coerce_simpletex_response,
     _dedupe_candidates,
     _extract_block_signals,
     _extract_equation_number,
+    _simpletex_app_headers,
+    create_formula_ocr_provider,
     is_high_quality_formula_latex,
 )
 from zotpilot.models import ExtractedFormula
@@ -23,6 +33,251 @@ def test_rapid_latex_ocr_tuple_elapsed_time_is_not_confidence():
 
     assert result.latex == r"E = mc^2"
     assert result.confidence is None
+
+
+def test_simpletex_response_coerces_latex_and_confidence():
+    result = _coerce_simpletex_response({
+        "status": True,
+        "res": {"latex": r"E = mc^2", "conf": 0.93},
+        "request_id": "tr_1",
+    })
+
+    assert result.latex == r"E = mc^2"
+    assert result.confidence == 0.93
+
+
+def test_simpletex_response_errors_are_actionable():
+    try:
+        _coerce_simpletex_response({"status": False, "err_info": "quota exceeded"})
+    except RuntimeError as exc:
+        assert "quota exceeded" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": True, "res": {}},
+        {"status": True, "res": {"latex": "", "conf": 0.7}},
+    ],
+)
+def test_simpletex_response_rejects_missing_latex(payload):
+    with pytest.raises(RuntimeError, match="missing LaTeX"):
+        _coerce_simpletex_response(payload)
+
+
+def test_simpletex_provider_posts_uat_token_header():
+    response = MagicMock()
+    response.json.return_value = {"status": True, "res": {"latex": r"a=b", "conf": 0.8}}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.return_value = response
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client):
+        provider = SimpleTexFormulaOCRProvider(token="uat-token", endpoint="https://example.test/api")
+        result = provider.recognize(b"png-bytes")
+
+    assert result.latex == "a=b"
+    _url, kwargs = client.post.call_args
+    assert kwargs["headers"] == {"token": "uat-token"}
+    assert kwargs["files"]["file"][0] == "formula.png"
+    assert kwargs["files"]["file"][1] == b"png-bytes"
+
+
+def test_simpletex_provider_wraps_invalid_json_response():
+    response = MagicMock()
+    response.status_code = 200
+    response.headers = {}
+    response.json.side_effect = ValueError("not json")
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.return_value = response
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client):
+        provider = SimpleTexFormulaOCRProvider(token="uat-token", endpoint="https://example.test/api")
+        with pytest.raises(RuntimeError, match="not valid JSON"):
+            provider.recognize(b"png-bytes")
+
+
+def test_simpletex_provider_retries_rate_limit_response():
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"retry-after": "0"}
+    success = MagicMock()
+    success.status_code = 200
+    success.headers = {}
+    success.json.return_value = {"status": True, "res": {"latex": r"x=y", "conf": 0.9}}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.side_effect = [rate_limited, success]
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client), \
+         patch("zotpilot.feature_extraction.formula_ocr.time.sleep") as sleep:
+        provider = SimpleTexFormulaOCRProvider(
+            token="uat-token",
+            endpoint="https://example.test/api",
+            min_interval=0,
+            max_retries=1,
+        )
+        result = provider.recognize(b"png-bytes")
+
+    assert result.latex == "x=y"
+    assert client.post.call_count == 2
+    sleep.assert_called_once_with(0.0)
+
+
+def test_simpletex_app_auth_resigns_each_retry_attempt():
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+    rate_limited.headers = {"retry-after": "0"}
+    success = MagicMock()
+    success.status_code = 200
+    success.headers = {}
+    success.json.return_value = {"status": True, "res": {"latex": r"x=y", "conf": 0.9}}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.side_effect = [rate_limited, success]
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client), \
+         patch("zotpilot.feature_extraction.formula_ocr.time.sleep"), \
+         patch("zotpilot.feature_extraction.formula_ocr.time.time", side_effect=[1675550577, 1675550578]), \
+         patch(
+             "zotpilot.feature_extraction.formula_ocr._random_simpletex_nonce",
+             side_effect=["nonce-one", "nonce-two"],
+         ):
+        provider = SimpleTexFormulaOCRProvider(
+            app_id="app-id",
+            app_secret="app-secret",
+            endpoint="https://example.test/api",
+            min_interval=0,
+            max_retries=1,
+        )
+        result = provider.recognize(b"png-bytes")
+
+    first_headers = client.post.call_args_list[0].kwargs["headers"]
+    second_headers = client.post.call_args_list[1].kwargs["headers"]
+    assert result.latex == "x=y"
+    assert first_headers["timestamp"] == "1675550577"
+    assert second_headers["timestamp"] == "1675550578"
+    assert first_headers["random-str"] == "nonce-one"
+    assert second_headers["random-str"] == "nonce-two"
+    assert first_headers["sign"] != second_headers["sign"]
+
+
+def test_simpletex_provider_retries_request_error_once():
+    request = httpx.Request("POST", "https://example.test/api")
+    success = MagicMock()
+    success.status_code = 200
+    success.headers = {}
+    success.json.return_value = {"status": True, "res": {"latex": r"x=y", "conf": 0.9}}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.side_effect = [httpx.ConnectError("temporary failure", request=request), success]
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client), \
+         patch("zotpilot.feature_extraction.formula_ocr.time.sleep") as sleep:
+        provider = SimpleTexFormulaOCRProvider(
+            token="uat-token",
+            endpoint="https://example.test/api",
+            min_interval=0,
+            max_retries=1,
+        )
+        result = provider.recognize(b"png-bytes")
+
+    assert result.latex == "x=y"
+    assert client.post.call_count == 2
+    sleep.assert_called_once_with(0.25)
+
+
+def test_simpletex_provider_does_not_retry_non_retriable_auth_error():
+    request = httpx.Request("POST", "https://example.test/api")
+    auth_response = httpx.Response(401, request=request)
+    response = MagicMock()
+    response.status_code = 401
+    response.headers = {}
+    response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "unauthorized",
+        request=request,
+        response=auth_response,
+    )
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.return_value = response
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client):
+        provider = SimpleTexFormulaOCRProvider(
+            token="uat-token",
+            endpoint="https://example.test/api",
+            max_retries=2,
+        )
+        with pytest.raises(httpx.HTTPStatusError):
+            provider.recognize(b"png-bytes")
+
+    assert client.post.call_count == 1
+
+
+def test_simpletex_provider_raises_after_exhausting_retriable_statuses():
+    first_failure = MagicMock()
+    first_failure.status_code = 503
+    first_failure.headers = {}
+    second_failure = MagicMock()
+    second_failure.status_code = 503
+    second_failure.headers = {}
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.post.side_effect = [first_failure, second_failure]
+
+    with patch("zotpilot.feature_extraction.formula_ocr.httpx.Client", return_value=client), \
+         patch("zotpilot.feature_extraction.formula_ocr.time.sleep") as sleep:
+        provider = SimpleTexFormulaOCRProvider(
+            token="uat-token",
+            endpoint="https://example.test/api",
+            min_interval=0,
+            max_retries=1,
+        )
+        with pytest.raises(RuntimeError, match="exhausted retries after HTTP 503"):
+            provider.recognize(b"png-bytes")
+
+    assert client.post.call_count == 2
+    sleep.assert_called_once_with(0.25)
+
+
+def test_simpletex_app_headers_match_documented_signature():
+    with patch("zotpilot.feature_extraction.formula_ocr.time.time", return_value=1675550577), \
+         patch("zotpilot.feature_extraction.formula_ocr._random_simpletex_nonce", return_value="mSkYSY28N4WkvidB"):
+        headers = _simpletex_app_headers(
+            {"use_batch": "True"},
+            "19X4f10YM1Va894nvFl89ikY",
+            "fu4Wfmna4153DFN12ctBsPqgVI3vvGGK",
+        )
+
+    assert headers == {
+        "timestamp": "1675550577",
+        "random-str": "mSkYSY28N4WkvidB",
+        "app-id": "19X4f10YM1Va894nvFl89ikY",
+        "sign": "5f271e1deccd95d467c7dd430ca2c8b1",
+    }
+
+
+def test_create_simpletex_provider_uses_config_settings():
+    config = SimpleNamespace(
+        formula_ocr_simpletex_token="uat-token",
+        formula_ocr_simpletex_app_id=None,
+        formula_ocr_simpletex_app_secret=None,
+        formula_ocr_simpletex_endpoint="https://server.simpletex.net/api/latex_ocr_turbo",
+        formula_ocr_simpletex_timeout=12.5,
+        formula_ocr_simpletex_min_interval=0.25,
+        formula_ocr_simpletex_max_retries=3,
+    )
+
+    provider = create_formula_ocr_provider("simpletex", config=config)
+
+    assert isinstance(provider, SimpleTexFormulaOCRProvider)
+    assert provider._endpoint == "https://server.simpletex.net/api/latex_ocr_turbo"
+    assert provider._timeout == 12.5
+    assert provider._min_interval == 0.25
+    assert provider._max_retries == 3
 
 
 def test_formula_candidate_confidence_uses_font_and_span_flags_as_boosts():
