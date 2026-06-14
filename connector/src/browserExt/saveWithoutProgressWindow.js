@@ -111,6 +111,16 @@ Zotero.Utilities.saveWithoutProgressWindow = async function (tab, frameId) {
 		else {
 			await Zotero.Connector.callMethodWithCookies("saveSnapshot", data, tab);
 		}
+
+		// ZotPilot: this background path shows no progress window, so emit the
+		// completion signals agentAPI's save detector listens for — otherwise an
+		// agent-driven direct-PDF save would only resolve via the slow timeout +
+		// discovery fallback. No-op for normal user saves (no pending entry).
+		try {
+			Promise.resolve(Zotero.Messaging.sendMessage("progressWindow.itemProgress",
+				{ id: data.sessionID, iconSrc: "attachment-pdf", progress: 100, title: data.title || url }, tab)).catch(() => {});
+			Promise.resolve(Zotero.Messaging.sendMessage("progressWindow.done", [true], tab)).catch(() => {});
+		} catch (signalErr) {}
 		
 		browser.browserAction.setIcon({
 			tabId:tab.id,
@@ -127,7 +137,12 @@ Zotero.Utilities.saveWithoutProgressWindow = async function (tab, frameId) {
 	
 	} catch (e) {
 		Zotero.logError(e);
-		
+		// ZotPilot: signal failure so agentAPI resolves instead of waiting out the timeout.
+		try {
+			Promise.resolve(Zotero.Messaging.sendMessage("progressWindow.done",
+				[false, (e && e.message) ? e.message : String(e)], tab)).catch(() => {});
+		} catch (signalErr) {}
+
 		browser.browserAction.setIcon({
 			tabId:tab.id,
 			path: "images/cross.png"

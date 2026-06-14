@@ -868,6 +868,13 @@ Zotero.AgentAPI = new function() {
 
 				// Check if translator already available (fast path for pages that load quickly)
 				let tabInfo = Zotero.Connector_Browser.getTabInfo(tabId);
+				// Direct / embedded PDF pages have no translator — treat as ready so the
+				// save path falls through to the native "Save to Zotero (PDF)" flow.
+				if (tabInfo && tabInfo.isPDF) {
+					Zotero.debug("[ZotPilot] tab " + tabId + " is a direct PDF — ready without translator");
+					_resolveNow(true);
+					return;
+				}
 				if (tabInfo && tabInfo.translators && tabInfo.translators.length > 0) {
 					Zotero.debug("[ZotPilot] translator already ready for tab " + tabId);
 					_resolveNow(true);
