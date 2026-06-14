@@ -413,6 +413,35 @@ def _lookup_existing_item_key(candidate: dict) -> str | None:
     return None
 
 
+# Resume-action → tailored Chinese hint for the manual-completion prompt.
+_MANUAL_RESUME_HINTS = {
+    "reconcile_existing": (
+        "该条目疑似已存入 Zotero（仅 PDF / 确认步骤未完成）。请在 Zotero 中检查；"
+        "若仍有 Continue / 确认弹窗点掉即可，然后回复 Y 续跑——不要整批重试。"
+    ),
+    "retry_save": (
+        "该条目入库未完成。请先在浏览器中完成出版社的验证 / 确认步骤，"
+        "然后回复 Y 重试该篇。"
+    ),
+}
+
+
+def _build_lookup_links(item_key: str | None, candidate: dict) -> list[dict]:
+    """Clickable links so the user can jump straight to the saved item / source."""
+    links: list[dict] = []
+    if item_key:
+        links.append(
+            {"label": "在 Zotero 中打开", "url": f"zotero://select/library/items/{item_key}"}
+        )
+    doi = candidate.get("source_doi") or candidate.get("doi")
+    if doi:
+        links.append({"label": "DOI", "url": f"https://doi.org/{doi}"})
+    arxiv_id = candidate.get("arxiv_id")
+    if arxiv_id:
+        links.append({"label": "arXiv", "url": f"https://arxiv.org/abs/{arxiv_id}"})
+    return links
+
+
 def _build_manual_completion_action(
     *,
     pending_candidate: dict,
@@ -426,11 +455,12 @@ def _build_manual_completion_action(
     if current_result is not None:
         item_key = current_result.get("item_key")
     item_key = item_key or pending_candidate.get("existing_item_key")
+    resume_action = (current_result or {}).get("resume_action")
     return {
         "type": "manual_completion_required",
         "pending_candidate": _candidate_retry_payload(
             pending_candidate,
-            resume_action=(current_result or {}).get("resume_action"),
+            resume_action=resume_action,
             existing_item_key=item_key,
         ),
         "retry_payload": retry_payload,
@@ -438,6 +468,9 @@ def _build_manual_completion_action(
         "completed_count": completed_count,
         "completed_indexes": completed_indexes,
         "item_key": item_key,
+        "resume_action": resume_action,
+        "specific_hint": _MANUAL_RESUME_HINTS.get(resume_action or "", ""),
+        "lookup_links": _build_lookup_links(item_key, pending_candidate),
         "message": message,
     }
 

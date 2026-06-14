@@ -105,6 +105,7 @@ description: >
    - If `action_required` contains `"preflight_blocked"` → **STOP**, show the blocked report and wait for user to complete verification (see **Preflight Blocking** below)
    - If `action_required` contains `"anti_bot_detected"` (from save_single_and_verify) → **STOP**, tell user to manually open browser for verification, wait for confirmation, retry with IDENTICAL inputs
    - If `action_required` contains "connector_offline" → **STOP**, surface remediation to user
+   - If `action_required` contains `"manual_completion_required"` → **STOP**. Surface its `message` + `specific_hint`, and render `lookup_links[]` as clickable links (the `zotero://select/...` link jumps straight to the saved item in Zotero). Wait for `Y` to resume the pending item only.
    - If `action_required` contains `"publisher_canary_pending"` → some same-publisher items were **skipped** after that publisher's first item failed (anti-bot avoidance). Show its `message`, tell the user to handle those publishers' access, then retry **only** the skipped `identifiers`. **STOP**.
    - All saved → proceed to Phase 3
 
