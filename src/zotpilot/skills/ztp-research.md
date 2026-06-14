@@ -105,6 +105,7 @@ description: >
    - If `action_required` contains `"preflight_blocked"` → **STOP**, show the blocked report and wait for user to complete verification (see **Preflight Blocking** below)
    - If `action_required` contains `"anti_bot_detected"` (from save_single_and_verify) → **STOP**, tell user to manually open browser for verification, wait for confirmation, retry with IDENTICAL inputs
    - If `action_required` contains "connector_offline" → **STOP**, surface remediation to user
+   - If `action_required` contains `"publisher_canary_pending"` → some same-publisher items were **skipped** after that publisher's first item failed (anti-bot avoidance). Show its `message`, tell the user to handle those publishers' access, then retry **only** the skipped `identifiers`. **STOP**.
    - All saved → proceed to Phase 3
 
    Gate semantics:
@@ -113,6 +114,7 @@ description: >
    - Phase 3 may start only after step 7's ingest-results prompt is shown and the user replies `Y` to that specific prompt.
    - If any `action_required` entry is present after ingest, you MAY still show step 7's results table for visibility, but you MUST pair it with the retry / remediation instruction for that action and then STOP. In that case, do NOT ask the Phase 3 question yet.
    - **Never combine the Phase 2 retry/remediation gate and the Phase 3 `Y/N` gate in the same message.** The user must never see one prompt where `Y` could mean either "retry blocked ingest" or "enter Phase 3".
+   - **`notices` are informational only.** The ingest result may include a top-level `notices[]` (e.g. `type: "pdf_attention"` — metadata saved but the PDF was blocked / not attached). Render them, but NEVER STOP, ask `Y/N`, or treat them as `action_required`. They do not affect whether the Phase 3 question is asked.
 
    **Preflight Blocking** — when `action_required` contains `"preflight_blocked"`:
    - Preflight detected a real problem (anti-bot, subscription wall, or timeout) before save. **Preflight does NOT auto-open browser tabs — the user must open the URLs themselves.** Never tell the user that a tab was auto-opened.
@@ -142,10 +144,11 @@ description: >
    | 3 | ❌ blocked | — | — | ... (reason: anti_bot_detected) |
    ```
 
-   - `状态` column: use the `status` field verbatim (`saved_with_pdf` / `saved_metadata_only` / `duplicate` / `blocked` / `failed`) with a matching emoji (✅ / ⚠️ / 📚 / ❌).
+   - `状态` column: use the `status` field verbatim (`saved_with_pdf` / `saved_metadata_only` / `duplicate` / `blocked` / `failed` / `pending_publisher_canary`) with a matching emoji (✅ / ⚠️ / 📚 / ❌ / ⏸️).
    - `PDF` column: `✅` if `has_pdf: true`, `❌` if false, `—` if no item was created.
    - For `blocked` / `failed` rows, append `(reason: <error or error_code>)` to 标题.
    - Items are already in the `INBOX` collection at this point (routed at save time).
+   - If `notices` is non-empty, list each below the table as a one-line note (📎 + its `message`). These are display-only: they do NOT trigger a Phase 2 STOP and do NOT change whether the Phase 3 question is asked. A batch with only `notices` and empty `action_required` still proceeds to the Phase 3 prompt.
    - If `action_required` is non-empty, show the table first, then show the blocking / retry instruction (for example, manual browser verification + "完成后回复 Y，我将重新调用 ingest_by_identifiers"), and **STOP there**. Do NOT ask about Phase 3 yet. A bare `Y` after that message must resume the pending Phase 2 retry only.
    - When `action_required` is non-empty, the prompt must be single-purpose. Good example:
 

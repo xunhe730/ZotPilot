@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import error_codes
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -1223,9 +1225,10 @@ def save_single_and_verify(
                 if not deleted:
                     _logger.warning("Failed to delete anti-bot item %s — manual cleanup may be needed", ik)
             return {"status": "blocked", "method": "connector",
-                    "error": "anti_bot_detected", "item_key": None, "has_pdf": False,
+                    "error": "anti_bot_detected", "error_code": "anti_bot_detected",
+                    "item_key": None, "has_pdf": False,
                     "title": title or "",
-                    "action_required": "用户需在浏览器中完成验证，然后重试",
+                    "action_required": error_codes.next_steps_zh("anti_bot_detected"),
                     "warning": None}
         # Cold-start retry: Connector-side already retried _waitForReady once
         # (5s delay + 15s wait). If still no_translator, one more attempt with a
@@ -1479,24 +1482,25 @@ def save_single_and_verify(
         }
 
     status = "saved_with_pdf" if pdf_status == "attached" else "saved_metadata_only"
+    warning_code: str | None = None
     if pdf_status == "attached":
         warning = None
     elif attach_status == "quota_exceeded":
-        warning = (
-            "Zotero Web storage quota exceeded — OA PDF download aborted. "
-            "Free cloud quota or right-click item in Zotero Desktop → "
-            "'Find Available PDF' to attach locally (uses your WebDAV/local storage)."
-        )
+        warning_code = "oa_quota_exceeded"
+        warning = error_codes.next_steps_zh(warning_code)
+    elif connector_pdf_failed:
+        # Translator saved the metadata but the PDF fetch was blocked by a
+        # second anti-bot (e.g. Elsevier signed-link 403) — distinct from the
+        # translator 'Continue' dialog case below.
+        warning_code = "pdf_antibot_blocked"
+        warning = error_codes.next_steps_zh(warning_code)
     else:
-        warning = (
-            "PDF not attached. If Zotero still shows a translator dialog "
-            "(e.g. Elsevier 'Continue'), click it to finish — do NOT re-ingest "
-            "this DOI or it will create a duplicate item."
-        )
+        warning_code = "pdf_not_attached"
+        warning = error_codes.next_steps_zh(warning_code)
 
     return {"status": status, "method": "connector", "item_key": item_key,
             "has_pdf": pdf_status == "attached", "title": real_title,
-            "action_required": None, "warning": warning}
+            "action_required": None, "warning": warning, "warning_code": warning_code}
 
 
 def _doi_api_fallback(

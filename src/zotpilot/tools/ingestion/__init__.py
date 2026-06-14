@@ -21,7 +21,7 @@ from ...state import (
     register_reset_callback,
 )
 from ..profiles import tool_tags
-from . import connector, search
+from . import connector, error_codes, search
 from .models import IngestCandidate
 
 logger = logging.getLogger(__name__)
@@ -707,6 +707,9 @@ def ingest_by_identifiers(
 
     # action_required declared early — needed by both Step 4 blocking and Step 5 anti-bot
     action_required: list[dict] = []
+    # notices: display-only annotations (e.g. PDF not attached). Unlike
+    # action_required these NEVER trigger a Phase-2 STOP / Y-N gate.
+    notices: list[dict] = []
 
     # Step 4: Preflight (if Connector online)
     if ext_ok and active_candidates:
@@ -795,6 +798,11 @@ def ingest_by_identifiers(
     # Step 5: Sequential save + verify
     results: list[dict] = []
     manual_completion: dict | None = None
+    # B② canary: gate same-publisher (normal/access) items on the first one
+    # succeeding, so a publisher that anti-bots its first item does not get its
+    # whole batch hammered. Session-local — never carried across ingest calls.
+    canary_state: dict[str, bool] = {}
+    canary_skipped: list[dict] = []
     for candidate in candidates_internal:
         if candidate.get("status"):
             if candidate.get("status") == "duplicate":
@@ -807,6 +815,31 @@ def ingest_by_identifiers(
         doi = candidate.get("doi")
         title = candidate.get("title")
         risk_class = _classify_execution_group(candidate)
+
+        # B② canary gate: connector path only (API-fallback saves are not
+        # anti-bot-gated), normal/access only (manual keeps its own break flow).
+        canary_pub = (
+            _canary_publisher_key(candidate)
+            if ext_ok and risk_class in {"access_sensitive", "normal"}
+            else None
+        )
+        if _canary_should_skip(canary_pub, canary_state):
+            skipped = {
+                "status": "pending_publisher_canary",
+                "identifier": candidate.get("identifier", ""),
+                "candidate_index": candidate.get("_index"),
+                "title": title or "",
+                "item_key": None,
+                "has_pdf": False,
+                "publisher": canary_pub,
+                "warning": (
+                    f"已跳过：{canary_pub} 首篇入库失败，避免同源批量触发风控；"
+                    "处理该出版社访问后单独重试本篇。"
+                ),
+            }
+            results.append(skipped)
+            canary_skipped.append(skipped)
+            continue
 
         if ext_ok and url:
             result = connector.save_single_and_verify(
@@ -881,6 +914,7 @@ def ingest_by_identifiers(
             "candidate_index": candidate.get("_index"),
         }
         results.append(row)
+        _canary_record(canary_pub, canary_state, result.get("status", ""))
 
         if result.get("item_key") and result.get("status") not in {"failed", "blocked"}:
             _remember_recent_save(candidate.get("doi"), result.get("item_key"))
@@ -893,13 +927,34 @@ def ingest_by_identifiers(
                 "identifier": candidate.get("identifier", ""),
             })
 
+        # Display-only PDF notice (e.g. saved metadata but PDF blocked by a
+        # second anti-bot). Surfaced under the results table; does NOT gate.
+        notice = error_codes.pdf_attention_entry(row)
+        if notice:
+            notices.append(notice)
+
     if manual_completion is not None:
         action_required.append(manual_completion)
+
+    if canary_skipped:
+        canary_pubs = sorted({r["publisher"] for r in canary_skipped if r.get("publisher")})
+        action_required.append({
+            "type": "publisher_canary_pending",
+            "publishers": canary_pubs,
+            "skipped_count": len(canary_skipped),
+            "identifiers": [r.get("identifier", "") for r in canary_skipped],
+            "message": (
+                f"{len(canary_skipped)} 篇因同源首篇入库失败被跳过"
+                f"（{'、'.join(canary_pubs) or '未知出版社'}），未对同源批量重试以避免加剧风控。"
+                "请先在浏览器中处理这些出版社的访问（反爬 / 登录 / 订阅），完成后单独重试这些条目。"
+            ),
+        })
 
     return {
         "total": total_inputs,
         "results": results,
         "action_required": action_required,
+        "notices": notices,
         "completed_count": sum(
             1 for row in results if row["status"] in {"saved_with_pdf", "saved_metadata_only", "duplicate"}
         ),
@@ -967,6 +1022,26 @@ def _classify_execution_group(candidate: dict) -> str:
         return "access_sensitive"
 
     return "normal"
+
+
+def _canary_publisher_key(candidate: dict) -> str:
+    """Publisher key for same-publisher canary gating.
+
+    Reuses ``_candidate_host`` so the canary key stays on the same host basis as
+    ``_classify_execution_group`` and never drifts from the risk grouping.
+    """
+    return _candidate_host(candidate)
+
+
+def _canary_should_skip(publisher_key: str | None, canary_state: dict[str, bool]) -> bool:
+    """True when this publisher's canary (first item) already failed to save."""
+    return publisher_key is not None and canary_state.get(publisher_key) is False
+
+
+def _canary_record(publisher_key: str | None, canary_state: dict[str, bool], status: str) -> None:
+    """Record the first (canary) outcome for a publisher; later items reuse it."""
+    if publisher_key is not None and publisher_key not in canary_state:
+        canary_state[publisher_key] = status in {"saved_with_pdf", "saved_metadata_only"}
 
 
 def _candidate_retry_payload(
