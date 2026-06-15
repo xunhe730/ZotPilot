@@ -8,7 +8,7 @@ from zotpilot.tools.ingestion import error_codes
 class TestNextStepsZh:
     def test_known_code_returns_chinese(self):
         msg = error_codes.next_steps_zh("pdf_antibot_blocked")
-        assert "养热会话" in msg
+        assert "验证窗口" in msg
         assert "单篇重试" in msg
 
     def test_unknown_code_returns_default(self):

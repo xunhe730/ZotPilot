@@ -80,12 +80,12 @@ description: >
 
    If **any** selected candidate matches, you MUST show this block BEFORE calling `ingest_by_identifiers` and wait for a `Y` reply. Never call ingest in the same turn:
 
-   > ⚠️ 以下论文来自经常需要用户手动完成验证的出版社（如 Elsevier / ScienceDirect）。入库过程中可能出现 publisher 页面的 anti-bot / 登录验证，或 Zotero Desktop 的 translator 确认步骤。**请保持 Zotero 与浏览器在前台，并按页面或 Zotero 的实际提示立即完成验证**：
+   > ⚠️ 以下论文来自经常触发验证的出版社（如 Elsevier / ScienceDirect），入库时**需要你在电脑前**完成两类验证：①打开页面时的 anti-bot / 登录验证（"请稍候…"）；②**抓取 PDF 时会弹出一个验证窗口——请保持它在前台、不要关闭，让它自动通过（约几秒）即可拿到 PDF**。请保持 Zotero 与浏览器在前台，按提示立即完成：
    >
    > - {title} ({publisher or "Elsevier"})
    > - …
    >
-   > 如果没有及时完成这些验证步骤，本次入库可能超时；且 **切勿重复触发入库**——会在库里留下重复的 item。确认你已经准备好后回复 **Y**。
+   > 如果没有及时完成验证，本次入库可能超时，且这些出版社的 **PDF 很可能抓不到**（元数据仍会入库，可稍后单独重抓）。**切勿重复触发入库**——会留下重复 item。确认你能留在电脑前完成验证后回复 **Y**。
 
    Gate semantics:
    - A `Y` reply to **step 4b** only authorizes continuing **Phase 2 ingestion**.

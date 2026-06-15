@@ -25,9 +25,10 @@ ERROR_CODE_DICT: dict[str, dict[str, object]] = {
     "pdf_antibot_blocked": {
         "zh": "PDF 抓取被二次反爬拦截",
         "next_steps_zh": (
-            "元数据已入库，但 PDF 在抓取阶段被出版商二次反爬拦截。"
-            "请在浏览器中手动打开这篇的 PDF 一次（养热会话），"
-            "或在 Zotero 右键条目 'Find Available PDF'，然后单篇重试——不要整批重试。"
+            "元数据已入库，但 PDF 抓取被出版商二次反爬拦截。"
+            "重试该篇时会弹出一个验证窗口——请保持它在前台、不要关闭，"
+            "让它自动通过（约几秒）即可抓回 PDF；或在 Zotero 右键条目 "
+            "'Find Available PDF'。单篇重试，不要整批重试。"
         ),
         "rescuable": True,
     },
