@@ -42,6 +42,18 @@
 
 ---
 
+## v0.5.3 — Formula Indexing · Connector Ingest · Steadier Indexing
+
+Three main threads in this release.
+
+**Formula semantic indexing (Phase A)**: local OCR recognizes display formulas in text-layer PDFs and stores them as searchable formula chunks, ranked together with text, tables, and figures. Off by default and fully local (needs the `zotpilot[formula]` extra); the first run downloads model weights, later runs stay offline. Inline math and image-only formulas are left for later phases.
+
+**Connector ingest**: direct-link PDFs and page-embedded iframe PDFs now save fast (no translator needed); ingest errors use a unified error-code dictionary with actionable guidance, and PDF-fetch / anti-bot failures give tailored "keep the verification popup in the foreground, retry one at a time" hints with one-click jump-links back to the Zotero item; preflight no longer waits on a translator, so reachability checks are much faster.
+
+**Steadier indexing**: fixes a false "config drift" alarm caused by `batch_size>0` disabling vision — it used to push you toward `force_reindex` (rebuild everything, waste quota), and now points to `batch_size=0` for incremental indexing instead.
+
+---
+
 ## v0.5.1 — Deep Reading · Flexible Embeddings · Safer Indexing
 
 **`/ztp-tutor` deep reading**: have the agent read one paper from your library and write **per-sentence notes** — long-sentence translations, term explanations, methodology commentary — together with 5-dimension color highlights and figure/table annotations **directly into the Zotero PDF**, read side-by-side in place, like a tutor that unpacks the whole paper for you, fully local. Annotation language / depth follow your reading persona (with none, the agent asks first); the original PDF is backed up before any write.
