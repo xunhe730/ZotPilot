@@ -72,12 +72,13 @@ class TestSentenceTransformerEmbedder:
         mock_embedding.tolist.return_value = [0.1] * 768
         mock_model.encode.return_value = [mock_embedding]
 
-        with patch(
-            "zotpilot.embeddings.sentence_transformer.SentenceTransformer",
-            return_value=mock_model,
-        ) as mock_st:
+        mock_st_class = MagicMock(return_value=mock_model)
+        mock_st_module = MagicMock()
+        mock_st_module.SentenceTransformer = mock_st_class
+
+        with patch.dict("sys.modules", {"sentence_transformers": mock_st_module}):
             embedder.embed(["text"])
-            mock_st.assert_called_once_with("allenai/specter2")
+            mock_st_class.assert_called_once_with("allenai/specter2")
             assert embedder._model is mock_model
 
     @patch("zotpilot.embeddings.sentence_transformer.importlib.util.find_spec")
@@ -90,13 +91,14 @@ class TestSentenceTransformerEmbedder:
         mock_embedding.tolist.return_value = [0.1] * 768
         mock_model.encode.return_value = [mock_embedding]
 
-        with patch(
-            "zotpilot.embeddings.sentence_transformer.SentenceTransformer",
-            return_value=mock_model,
-        ) as mock_st:
+        mock_st_class = MagicMock(return_value=mock_model)
+        mock_st_module = MagicMock()
+        mock_st_module.SentenceTransformer = mock_st_class
+
+        with patch.dict("sys.modules", {"sentence_transformers": mock_st_module}):
             embedder.embed(["first"])
             embedder.embed(["second"])
-            mock_st.assert_called_once()
+            mock_st_class.assert_called_once()
 
 
 class TestCreateEmbedderSentenceTransformer:
