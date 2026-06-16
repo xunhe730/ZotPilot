@@ -37,8 +37,8 @@ jobs:
       - name: 提取最新 CHANGELOG 内容
         id: changelog
         run: |
-          # 提取第一个版本块（两个 ## [ 之间的内容）
-          awk '/^## \[/{if(found) exit; found=1; next} found{print}' CHANGELOG.md > /tmp/release_notes.md
+          # 提取第一个“带版本号”的版本块（跳过 [Unreleased] 占位，避免 release notes 抓空）
+          awk '/^## \[Unreleased\]/{next} /^## \[/{if(found) exit; found=1; next} found{print}' CHANGELOG.md > /tmp/release_notes.md
           echo "Release notes:"
           cat /tmp/release_notes.md
 
