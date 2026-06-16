@@ -224,6 +224,9 @@ def search_openalex(
     }
     sort_value = sort_map.get(sort_by, "relevance_score:desc")
 
+    if sort_value == "relevance_score:desc" and not query:
+        sort_value = "publication_date:desc"
+
     data = client.search_works(
         query,
         per_page=min(limit * 2, 200),
@@ -354,6 +357,32 @@ def _resolve_names_to_ids(
     return concept_ids, institution_ids, source_id, unresolved
 
 
+def _provider_kwargs(provider_name: str, config) -> dict:
+    """Build kwargs for creating an academic search provider."""
+    if provider_name == "openalex":
+        return {"email": config.openalex_email}
+    if provider_name == "pubmed":
+        return {
+            "api_key": getattr(config, "pubmed_api_key", None),
+            "email": getattr(config, "pubmed_email", None),
+        }
+    return {}
+
+
+def _deduplicate_by_doi(results: list[dict]) -> list[dict]:
+    """Remove duplicate papers by normalized DOI, keeping first occurrence."""
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for paper in results:
+        doi = (paper.get("doi") or "").lower().strip()
+        if doi and doi in seen:
+            continue
+        if doi:
+            seen.add(doi)
+        deduped.append(paper)
+    return deduped
+
+
 def search_academic_databases_impl(
     config,
     query: str,
@@ -373,6 +402,7 @@ def search_academic_databases_impl(
     cursor: str | None = None,
     lookup_by_doi=None,
     lookup_by_arxiv_extra=None,
+    providers: list[str] | None = None,
 ) -> dict:
     """Shared implementation for the academic search tool.
 
@@ -383,83 +413,117 @@ def search_academic_databases_impl(
     (concepts/institutions/venue) is supplied — those filters narrow the search
     space enough that keyword-only queries become tolerable.
     """
-    client = OpenAlexClient(email=config.openalex_email)
+    from ...academic_search import (
+        create_academic_search_provider,
+        merge_results,
+    )
+
+    provider_names = providers or ["openalex"]
 
     detected_doi = is_doi_query(query) if query else None
 
     # DOI short-circuit: no filter resolution, no fuzzy check.
     if detected_doi:
-        try:
-            results = fetch_openalex_by_doi(detected_doi, client=client)
-        except httpx_module.TimeoutException:
-            raise tool_error_cls("Academic search failed: OpenAlex (timeout).")
-        except httpx_module.HTTPStatusError as exc:
-            raise tool_error_cls(
-                f"Academic search failed: OpenAlex (http_{exc.response.status_code})."
-            )
+        all_results: list[dict] = []
+        for pname in provider_names:
+            try:
+                provider = create_academic_search_provider(
+                    pname,
+                    **_provider_kwargs(pname, config),
+                )
+                all_results.extend(provider.get_by_doi(detected_doi))
+            except httpx_module.TimeoutException:
+                raise tool_error_cls(f"Academic search failed: {pname} (timeout).")
+            except httpx_module.HTTPStatusError as exc:
+                raise tool_error_cls(
+                    f"Academic search failed: {pname} (http_{exc.response.status_code})."
+                )
+        deduped = _deduplicate_by_doi(all_results)
         return {
             "results": annotate_local_duplicates(
-                results,
+                deduped,
                 lookup_by_doi=lookup_by_doi,
                 lookup_by_arxiv_extra=lookup_by_arxiv_extra,
             ),
             "next_cursor": None,
-            "total_count": len(results),
+            "total_count": len(deduped),
             "unresolved_filters": [],
         }
 
-    # Resolve name-based filters first so we know whether structured context exists.
-    concept_ids, institution_ids, source_id, unresolved = _resolve_names_to_ids(
-        client,
-        concepts=concepts,
-        institutions=institutions,
-        venue=venue,
-        logger=logger,
-    )
-    has_structured_filter = bool(
-        concept_ids or institution_ids or source_id
-    )
+    # For OpenAlex: resolve name-based filters and check for fuzzy queries.
+    openalex_concept_ids: list[str] | None = None
+    openalex_institution_ids: list[str] | None = None
+    openalex_source_id: str | None = None
+    unresolved: list[str] = []
 
-    # Hard rejection of fuzzy bag-of-words queries WITHOUT structured filters.
-    # Rationale: OpenAlex keyword search returns garbage for fuzzy queries, but
-    # when the agent has narrowed by concept/institution/venue the keyword layer
-    # is allowed to be loose. A soft warning in the result payload is routinely
-    # ignored by agents, so the guardrail lives in code.
-    if query and _is_fuzzy_nl_query(query) and not has_structured_filter:
-        raise tool_error_cls(_FUZZY_REJECTION_MSG.format(query=query))
+    if "openalex" in provider_names:
+        from ...openalex_client import OpenAlexClient
 
-    try:
-        payload = search_openalex(
-            query or "",
-            limit,
-            year_min,
-            year_max,
-            sort_by,
-            client=client,
-            min_citations=min_citations,
-            concept_ids=concept_ids or None,
-            institution_ids=institution_ids or None,
-            source_id=source_id,
-            oa_only=oa_only,
-            cursor=cursor,
+        oa_client = OpenAlexClient(email=config.openalex_email)
+        openalex_concept_ids, openalex_institution_ids, openalex_source_id, unresolved = (
+            _resolve_names_to_ids(
+                oa_client,
+                concepts=concepts,
+                institutions=institutions,
+                venue=venue,
+                logger=logger,
+            )
         )
-    except httpx_module.TimeoutException:
-        raise tool_error_cls("Academic search failed: OpenAlex (timeout).")
-    except httpx_module.HTTPStatusError as exc:
-        raise tool_error_cls(
-            f"Academic search failed: OpenAlex (http_{exc.response.status_code})."
+        has_structured_filter = bool(
+            openalex_concept_ids or openalex_institution_ids or openalex_source_id
         )
-    except Exception as exc:
-        logger.info("OpenAlex search failed (%s)", exc)
-        raise tool_error_cls(f"Academic search failed: OpenAlex ({exc}).")
+        if query and _is_fuzzy_nl_query(query) and not has_structured_filter:
+            raise tool_error_cls(_FUZZY_REJECTION_MSG.format(query=query))
 
-    payload["results"] = annotate_local_duplicates(
-        payload.get("results", []),
+    # Search all providers and merge results.
+    provider_results = []
+    for pname in provider_names:
+        try:
+            provider = create_academic_search_provider(
+                pname,
+                **_provider_kwargs(pname, config),
+            )
+            search_kwargs: dict[str, Any] = {
+                "min_citations": min_citations,
+                "oa_only": oa_only,
+                "cursor": cursor,
+            }
+            if pname == "openalex":
+                search_kwargs["concept_ids"] = openalex_concept_ids
+                search_kwargs["institution_ids"] = openalex_institution_ids
+                search_kwargs["source_id"] = openalex_source_id
+            result = provider.search(
+                query or "",
+                limit,
+                year_min,
+                year_max,
+                sort_by,
+                **search_kwargs,
+            )
+            provider_results.append(result)
+        except httpx_module.TimeoutException:
+            raise tool_error_cls(f"Academic search failed: {pname} (timeout).")
+        except httpx_module.HTTPStatusError as exc:
+            raise tool_error_cls(
+                f"Academic search failed: {pname} (http_{exc.response.status_code})."
+            )
+        except Exception as exc:
+            logger.info("%s search failed (%s)", pname, exc)
+            raise tool_error_cls(f"Academic search failed: {pname} ({exc}).")
+
+    merged = merge_results(provider_results, limit=limit)
+    merged.results = annotate_local_duplicates(
+        merged.results,
         lookup_by_doi=lookup_by_doi,
         lookup_by_arxiv_extra=lookup_by_arxiv_extra,
     )
-    payload["unresolved_filters"] = unresolved
-    return payload
+    merged.unresolved_filters = unresolved
+    return {
+        "results": merged.results,
+        "next_cursor": merged.next_cursor,
+        "total_count": merged.total_count,
+        "unresolved_filters": merged.unresolved_filters,
+    }
 
 
 # ---------------------------------------------------------------------------
