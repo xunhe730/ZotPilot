@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from ...openalex_client import OpenAlexClient
-from ...tools.ingestion.search import (
+from ..openalex_client import OpenAlexClient
+from ..tools.ingestion.search import (
     fetch_openalex_by_doi,
     format_openalex_paper,
     reconstruct_abstract,

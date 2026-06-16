@@ -5,9 +5,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from . import openalex_provider  # noqa: F401
-from . import pubmed_provider  # noqa: F401
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,7 +49,16 @@ def register_academic_search_provider(name: str, cls: type) -> None:
     ACADEMIC_SEARCH_PROVIDERS[name] = cls
 
 
+def _ensure_providers_registered() -> None:
+    """Lazily import and register all providers."""
+    if ACADEMIC_SEARCH_PROVIDERS:
+        return
+    from . import openalex_provider  # noqa: F401
+    from . import pubmed_provider  # noqa: F401
+
+
 def create_academic_search_provider(name: str, **kwargs) -> AcademicSearchProvider:
+    _ensure_providers_registered()
     try:
         cls = ACADEMIC_SEARCH_PROVIDERS[name]
     except KeyError:

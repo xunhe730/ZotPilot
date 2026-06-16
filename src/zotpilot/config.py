@@ -117,9 +117,6 @@ class Config:
     ocr_language: str
     # OpenAlex settings
     openalex_email: str | None  # Optional email for polite pool (10 req/sec vs 1 req/sec)
-    # PubMed settings
-    pubmed_api_key: str | None = None
-    pubmed_email: str | None = None
     # Vision extraction settings
     vision_enabled: bool
     vision_provider: str
@@ -146,6 +143,9 @@ class Config:
     formula_ocr_max_formulas_per_doc: int = 40
     formula_ocr_max_formulas_per_page: int = 6
     formula_ocr_min_confidence: float = 0.6
+    # PubMed settings
+    pubmed_api_key: str | None = None
+    pubmed_email: str | None = None
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
