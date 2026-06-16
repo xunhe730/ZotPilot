@@ -172,6 +172,28 @@ zotpilot setup --non-interactive --provider custom \
 </details>
 
 <details>
+<summary><b>公式 OCR（可选）</b></summary>
+
+公式索引是可选能力，默认不启用。需要本地公式 OCR 时安装 extra：
+
+```bash
+pip install "zotpilot[formula]"
+# 开发安装：
+pip install -e ".[formula,dev]"
+```
+
+然后启用配置并重新索引：
+
+```bash
+zotpilot config set formula_ocr_enabled true
+zotpilot index
+```
+
+当前阶段只面向**有文字层 PDF 中的 display formulas**：ZotPilot 会在本地识别候选公式块、写入公式 chunk，并和正文 / 表格 / 图表一起参与语义检索。默认 `local` provider 全程在本机运行，不会把公式图片或 LaTeX 发送到外部服务；首次使用会联网下载 RapidLaTeXOCR 模型权重（约数十 MB），之后可离线运行。inline math、纯图片 / 矢量公式、整页 fallback、SimpleTex 或云端 vision 公式识别留到后续阶段。
+
+</details>
+
+<details>
 <summary><b>API Key 与环境变量</b></summary>
 
 配置模型分两层：

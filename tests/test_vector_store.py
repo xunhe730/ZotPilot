@@ -65,6 +65,36 @@ class TestVectorStore:
         # Should include the center and at least one neighbor
         indices = {c.metadata["chunk_index"] for c in chunks}
         assert 1 in indices
+        assert {c.metadata["chunk_type"] for c in chunks} == {"text"}
+
+    def test_get_adjacent_chunks_excludes_formula_chunks(self, populated_store):
+        from zotpilot.models import ExtractedFormula
+
+        doc_meta = populated_store.get_document_meta("TEST001")
+        populated_store.add_formulas(
+            "TEST001",
+            doc_meta,
+            [
+                ExtractedFormula(
+                    page_num=2,
+                    formula_index=0,
+                    bbox=(1, 2, 3, 4),
+                    latex=r"E = mc^2",
+                ),
+                ExtractedFormula(
+                    page_num=2,
+                    formula_index=1,
+                    bbox=(4, 5, 6, 7),
+                    latex=r"F = ma",
+                ),
+            ],
+        )
+
+        chunks = populated_store.get_adjacent_chunks("TEST001", 1, window=1)
+
+        assert chunks
+        assert all(chunk.metadata["chunk_type"] == "text" for chunk in chunks)
+        assert all(not chunk.text.startswith("Formula on page") for chunk in chunks)
 
     def test_search(self, populated_store):
         results = populated_store.search("neural networks", top_k=3)
@@ -75,6 +105,63 @@ class TestVectorStore:
     def test_empty_store_search(self, store):
         results = store.search("anything", top_k=5)
         assert results == []
+
+    def test_add_formulas_uses_real_chunk_indices_and_counts_type(self, populated_store):
+        from zotpilot.models import ExtractedFormula
+
+        doc_meta = populated_store.get_document_meta("TEST001")
+        formulas = [
+            ExtractedFormula(
+                page_num=2,
+                formula_index=0,
+                bbox=(1, 2, 3, 4),
+                latex=r"E = mc^2",
+                confidence=0.91,
+                reference_context="Energy is defined by the following equation.",
+                equation_number="(1)",
+            ),
+            ExtractedFormula(
+                page_num=3,
+                formula_index=1,
+                bbox=(5, 6, 7, 8),
+                latex=r"L = \sum_i x_i",
+                confidence=0.82,
+            ),
+        ]
+
+        populated_store.add_formulas("TEST001", doc_meta, formulas)
+
+        results = populated_store.collection.get(
+            where={
+                "$and": [
+                    {"doc_id": {"$eq": "TEST001"}},
+                    {"chunk_type": {"$eq": "formula"}},
+                ]
+            },
+            include=["documents", "metadatas"],
+        )
+        indices = sorted(meta["chunk_index"] for meta in results["metadatas"])
+        counts = populated_store.count_chunk_types({"TEST001"})
+
+        assert indices == [0, 1]
+        assert counts == {"text": 3, "table": 0, "figure": 0, "formula": 2}
+        assert all(doc.startswith("Formula on page") for doc in results["documents"])
+        assert populated_store._doc_id_from_chunk_id("TEST001_formula_0001") == "TEST001"
+
+    def test_delete_chunks_by_type_removes_only_formulas(self, populated_store):
+        from zotpilot.models import ExtractedFormula
+
+        doc_meta = populated_store.get_document_meta("TEST001")
+        populated_store.add_formulas(
+            "TEST001",
+            doc_meta,
+            [ExtractedFormula(page_num=2, formula_index=0, bbox=(1, 2, 3, 4), latex=r"E = mc^2")],
+        )
+
+        populated_store.delete_chunks_by_type("TEST001", "formula")
+
+        counts = populated_store.count_chunk_types({"TEST001"})
+        assert counts == {"text": 3, "table": 0, "figure": 0, "formula": 0}
 
     def test_probe_fail_on_read_path_raises_and_keeps_bytes(self, tmp_path, mock_embedder):
         """AC1: a probe/open failure on the READ path never moves/recreates the DB.
@@ -131,3 +218,16 @@ class TestGuardedAdd:
         store.collection = MagicMock()
         store._guarded_add(["a"], ["t1"], [[0.1, 0.2]], [{"doc_id": "X"}])
         store.collection.add.assert_called_once()
+
+    def test_add_formulas_raises_on_embedding_count_mismatch(self, store, mock_embedder):
+        from zotpilot.models import ExtractedFormula
+
+        mock_embedder.embed.side_effect = None
+        mock_embedder.embed.return_value = [[0.1] * 768]
+        formulas = [
+            ExtractedFormula(page_num=1, formula_index=0, bbox=(0, 0, 1, 1), latex=r"a=b"),
+            ExtractedFormula(page_num=1, formula_index=1, bbox=(1, 1, 2, 2), latex=r"c=d"),
+        ]
+
+        with pytest.raises(ValueError, match="misaligned"):
+            store.add_formulas("DOC", {"title": "Paper"}, formulas)

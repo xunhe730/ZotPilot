@@ -9,6 +9,7 @@ The ``_config_hash`` golden hex baselines were captured from ``dev`` HEAD BEFORE
 any code change (M5); they prove existing users get zero forced reindex.
 """
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -38,6 +39,7 @@ def _load_config(**overrides) -> Config:
     data = {"zotero_data_dir": "/tmp/zot", "chroma_db_path": "/tmp/chroma"}
     data.update(overrides)
     fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
     Path(path).write_text(json.dumps(data), encoding="utf-8")
     try:
         return Config.load(path)

@@ -6,12 +6,13 @@ import os
 import re
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from tqdm import tqdm
 
-from .config import Config, _config_hash
+from .config import Config, _config_hash, _vision_only_drift
 from .embeddings import create_embedder
 from .embeddings.base import RateLimitError
 from .index_authority import (
@@ -22,6 +23,7 @@ from .index_authority import (
     reconcile_orphaned_index_docs,
     record_table_failure,
 )
+from .index_progress import ProgressSink, emit_progress
 from .journal_ranker import JournalRanker
 from .models import ZoteroItem
 from .pdf import extract_document
@@ -57,6 +59,40 @@ def _failure_signature(e: Exception) -> str:
     return f"{type(e).__name__}:{msg}"
 
 
+_PROGRESS_COUNT_KEYS = (
+    "indexed",
+    "failed",
+    "empty",
+    "skipped",
+    "already_indexed",
+    "total_to_index",
+    "batch_size",
+    "has_more",
+    "rate_limited_abort",
+    "systemic_abort",
+    "not_indexed_due_to_abort",
+    "skipped_long",
+    "vision_pending_tables",
+    "vision_estimated_cost_usd",
+    "vision_budget_skipped",
+)
+
+
+def _progress_counts(counts: dict) -> dict[str, object]:
+    """Keep run-finished progress payload compact and JSON-friendly."""
+    payload: dict[str, object] = {}
+    for key in _PROGRESS_COUNT_KEYS:
+        if key in counts:
+            payload[key] = counts[key]
+    if "quality_distribution" in counts:
+        payload["quality_distribution"] = counts["quality_distribution"]
+    if "extraction_stats" in counts:
+        payload["extraction_stats"] = counts["extraction_stats"]
+    if "skipped_no_pdf" in counts:
+        payload["skipped_no_pdf_count"] = len(counts["skipped_no_pdf"])
+    return payload
+
+
 class ConfigDriftError(RuntimeError):
     """Raised when the persisted index config hash differs from the current config.
 
@@ -64,6 +100,10 @@ class ConfigDriftError(RuntimeError):
     search results, so indexing blocks until the caller opts into a rebuild with
     ``force_reindex=True`` (CLI ``--force``).
     """
+
+
+class FormulaProviderUnavailableError(RuntimeError):
+    """Raised when formula OCR is enabled but its provider cannot be used."""
 
 
 # NOTE: _config_hash is defined in config.py (Decision 4 relocation) so the
@@ -108,6 +148,7 @@ class Indexer:
         self._empty_docs_path = config.chroma_db_path / "empty_docs.json"
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
         self.journal: IndexJournal | None = None
+        self._formula_provider = None
         vision_provider = getattr(config, "vision_provider", "anthropic")
         if vision_provider not in ("anthropic", "dashscope"):
             vision_provider = "anthropic"
@@ -135,6 +176,145 @@ class Indexer:
             )
         else:
             self._vision_api = None
+
+    def _assert_config_hash_current(self) -> None:
+        """Block incremental backfills when the embedding-space hash drifted."""
+        config_hash = _config_hash(self.config)
+        if not self._config_hash_path.exists():
+            raise ConfigDriftError(
+                "Cannot backfill formulas before the text index config hash exists. "
+                "Run index_library() first so formulas share the same embedding space."
+            )
+        stored_hash = self._config_hash_path.read_text().strip()
+        if stored_hash != config_hash:
+            raise ConfigDriftError(
+                "Cannot backfill formulas because the current config hash differs from the "
+                "stored index hash. Rebuild the index with index_library(force_reindex=True) "
+                "before adding formula chunks."
+            )
+
+    def _get_formula_provider(self):
+        """Create the configured formula OCR provider lazily."""
+        if self._formula_provider is None:
+            from .feature_extraction.formula_ocr import create_formula_ocr_provider
+
+            self._formula_provider = create_formula_ocr_provider(self.config.formula_ocr_provider)
+        return self._formula_provider
+
+    def _ensure_formula_provider_available(self) -> None:
+        """Fail fast when formula OCR is enabled but its optional extra is missing."""
+        if getattr(self.config, "formula_ocr_enabled", False) is not True:
+            return
+        provider_name = getattr(self.config, "formula_ocr_provider", "unknown")
+        try:
+            from .feature_extraction.formula_ocr import ensure_formula_ocr_provider_dependency
+
+            ensure_formula_ocr_provider_dependency(provider_name)
+        except RuntimeError as e:
+            raise FormulaProviderUnavailableError(
+                f"Formula OCR provider {provider_name!r} is unavailable. "
+                "Install the optional dependency with `pip install zotpilot[formula]` "
+                "(or `uv pip install -e .[formula]` for an editable checkout), "
+                "then rerun indexing; or set formula_ocr_enabled=false."
+            ) from e
+
+    def _recognize_formulas_for_item(self, item: ZoteroItem):
+        """Run text-layer formula OCR for one item if possible."""
+        if item.pdf_path is None or not item.pdf_path.exists():
+            return []
+        from .feature_extraction.formula_ocr import recognize_formulas
+
+        return recognize_formulas(
+            item.pdf_path,
+            self._get_formula_provider(),
+            max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
+            max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
+            min_confidence=self.config.formula_ocr_min_confidence,
+        )
+
+    def index_formulas(
+        self,
+        *,
+        item_key: str | None = None,
+        item_keys: list[str] | None = None,
+        limit: int | None = None,
+        refresh_existing: bool = True,
+    ) -> dict:
+        """Backfill formula chunks for already-indexed documents."""
+        if not self.config.formula_ocr_enabled:
+            raise ValueError("formula_ocr_enabled must be true before running formula backfill")
+        self._ensure_formula_provider_available()
+        self._assert_config_hash_current()
+
+        indexed_ids = self.store.get_indexed_doc_ids()
+        items = [
+            item for item in self.zotero.get_all_items_with_pdfs()
+            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
+        ]
+        if item_key:
+            items = [item for item in items if item.item_key == item_key]
+        if item_keys:
+            wanted = set(item_keys)
+            items = [item for item in items if item.item_key in wanted]
+        if limit:
+            items = items[:limit]
+
+        results = []
+        for item in items:
+            journal_quartile = self.journal_ranker.lookup(item.publication)
+            doc_meta = {
+                "title": item.title,
+                "authors": item.authors,
+                "year": item.year,
+                "citation_key": item.citation_key,
+                "publication": item.publication,
+                "journal_quartile": journal_quartile or "",
+                "doi": item.doi,
+                "tags": item.tags,
+                "collections": item.collections,
+                "pdf_hash": self._pdf_hash(item.pdf_path),
+                "quality_grade": "",
+            }
+            formulas = self._recognize_formulas_for_item(item)
+            existing_formula_count = self._count_existing_formulas(item.item_key) if refresh_existing else 0
+            kept_existing = 0
+            if refresh_existing and formulas:
+                self.store.delete_chunks_by_type(item.item_key, "formula")
+            elif refresh_existing and existing_formula_count > 0:
+                kept_existing = existing_formula_count
+                logger.warning(
+                    "Formula backfill found 0 formulas for %s; keeping %d existing formula chunk(s)",
+                    item.item_key,
+                    existing_formula_count,
+                )
+            if formulas:
+                self.store.add_formulas(item.item_key, doc_meta, formulas)
+            results.append({
+                "item_key": item.item_key,
+                "title": item.title,
+                "n_formulas": len(formulas),
+                "existing_formulas_kept": kept_existing,
+            })
+
+        return {
+            "processed": len(results),
+            "formulas_indexed": sum(row["n_formulas"] for row in results),
+            "results": results,
+        }
+
+    def _count_existing_formulas(self, item_key: str) -> int:
+        """Best-effort count of existing formula chunks for one document."""
+        counter = getattr(self.store, "count_chunk_types", None)
+        if counter is None:
+            return 0
+        try:
+            counts = counter({item_key})
+        except Exception:
+            return 0
+        if not isinstance(counts, dict):
+            return 0
+        value = counts.get("formula", 0)
+        return int(value) if isinstance(value, int) else 0
 
     # ------------------------------------------------------------------
     # Empty-doc tracking (keyed by item_key -> pdf file hash)
@@ -237,6 +417,7 @@ class Indexer:
         max_pages: int = 0,
         batch_size: int | None = None,
         journal: IndexJournal | None = None,
+        progress_sink: ProgressSink | None = None,
     ) -> dict:
         """
         Index all PDFs in Zotero library.
@@ -249,10 +430,28 @@ class Indexer:
             max_pages: Skip PDFs longer than N pages (0 = no limit)
             batch_size: Process at most N items per call (None/0 = all at once)
             journal: Optional IndexJournal for commit tracking
+            progress_sink: Optional sink for structured progress events
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
         """
+        self._ensure_formula_provider_available()
+
+        run_id = uuid.uuid4().hex
+
+        def progress(event_type: str, **payload: object) -> None:
+            emit_progress(progress_sink, event_type, run_id=run_id, **payload)
+
+        progress(
+            "run_started",
+            force_reindex=force_reindex,
+            limit=limit,
+            item_key=item_key,
+            item_keys=item_keys,
+            title_filter=bool(title_pattern),
+            max_pages=max_pages,
+            batch_size=batch_size,
+        )
         items = self.zotero.get_all_items_with_pdfs()
         skipped_no_pdf: list[dict] = []
         kept_items: list = []
@@ -260,11 +459,20 @@ class Indexer:
             if i.pdf_path and i.pdf_path.exists():
                 kept_items.append(i)
             else:
+                item_title = getattr(i, "title", None) or ""
                 skipped_no_pdf.append({
                     "item_key": i.item_key,
-                    "title": getattr(i, "title", None) or "",
+                    "title": item_title,
                     "reason": "no_pdf_attachment",
                 })
+                progress(
+                    "paper_finished",
+                    phase="planning",
+                    item_key=i.item_key,
+                    title=item_title,
+                    status="skipped",
+                    reason="no_pdf_attachment",
+                )
         items = kept_items
         if skipped_no_pdf:
             logger.info(
@@ -303,19 +511,23 @@ class Indexer:
             items = [i for i in items if i.item_key == item_key]
             if not items:
                 logger.error(f"No item found with key: {item_key}")
-                return {
+                empty_result = {
                     "results": [], "indexed": 0, "failed": 0, "empty": 0,
                     "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
                 }
+                progress("run_finished", **_progress_counts(empty_result))
+                return empty_result
 
         if item_keys:
             items = [i for i in items if i.item_key in item_keys]
             if not items:
                 logger.error("No items found matching item_keys")
-                return {
+                empty_result = {
                     "results": [], "indexed": 0, "failed": 0, "empty": 0,
                     "skipped": 0, "already_indexed": 0, "skipped_no_pdf": [],
                 }
+                progress("run_finished", **_progress_counts(empty_result))
+                return empty_result
 
         if title_pattern:
             if len(title_pattern) > 200:
@@ -360,6 +572,32 @@ class Indexer:
                 stored_hash,
                 config_hash,
             )
+            progress("run_failed", reason="config_drift")
+            # Common false alarm: the stored index was built WITH vision but this
+            # run disabled it (batch_size>0 auto-disables vision, or no_vision was
+            # set), and that single toggle -- not any embedding-space change --
+            # tripped the guard. Steer to the cheap fix (keep vision on, index
+            # incrementally) instead of a force-rebuild that re-spends embedding
+            # quota on every already-indexed paper.
+            if _vision_only_drift(self.config, stored_hash):
+                if not self.config.vision_enabled:
+                    raise ConfigDriftError(
+                        "This index was built WITH vision, but this run disabled it "
+                        "(batch_size>0 auto-disables vision, or no_vision/--no-vision was set), "
+                        "and that single change -- not the embedding space -- tripped the drift "
+                        "guard. To index the remaining papers incrementally, keep vision ON: "
+                        "re-run with batch_size=0 (API: index_library(batch_size=0); CLI: drop "
+                        "--no-vision). Do NOT use force_reindex/--force here -- it would rebuild "
+                        "every already-indexed paper and re-spend embedding quota, when only an "
+                        "incremental pass is needed."
+                    )
+                raise ConfigDriftError(
+                    "This index was built WITHOUT vision, but this run enabled it, and that "
+                    "single change tripped the drift guard. To index incrementally, match the "
+                    "stored setting by keeping vision OFF: re-run with no_vision=True (CLI: "
+                    "--no-vision) or batch_size>0. Use force_reindex/--force only if you intend "
+                    "to rebuild the whole index with vision on."
+                )
             raise ConfigDriftError(
                 "Index configuration has changed since the last run (chunk size/overlap, embedding "
                 "provider/model/dimensions, OCR, or vision settings). Continuing would mix incompatible "
@@ -383,6 +621,13 @@ class Indexer:
                     reindex_reasons[item.item_key] = reason
                     logger.info(f"Reindexing {item.item_key}: {reason}")
                 else:
+                    progress(
+                        "paper_finished",
+                        phase="planning",
+                        item_key=item.item_key,
+                        title=item.title,
+                        status="already_indexed",
+                    )
                     continue
 
             if item.item_key in empty_docs:
@@ -391,6 +636,14 @@ class Indexer:
                     results.append(IndexResult(
                         item.item_key, item.title, "skipped",
                         reason="no extractable text (unchanged PDF)"))
+                    progress(
+                        "paper_finished",
+                        phase="planning",
+                        item_key=item.item_key,
+                        title=item.title,
+                        status="skipped",
+                        reason="no extractable text (unchanged PDF)",
+                    )
                     continue
                 else:
                     del empty_docs[item.item_key]
@@ -413,6 +666,15 @@ class Indexer:
                         results.append(IndexResult(
                             item.item_key, item.title, "skipped",
                             reason=f"too long ({pages} pages, max {max_pages})"))
+                        progress(
+                            "paper_finished",
+                            phase="planning",
+                            item_key=item.item_key,
+                            title=item.title,
+                            status="skipped",
+                            reason=f"too long ({pages} pages, max {max_pages})",
+                            pages=pages,
+                        )
                     else:
                         short_items.append(item)
                 except Exception:
@@ -452,6 +714,17 @@ class Indexer:
             f"{len(indexed_ids)} already indexed, "
             f"{n_skipped} skipped (empty/unchanged)"
         )
+        progress(
+            "plan_ready",
+            to_index=len(to_index),
+            reindex_count=reindex_count,
+            already_indexed=len(indexed_ids),
+            skipped=n_skipped,
+            skipped_no_pdf_count=len(skipped_no_pdf),
+            skipped_long=len(long_items),
+            batch_size=batch_size,
+            has_more=deferred_by_batch,
+        )
         if not to_index:
             logger.info("Nothing to index \u2014 all papers are up to date")
 
@@ -472,8 +745,19 @@ class Indexer:
         phase1_start = time.perf_counter()
         log_interval = 5  # log every N papers
 
+        progress("phase_started", phase="extraction", total=total_to_extract)
         for i, item in enumerate(tqdm(to_index, desc="Extracting"), 1):
             t0 = time.perf_counter()
+            extraction_status = "extracted"
+            extraction_reason = ""
+            progress(
+                "paper_started",
+                phase="extraction",
+                item_key=item.item_key,
+                title=item.title,
+                position=i,
+                total=total_to_extract,
+            )
             try:
                 if self.journal is not None and item.item_key in reindex_reasons:
                     mark_in_progress(self.journal, item.item_key)
@@ -491,11 +775,24 @@ class Indexer:
                 doc_extractions[item.item_key] = (item, extraction)
             except Exception as e:
                 logger.error(f"Failed to extract {item.item_key}: {type(e).__name__}: {e}")
+                extraction_status = "failed"
+                extraction_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=extraction_reason))
 
             elapsed = time.perf_counter() - t0
+            progress(
+                "paper_finished",
+                phase="extraction",
+                item_key=item.item_key,
+                title=item.title,
+                position=i,
+                total=total_to_extract,
+                status=extraction_status,
+                reason=extraction_reason,
+                elapsed_seconds=elapsed,
+            )
             extraction_times.append(elapsed)
             logger.info("Extraction timing [%s]: total=%.1fs", item.item_key, elapsed)
 
@@ -518,6 +815,12 @@ class Indexer:
                 f"Extraction complete: {total_to_extract} papers in "
                 f"{phase1_elapsed:.1f}s ({phase1_elapsed / total_to_extract:.1f}s avg)"
             )
+        progress(
+            "phase_finished",
+            phase="extraction",
+            total=total_to_extract,
+            elapsed_seconds=phase1_elapsed,
+        )
 
         # ---- Phase 2: Resolve vision batch (one API call for all papers) ----
         vision_pending_tables = 0
@@ -536,6 +839,13 @@ class Indexer:
             pending_docs = sum(
                 1 for v in doc_extractions.values()
                 if v[1].pending_vision is not None and v[1].pending_vision.specs
+            )
+            progress(
+                "phase_started",
+                phase="vision",
+                total=pending_count,
+                pending_docs=pending_docs,
+                estimated_cost_usd=vision_estimated_cost_usd,
             )
             over_table_cap = (
                 self.config.vision_max_tables_per_run is not None
@@ -566,6 +876,14 @@ class Indexer:
                 for _item, extraction in doc_extractions.values():
                     if extraction.pending_vision is not None:
                         _finalize_document_no_tables(extraction)
+                progress(
+                    "phase_finished",
+                    phase="vision",
+                    total=pending_count,
+                    status="skipped",
+                    reason=vision_skip_reason,
+                    estimated_cost_usd=vision_estimated_cost_usd,
+                )
             else:
                 phase2_start = time.perf_counter()
                 resolve_pending_vision(
@@ -578,6 +896,14 @@ class Indexer:
                         f"Vision complete: {pending_count} tables in "
                         f"{phase2_elapsed / 60:.1f}min ({phase2_elapsed / max(pending_count, 1):.1f}s avg/table)"
                     )
+                progress(
+                    "phase_finished",
+                    phase="vision",
+                    total=pending_count,
+                    status="completed",
+                    elapsed_seconds=phase2_elapsed,
+                    estimated_cost_usd=vision_estimated_cost_usd,
+                )
 
         # ---- Phase 3: Index each document (chunk, store, etc.) ----
         total_to_store = len(doc_extractions)
@@ -594,8 +920,17 @@ class Indexer:
         consecutive_same = 0
         last_failure_sig: str | None = None
 
+        progress("phase_started", phase="indexing", total=total_to_store)
         for idx, (item_key, (item, extraction)) in enumerate(extraction_items, 1):
             t0 = time.perf_counter()
+            progress(
+                "paper_started",
+                phase="indexing",
+                item_key=item.item_key,
+                title=item.title,
+                position=idx,
+                total=total_to_store,
+            )
             try:
                 n_chunks, n_tables, reason, extraction_stats, quality_grade = self._index_extraction_with_retry(
                     item, extraction
@@ -614,25 +949,72 @@ class Indexer:
                         item.item_key, item.title, "indexed",
                         n_chunks=n_chunks, n_tables=n_tables,
                         quality_grade=quality_grade))
+                    progress(
+                        "paper_finished",
+                        phase="indexing",
+                        item_key=item.item_key,
+                        title=item.title,
+                        position=idx,
+                        total=total_to_store,
+                        status="indexed",
+                        n_chunks=n_chunks,
+                        n_tables=n_tables,
+                        quality_grade=quality_grade,
+                    )
                 else:
                     empty_docs[item.item_key] = self._pdf_hash(item.pdf_path)
                     results.append(IndexResult(
                         item.item_key, item.title, "empty", reason=reason,
                         quality_grade=quality_grade))
+                    progress(
+                        "paper_finished",
+                        phase="indexing",
+                        item_key=item.item_key,
+                        title=item.title,
+                        position=idx,
+                        total=total_to_store,
+                        status="empty",
+                        reason=reason,
+                        n_chunks=n_chunks,
+                        n_tables=n_tables,
+                        quality_grade=quality_grade,
+                    )
                 logger.debug(f"Completed {item.item_key}: {n_chunks} chunks, {n_tables} tables, quality {quality_grade}")  # noqa: E501
             except RateLimitError as e:
                 logger.error(f"Rate limit hit on {item.item_key}: {e}")
+                failure_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=failure_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=item.item_key,
+                    title=item.title,
+                    position=idx,
+                    total=total_to_store,
+                    status="failed",
+                    reason=failure_reason,
+                )
                 rate_limited_abort = True
                 abort_index = idx
                 break  # stop the run; remaining papers are untried. MUST break, not raise — see D1/D2.
             except Exception as e:
                 logger.error(f"Failed to index {item.item_key}: {type(e).__name__}: {e}")
+                failure_reason = f"{type(e).__name__}: {e}"
                 results.append(IndexResult(
                     item.item_key, item.title, "failed",
-                    reason=f"{type(e).__name__}: {e}"))
+                    reason=failure_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=item.item_key,
+                    title=item.title,
+                    position=idx,
+                    total=total_to_store,
+                    status="failed",
+                    reason=failure_reason,
+                )
                 sig = _failure_signature(e)
                 if sig == last_failure_sig:
                     consecutive_same += 1
@@ -659,9 +1041,18 @@ class Indexer:
         # Append the never-attempted tail after the break so results/failed/counts agree (关键1).
         if abort_index is not None:
             for _k, (_it, _ex) in extraction_items[abort_index:]:
+                abort_tail_reason = "AbortNotAttempted: skipped after early abort (quota/systemic)"
                 results.append(IndexResult(
                     _it.item_key, _it.title, "failed",
-                    reason="AbortNotAttempted: skipped after early abort (quota/systemic)"))
+                    reason=abort_tail_reason))
+                progress(
+                    "paper_finished",
+                    phase="indexing",
+                    item_key=_it.item_key,
+                    title=_it.title,
+                    status="failed",
+                    reason=abort_tail_reason,
+                )
 
         # Single source of truth for the abort count — reused by the log and the counts block.
         aborted = rate_limited_abort or systemic_abort
@@ -671,18 +1062,39 @@ class Indexer:
             else 0
         )
 
+        abort_cause = ""
+        if rate_limited_abort:
+            abort_cause = "rate_limit"
+        elif systemic_abort:
+            abort_cause = "consecutive_failures"
+
         phase3_elapsed = time.perf_counter() - phase3_start
         if aborted:
-            cause = "rate limit" if rate_limited_abort else "consecutive failures"
+            log_cause = "rate limit" if rate_limited_abort else "consecutive failures"
             logger.warning(
                 f"Indexing aborted while processing {abort_index}/{total_to_store} papers "
-                f"({cause}); {not_indexed_due_to_abort} not attempted"
+                f"({log_cause}); {not_indexed_due_to_abort} not attempted"
+            )
+            progress(
+                "run_aborted",
+                phase="indexing",
+                cause=abort_cause,
+                abort_index=abort_index,
+                total=total_to_store,
+                not_indexed_due_to_abort=not_indexed_due_to_abort,
             )
         elif total_to_store > 0:
             logger.info(
                 f"Indexing complete: {total_to_store} papers in "
                 f"{phase3_elapsed:.1f}s ({phase3_elapsed / total_to_store:.1f}s avg)"
             )
+        progress(
+            "phase_finished",
+            phase="indexing",
+            total=total_to_store,
+            status="aborted" if aborted else "completed",
+            elapsed_seconds=phase3_elapsed,
+        )
 
         self._save_empty_docs(empty_docs)
 
@@ -754,6 +1166,7 @@ class Indexer:
                     final_reconciliation["deleted_count"],
                 )
 
+        progress("run_finished", **_progress_counts(counts))
         return {"results": results, **counts}
 
     def _index_document_detailed(self, item: ZoteroItem) -> tuple[int, int, str, dict, str]:
@@ -930,8 +1343,27 @@ class Indexer:
                     fig.reference_context = ctx
 
         # Tracks a swallowed (non-quota) table/figure failure recorded THIS run,
-        # so we don't clear the marker we just wrote at the end.
-        recorded_failure_this_run = False
+        # so we don't clear the marker we just wrote at the end. Formula OCR is
+        # tracked separately and must not poison table/figure completeness.
+        table_figure_failure_this_run = False
+        formula_failure_this_run = False
+
+        # Store formulas if explicitly enabled. Phase A only covers text-layer
+        # candidates; image/vector formulas are intentionally left for later.
+        n_formulas = 0
+        if getattr(self.config, "formula_ocr_enabled", False) is True:
+            try:
+                formulas = list(getattr(extraction, "formulas", []) or [])
+                if not formulas:
+                    formulas = self._recognize_formulas_for_item(item)
+                self.store.add_formulas(item_key, doc_meta, formulas)
+                n_formulas = len(formulas)
+                logger.debug(f"  Extracted {n_formulas} formulas")
+            except RateLimitError:
+                raise
+            except Exception as e:
+                logger.warning(f"Formula OCR/storage failed for {item_key}: {e}")
+                formula_failure_this_run = True
 
         # Store tables if enabled (skip layout artifacts)
         n_tables = 0
@@ -947,7 +1379,7 @@ class Indexer:
                 logger.warning(f"Table storage failed for {item_key}: {e}")
                 if journal is not None:
                     record_table_failure(journal, item_key, f"table storage: {e}")
-                    recorded_failure_this_run = True
+                    table_figure_failure_this_run = True
         if n_artifacts:
             logger.debug(f"  Skipped {n_artifacts} artifact table(s)")
         logger.debug(f"  Extracted {n_tables} tables")
@@ -965,16 +1397,23 @@ class Indexer:
                 logger.warning(f"Figure storage failed for {item_key}: {e}")
                 if journal is not None:
                     record_table_failure(journal, item_key, f"figure storage: {e}")
-                    recorded_failure_this_run = True
+                    table_figure_failure_this_run = True
 
-        # Tables and figures stored cleanly this run: clear any stale marker from a
-        # prior run. Skipped when this run recorded its own failure (keep that),
-        # and a re-raised RateLimitError above never reaches here, so a
-        # quota-aborted run keeps the doc's prior marker intact.
-        if journal is not None and not recorded_failure_this_run:
+        if formula_failure_this_run:
+            logger.debug(
+                "Formula OCR/storage failed for %s independently of table/figure state",
+                item_key,
+            )
+
+        # Tables and figures stored cleanly this run: clear any stale marker
+        # from a prior run. Skipped when this run recorded its own table/figure
+        # failure (keep that), and a re-raised RateLimitError above never
+        # reaches here, so a quota-aborted run keeps the doc's prior marker
+        # intact. Formula OCR failures are intentionally independent.
+        if journal is not None and not table_figure_failure_this_run:
             clear_table_failure(journal, item_key)
 
-        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, quality {quality_grade}")  # noqa: E501
+        logger.debug(f"Indexed {item.item_key}: {len(chunks)} chunks, {n_tables} tables, {n_figures} figures, {n_formulas} formulas, quality {quality_grade}")  # noqa: E501
         return len(chunks), n_tables, "", extraction.stats, quality_grade
 
     def index_document(self, item: ZoteroItem) -> int:

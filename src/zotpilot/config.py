@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -53,6 +53,27 @@ def profile_path() -> Path:
     if legacy.exists():
         return legacy
     return canonical
+
+
+def index_data_dir(config: "Config") -> Path:
+    """Directory that stores index-adjacent state files."""
+    # Also normalize direct Config-like objects used by tests or API callers.
+    return Path(config.chroma_db_path).expanduser().parent
+
+
+def index_journal_path(config: "Config") -> Path:
+    """Path to the crash-recovery index journal."""
+    return index_data_dir(config) / "index_journal.json"
+
+
+def index_lease_path(config: "Config") -> Path:
+    """Path to the cross-process indexing lease."""
+    return index_data_dir(config) / "index_lease.json"
+
+
+def index_progress_path(config: "Config") -> Path:
+    """Path to the append-only indexing progress stream."""
+    return index_data_dir(config) / "index_progress.jsonl"
 
 
 def _old_config_path() -> Path:
@@ -116,6 +137,12 @@ class Config:
     # so no non-default field follows -- keeps dataclass field ordering valid)
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
+    # Formula OCR settings (optional, local-first, excluded from index config hash)
+    formula_ocr_enabled: bool = False
+    formula_ocr_provider: str = "local"
+    formula_ocr_max_formulas_per_doc: int = 40
+    formula_ocr_max_formulas_per_page: int = 6
+    formula_ocr_min_confidence: float = 0.6
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -197,6 +224,11 @@ class Config:
             semantic_scholar_api_key=data.get("semantic_scholar_api_key"),
             embedding_base_url=data.get("embedding_base_url", None),
             embedding_api_key=data.get("embedding_api_key", None),
+            formula_ocr_enabled=data.get("formula_ocr_enabled", False),
+            formula_ocr_provider=data.get("formula_ocr_provider", "local"),
+            formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
+            formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
+            formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -246,6 +278,11 @@ class Config:
             "semantic_scholar_api_key": self.semantic_scholar_api_key,
             "embedding_base_url": self.embedding_base_url,
             "embedding_api_key": self.embedding_api_key,
+            "formula_ocr_enabled": self.formula_ocr_enabled,
+            "formula_ocr_provider": self.formula_ocr_provider,
+            "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
+            "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
+            "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -338,6 +375,21 @@ class Config:
             elif not parsed.netloc:
                 errors.append(f"gemini_base_url is malformed: {self.gemini_base_url}")
 
+        from .feature_extraction.formula_ocr import FORMULA_OCR_PROVIDERS
+
+        if self.formula_ocr_provider not in FORMULA_OCR_PROVIDERS:
+            valid = ", ".join(repr(p) for p in FORMULA_OCR_PROVIDERS)
+            errors.append(
+                f"Invalid formula_ocr_provider: {self.formula_ocr_provider}. "
+                f"Must be one of: {valid}"
+            )
+        if self.formula_ocr_max_formulas_per_doc < 0:
+            errors.append("formula_ocr_max_formulas_per_doc must be >= 0")
+        if self.formula_ocr_max_formulas_per_page < 0:
+            errors.append("formula_ocr_max_formulas_per_page must be >= 0")
+        if not 0.0 <= self.formula_ocr_min_confidence <= 1.0:
+            errors.append("formula_ocr_min_confidence must be between 0.0 and 1.0")
+
         return errors
 
 
@@ -381,3 +433,24 @@ def _config_hash(config: "Config") -> str:
     if config.embedding_provider == "openai-compatible":
         data += f":{getattr(config, 'embedding_base_url', '') or ''}"
     return hashlib.sha256(data.encode()).hexdigest()[:16]
+
+
+def _vision_only_drift(config: "Config", stored_hash: str) -> bool:
+    """True when the ONLY index-affecting change vs the stored index is the vision toggle.
+
+    ``batch_size>0`` (and ``no_vision``) disable vision, which flips
+    ``vision_enabled`` and therefore the config hash -- even though no
+    embedding-space field (chunking, provider, model, dimensions, OCR) actually
+    changed. Re-enabling vision and re-hashing reproduces the stored hash, which
+    proves the drift is *only* the vision flag. Such a "drift" needs no full
+    rebuild: the caller can keep vision on (``batch_size=0``) and index
+    incrementally instead of burning embedding quota on a force-rebuild.
+
+    Returns False for any config that is not a dataclass instance (e.g. test
+    doubles / mocks), degrading to the generic drift message.
+    """
+    try:
+        flipped = replace(config, vision_enabled=not config.vision_enabled)
+    except TypeError:
+        return False
+    return _config_hash(flipped) == stored_hash

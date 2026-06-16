@@ -1,6 +1,6 @@
 [project]
 name = "zotpilot"
-version = "0.5.2"
+version = "0.5.3"
 description = "AI-powered Zotero research assistant — MCP server + agent skill"
 requires-python = ">=3.10"
 license = "MIT"
@@ -38,9 +38,10 @@ Issues = "https://github.com/xunhe730/ZotPilot/issues"
 [project.optional-dependencies]
 paddle = ["paddlepaddle>=3.0.0", "paddleocr>=3.0.0"]
 vision = ["anthropic>=0.40.0", "openai>=1.0.0"]
+formula = ["rapid-latex-ocr>=0.0.9"]
 recover = ["chroma-hnswlib>=0.7.6"]
 dev = ["pytest>=7.0.0", "pytest-cov>=4.0.0", "ruff", "mypy"]
-all = ["zotpilot[paddle,vision]"]
+all = ["zotpilot[paddle,vision,formula]"]
 
 [project.scripts]
 zotpilot = "zotpilot.cli:main"

@@ -38,6 +38,11 @@ class TestConfigLoadDefaults:
         assert cfg.gemini_api_key is None
         assert cfg.zotero_api_key is None
         assert cfg.zotero_user_id is None
+        assert cfg.formula_ocr_enabled is False
+        assert cfg.formula_ocr_provider == "local"
+        assert cfg.formula_ocr_max_formulas_per_doc == 40
+        assert cfg.formula_ocr_max_formulas_per_page == 6
+        assert cfg.formula_ocr_min_confidence == 0.6
 
 
 class TestConfigLoadFromFile:
@@ -392,6 +397,28 @@ class TestOpenAICompatConfigSchema:
         cfg.vision_provider = "openai-compatible"  # not a valid vision provider
         assert any("Invalid vision_provider" in e for e in cfg.validate())
 
+    def test_validate_formula_provider_uses_registry(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_ocr_provider="bogus")
+
+        errors = cfg.validate()
+
+        assert any("Invalid formula_ocr_provider" in e and "'local'" in e for e in errors)
+
+    def test_validate_formula_limits(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(
+            tmp_path,
+            monkeypatch,
+            formula_ocr_max_formulas_per_doc=-1,
+            formula_ocr_max_formulas_per_page=-1,
+            formula_ocr_min_confidence=1.5,
+        )
+
+        errors = cfg.validate()
+
+        assert any("formula_ocr_max_formulas_per_doc" in e for e in errors)
+        assert any("formula_ocr_max_formulas_per_page" in e for e in errors)
+        assert any("formula_ocr_min_confidence" in e for e in errors)
+
 
 class TestConfigHashOpenAICompat:
     """Step 5.8: golden baselines + conditional base_url folding."""
@@ -451,6 +478,25 @@ class TestConfigHashOpenAICompat:
         cfg = Config.load(path=config_file)
         rotated = dataclasses.replace(cfg, embedding_api_key="new-key")
         assert _config_hash(cfg) == _config_hash(rotated)
+
+    def test_formula_ocr_settings_not_folded(self, tmp_path, monkeypatch):
+        import dataclasses
+
+        from zotpilot.config import _config_hash
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "cfg.json"
+        config_file.write_text(json.dumps({"embedding_provider": "local"}))
+        cfg = Config.load(path=config_file)
+
+        changed = dataclasses.replace(
+            cfg,
+            formula_ocr_enabled=True,
+            formula_ocr_max_formulas_per_doc=12,
+            formula_ocr_max_formulas_per_page=3,
+            formula_ocr_min_confidence=0.8,
+        )
+
+        assert _config_hash(cfg) == _config_hash(changed)
 
 
 class TestResolveSecretSaveRoundTrip:

@@ -58,8 +58,8 @@ class TestBuildChromadbFilters:
         assert result == {"chunk_type": {"$eq": "table"}}
 
     def test_build_chromadb_filters_chunk_types_multiple(self):
-        result = _build_chromadb_filters(chunk_types=["text", "figure"])
-        assert result == {"chunk_type": {"$in": ["text", "figure"]}}
+        result = _build_chromadb_filters(chunk_types=["text", "figure", "formula"])
+        assert result == {"chunk_type": {"$in": ["text", "figure", "formula"]}}
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +169,7 @@ class TestResultToDict:
         assert d["relevance_score"] == 0.85
         assert d["composite_score"] == 0.78
         assert d["section"] == "results"
+        assert d["chunk_type"] == "text"
         assert d["section_confidence"] == 0.9
         assert d["journal_quartile"] == "Q1"
         assert d["passage"] == "Some passage text"
@@ -205,6 +206,37 @@ class TestResultToDict:
         assert "citation_key" not in d
         assert "context_before" not in d
         assert "full_context" not in d
+
+    def test_result_to_dict_includes_formula_metadata(self):
+        r = RetrievalResult(
+            chunk_id="DOC1_formula_0001",
+            text="Formula on page 3 (1)\nContext: energy equation.\nLaTeX: E = mc^2",
+            score=0.85,
+            doc_id="DOC1",
+            doc_title="Test Paper",
+            authors="Smith, J.",
+            year=2021,
+            page_num=3,
+            chunk_index=1,
+            section="formula",
+            chunk_type="formula",
+            formula_latex=r"E = mc^2",
+            formula_equation_number="(1)",
+            formula_variable_gloss="where m is mass",
+            formula_provider="local",
+            formula_source="text_block",
+            formula_confidence=0.86,
+            reference_context="Energy is defined by the following equation.",
+            composite_score=0.78,
+        )
+
+        d = _result_to_dict(r)
+
+        assert d["chunk_type"] == "formula"
+        assert d["formula_latex"] == r"E = mc^2"
+        assert d["equation_number"] == "(1)"
+        assert d["variable_gloss"] == "where m is mass"
+        assert d["reference_context"] == "Energy is defined by the following equation."
 
     def test_result_to_dict_minimal_hides_context_even_if_present(self):
         r = RetrievalResult(
@@ -266,6 +298,17 @@ class TestMergeResultsByChunk:
         doc1_result = [r for r in merged if r.doc_id == "DOC1"][0]
         assert doc1_result.composite_score == 0.8
 
+    def test_merge_results_keeps_distinct_chunk_types(self):
+        text = self._make_rr("DOC1", 0, 0.9, 0.8)
+        formula = self._make_rr("DOC1", 0, 0.7, 0.7)
+        formula.chunk_id = "DOC1_formula_0000"
+        formula.chunk_type = "formula"
+
+        merged = _merge_results_by_chunk([text], [formula], top_k=10)
+
+        assert len(merged) == 2
+        assert {r.chunk_type for r in merged} == {"text", "formula"}
+
 
 # ---------------------------------------------------------------------------
 # Thread-safety: _get_config() returns same instance across threads
@@ -316,6 +359,7 @@ class TestMCPInstructions:
             "get_paper_details",
             "get_paper_for_tutor",
             "get_passage_context",
+            "index_formulas",
             "index_library",
             "ingest_by_identifiers",
             "manage_collections",
@@ -324,6 +368,7 @@ class TestMCPInstructions:
             "save_reading_persona",
             "search_academic_databases",
             "search_boolean",
+            "search_formulas",
             "search_papers",
             "search_topic",
         }

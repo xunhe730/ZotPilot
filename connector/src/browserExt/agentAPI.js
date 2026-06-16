@@ -678,7 +678,7 @@ Zotero.AgentAPI = new function() {
 			// 60s gives slow-loading publishers (CF auto-challenge, heavy SPAs)
 			// enough time to reach a stable "accessible" state. Shorter windows
 			// led to false-positive preflight_timeouts on otherwise OK pages.
-			const readyResult = await _waitForReady(tab.id, 60000);
+			const readyResult = await _waitForReady(tab.id, 60000, PREFLIGHT_TRANSLATOR_WAIT_MS);
 
 			// Tab may have been closed by Chrome (e.g. PDF download triggered by URL).
 			let title = "";
@@ -822,8 +822,11 @@ Zotero.AgentAPI = new function() {
 	 * for fast pages and patient waiting for slow/redirect pages.
 	 */
 	const TRANSLATOR_WAIT_MS = 20000; // max wait for translator event after page stabilises
+	// Preflight only judges accessibility, not whether a translator exists — don't
+	// wait the full 20s for one; conclude from the anti-bot title + page state.
+	const PREFLIGHT_TRANSLATOR_WAIT_MS = 3000;
 
-	function _waitForReady(tabId, timeout) {
+	function _waitForReady(tabId, timeout, translatorWaitMs = TRANSLATOR_WAIT_MS) {
 		return new Promise((resolve) => {
 			let resolved = false;
 			let stabilityTimer = null;
@@ -868,6 +871,13 @@ Zotero.AgentAPI = new function() {
 
 				// Check if translator already available (fast path for pages that load quickly)
 				let tabInfo = Zotero.Connector_Browser.getTabInfo(tabId);
+				// Direct / embedded PDF pages have no translator — treat as ready so the
+				// save path falls through to the native "Save to Zotero (PDF)" flow.
+				if (tabInfo && tabInfo.isPDF) {
+					Zotero.debug("[ZotPilot] tab " + tabId + " is a direct PDF — ready without translator");
+					_resolveNow(true);
+					return;
+				}
 				if (tabInfo && tabInfo.translators && tabInfo.translators.length > 0) {
 					Zotero.debug("[ZotPilot] translator already ready for tab " + tabId);
 					_resolveNow(true);
@@ -885,7 +895,7 @@ Zotero.AgentAPI = new function() {
 						_translatorWaiters.delete(tabId);
 						_resolveNow(false);
 					}
-				}, TRANSLATOR_WAIT_MS);
+				}, translatorWaitMs);
 			}
 
 			function scheduleStability() {

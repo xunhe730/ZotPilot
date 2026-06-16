@@ -17,7 +17,7 @@ from ._platforms import (
     _get_latest_pypi_version,
     _get_skill_dirs,  # noqa: F401 — re-exported for test patching compatibility
 )
-from .config import Config, _default_config_dir
+from .config import Config, _default_config_dir, index_journal_path, index_lease_path, index_progress_path
 from .credential_migration import migrate_secrets
 from .runtime_settings import resolve_runtime_config, resolve_runtime_settings
 from .secret_store import SecretStoreError, delete_secret
@@ -721,7 +721,7 @@ def cmd_setup(args):
 
 def cmd_index(args):
     """Index Zotero library."""
-    from .indexer import Indexer
+    from .indexer import FormulaProviderUnavailableError, Indexer
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -773,14 +773,26 @@ def cmd_index(args):
         release_lease,
     )
 
-    index_data_root = Path(config.chroma_db_path).parent
-    journal = IndexJournal(index_data_root / "index_journal.json")
-    lease = IndexLease(index_data_root / "index_lease.json")
+    journal = IndexJournal(index_journal_path(config))
+    lease = IndexLease(index_lease_path(config))
     try:
         acquire_lease(lease)
     except LeaseContentionError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    progress_sink = None
+    progress_jsonl = getattr(args, "progress_jsonl", None)
+    if progress_jsonl is not None:
+        from .index_progress import JsonlProgressSink
+
+        progress_path = (
+            index_progress_path(config)
+            if progress_jsonl == ""
+            else Path(progress_jsonl).expanduser()
+        )
+        progress_sink = JsonlProgressSink(progress_path)
+        print(f"Index progress JSONL: {progress_path}", file=sys.stderr)
 
     indexer = Indexer(config)
     try:
@@ -792,7 +804,11 @@ def cmd_index(args):
             max_pages=max_pages,
             batch_size=batch_size,
             journal=journal,
+            progress_sink=progress_sink,
         )
+    except FormulaProviderUnavailableError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     finally:
         release_lease(lease)
 
@@ -1798,6 +1814,13 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("--no-vision", action="store_true", help="Disable vision extraction")
     sub_index.add_argument("--batch-size", type=int, default=2,
         help="Process N items per call (default: 2, 0 = all at once)")
+    sub_index.add_argument(
+        "--progress-jsonl",
+        nargs="?",
+        const="",
+        default=None,
+        help="Append structured progress events to JSONL (default path when no path is provided)",
+    )
     sub_index.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)

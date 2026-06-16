@@ -119,6 +119,27 @@ class TestSearchPapers:
 
         assert [row["doc_id"] for row in output] == ["DOC1"]
 
+    def test_section_type_formulas_dispatches(self, mock_singletons):
+        from zotpilot.tools.search import search_papers
+
+        with patch("zotpilot.tools.search.search_formulas", return_value=[{"doc_id": "DOC1"}]) as mock_search:
+            output = search_papers(query="formula meaning", section_type="formulas")
+
+        assert output == [{"doc_id": "DOC1"}]
+        mock_search.assert_called_once()
+
+    def test_formula_chunk_type_is_valid(self, mock_singletons):
+        from zotpilot.tools.search import search_papers
+
+        results = [_make_rr()]
+        mock_singletons["retriever"].search.return_value = results
+        mock_singletons["reranker"].rerank.return_value = results
+
+        search_papers(query="test", chunk_types=["formula"])
+
+        _args, kwargs = mock_singletons["retriever"].search.call_args
+        assert kwargs["filters"] == {"chunk_type": {"$eq": "formula"}}
+
 
 class TestSearchTopic:
     def test_happy_path(self, mock_singletons):
@@ -171,3 +192,53 @@ class TestSearchBoolean:
         mock_singletons["zotero"].return_value = zotero
         output = search_boolean(query="nonexistent")
         assert output == []
+
+
+class TestSearchFormulas:
+    def test_returns_formula_metadata_and_context(self, mock_singletons):
+        from dataclasses import replace
+
+        from zotpilot.tools.search import search_formulas
+
+        chunk = MagicMock()
+        chunk.id = "DOC1_formula_0000"
+        chunk.text = "Formula on page 4 (2)\nContext: loss is minimized.\nLaTeX: L = \\sum_i x_i"
+        chunk.score = 0.91
+        chunk.metadata = {
+            "doc_id": "DOC1",
+            "doc_title": "Formula Paper",
+            "authors": "Smith",
+            "year": 2024,
+            "page_num": 4,
+            "chunk_index": 0,
+            "formula_index": 0,
+            "citation_key": "smith2024",
+            "publication": "NeurIPS",
+            "section": "formula",
+            "section_confidence": 1.0,
+            "journal_quartile": "Q1",
+            "chunk_type": "formula",
+            "formula_latex": r"L = \sum_i x_i",
+            "formula_equation_number": "(2)",
+            "formula_variable_gloss": "where x_i is the token score",
+            "formula_confidence": 0.86,
+            "formula_provider": "local",
+            "formula_source": "text_block",
+            "reference_context": "The objective minimizes the following loss.",
+            "formula_raw_text": "L = sum_i x_i (2)",
+            "bbox": "1,2,3,4",
+        }
+        mock_singletons["store"].search.return_value = [chunk]
+        mock_singletons["reranker"].rerank.side_effect = (
+            lambda rows, *_args, **_kwargs: [replace(rows[0], composite_score=0.77)]
+        )
+
+        output = search_formulas("loss objective", verbosity="full")
+
+        assert output[0]["doc_id"] == "DOC1"
+        assert output[0]["latex"] == r"L = \sum_i x_i"
+        assert output[0]["equation_number"] == "(2)"
+        assert output[0]["variable_gloss"] == "where x_i is the token score"
+        assert output[0]["reference_context"] == "The objective minimizes the following loss."
+        assert output[0]["formula_provider"] == "local"
+        assert output[0]["raw_text"] == "L = sum_i x_i (2)"

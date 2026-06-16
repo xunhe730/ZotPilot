@@ -210,6 +210,13 @@ def index_library(
     overrides a configured vision provider the response carries vision_disabled_by_batch
     plus a _notice_vision. Use batch_size=0 (all-at-once) to index WITH vision.
 
+    Vision-built index + batch_size>0 = ConfigDriftError, NOT a reason to force-rebuild.
+    If the existing index was built WITH vision, a batch_size>0 (or no_vision) call
+    disables vision and that single toggle trips the config-drift guard. The fix is
+    index_library(batch_size=0) to keep vision on and index the remaining papers
+    incrementally — do NOT pass force_reindex=True, which would rebuild every already-
+    indexed paper and re-spend embedding quota. The drift error message says this too.
+
     Concurrency: Only one indexing operation can run at a time. Concurrent calls
     will receive a ToolError: "Indexing in progress, please wait."
 
@@ -265,7 +272,7 @@ def index_library(
 
         effective_max_pages = max_pages if max_pages is not None else config.max_pages
 
-        from ..indexer import ConfigDriftError
+        from ..indexer import ConfigDriftError, FormulaProviderUnavailableError
         from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
 
         try:
@@ -280,7 +287,12 @@ def index_library(
                 batch_size=batch_size if batch_size > 0 else None,
                 journal=journal,
             )
-        except (ConfigDriftError, IndexUnavailableError, EmbeddingDimensionMismatchError) as e:
+        except (
+            ConfigDriftError,
+            FormulaProviderUnavailableError,
+            IndexUnavailableError,
+            EmbeddingDimensionMismatchError,
+        ) as e:
             raise ToolError(str(e)) from e
 
         # Clear query embedding cache so new documents are findable
@@ -356,6 +368,66 @@ def index_library(
             )
 
         return response
+    finally:
+        if lease is not None:
+            release_lease(lease)
+        _index_lock.release()
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def index_formulas(
+    item_key: Annotated[str | None, Field(description="Backfill formulas for one Zotero item key")] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Backfill formulas for these Zotero item keys"),
+    ] = None,
+    limit: Annotated[int | None, Field(description="Max already-indexed papers to process", ge=1)] = None,
+    refresh_existing: Annotated[
+        bool,
+        Field(description="Delete existing formula chunks before writing new ones"),
+    ] = True,
+) -> dict:
+    """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
+    if not _index_lock.acquire(blocking=False):
+        raise ToolError("Indexing in progress, please wait.")
+    lease = None
+    try:
+        from ..indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
+        from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
+
+        item_keys = _parse_json_string_list(item_keys)
+        _config = _get_config()
+        errors = _config.validate()
+        if errors:
+            raise ToolError(f"Config errors: {'; '.join(errors)}")
+        if not _config.formula_ocr_enabled:
+            raise ToolError("formula_ocr_enabled must be true before running index_formulas")
+
+        index_data_root = Path(_config.chroma_db_path).parent
+        lease = IndexLease(index_data_root / "index_lease.json")
+        try:
+            acquire_lease(lease)
+        except LeaseContentionError as e:
+            raise ToolError(str(e))
+
+        try:
+            result = Indexer(_config).index_formulas(
+                item_key=item_key,
+                item_keys=item_keys,
+                limit=limit,
+                refresh_existing=refresh_existing,
+            )
+        except (
+            ConfigDriftError,
+            FormulaProviderUnavailableError,
+            IndexUnavailableError,
+            EmbeddingDimensionMismatchError,
+        ) as e:
+            raise ToolError(str(e)) from e
+
+        _get_store().clear_query_cache()
+        return result
     finally:
         if lease is not None:
             release_lease(lease)
@@ -487,7 +559,7 @@ def get_index_stats(
             ]
             result["_notice_incomplete"] = (
                 f"⚠️ {len(incomplete)} indexed paper(s) are missing table/figure chunks "
-                "(text indexed OK but table/figure storage failed). Re-run with "
+                "(text indexed OK but secondary chunk storage failed). Re-run with "
                 "index_library(item_keys=[...], force_reindex=True) to backfill them."
             )
     except Exception as e:

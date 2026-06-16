@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.5.3] - 2026-06-16
+
+**公式索引 Phase A + 连接器下载增强 / Formula Phase A + connector download** — 新增本地公式语义索引（首阶段），增强连接器 PDF 入库与报错体验，并修复一类索引误报。
+
+### Added
+- **公式语义索引 Phase A / formula semantic indexing Phase A** —— 本地 OCR 识别有文字层 PDF 中的 display 公式并入库检索；默认关闭、全程本地（需 `zotpilot[formula]` extra），inline / 纯图片公式等留待后续阶段。
+- **直链 / 内嵌 PDF 入库 / direct & embedded PDF ingest** —— 连接器识别直链 PDF 与页面内嵌 iframe PDF 并快速入库（isPDF 短路，无需 translator）。
+- **入库报错体验 / ingest error UX** —— 统一错误码字典 + 中文可操作指引；PDF 抓取 / 二次反爬失败以不阻断 notice 提示，`manual_completion` 给 `zotero://select` 跳转链接，同源出版社首篇失败自动跳过其余以避免连环反爬。
+- **索引进度 JSONL 流 / indexing progress stream (#24)** —— 输出 append-only 结构化进度事件，便于 GUI / 外部工具读取实时进度。
+
+### Changed
+- **预检不再为 translator 空等 / preflight no longer waits for a translator** —— translator 等待从 20s 降到 3s，可达性预检大幅提速，不改变正式入库行为。
+
+### Fixed
+- **公式 OCR 依赖与 backfill 隔离 / formula OCR dependency & backfill isolation** —— 缺 `zotpilot[formula]` extra 时快速报错并给安装提示；公式 backfill 先识别再替换、不误删已有公式；单篇公式失败不再误标表格 / 图表 failure。
+- **vision-only 配置漂移误报 / vision-only config-drift false alarm** —— `batch_size>0`（或 `--no-vision`）关 vision 触发的假漂移现在引导用 `batch_size=0` 增量索引，不再误导 `force_reindex`（避免重建全部、烧额度）。
+
 ## [0.5.2] - 2026-06-08
 
 ### Fixed
