@@ -34,6 +34,7 @@ EMBEDDING_PROVIDERS: tuple[str, ...] = (
     "gemini",
     "dashscope",
     "local",
+    "sentence-transformer",
     "openai-compatible",
     "none",
 )
@@ -45,6 +46,7 @@ EMBEDDING_MODEL_DEFAULTS: dict[str, tuple[str, int]] = {
     "gemini": ("gemini-embedding-001", 768),
     "dashscope": ("text-embedding-v4", 1024),
     "local": ("all-MiniLM-L6-v2", 384),
+    "sentence-transformer": ("allenai/specter2", 768),
     "none": ("none", 0),
     "openai-compatible": ("", 0),
 }
@@ -139,6 +141,25 @@ VENDOR_CATALOG: tuple[Vendor, ...] = (
         ),
         aliases=(),
         allow_custom_model=False,
+    ),
+    Vendor(
+        key="sentence-transformer",
+        label="Sentence Transformers (local, biomedical)",
+        provider="sentence-transformer",
+        base_url=None,
+        requires_key=False,
+        key_url="",
+        key_env=(),
+        models=(
+            VendorModel("allenai/specter2", 768, "scientific papers", recommended=True),
+            VendorModel(
+                "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+                768,
+                "biomedical text",
+            ),
+        ),
+        aliases=(),
+        allow_custom_model=True,
     ),
     Vendor(
         key="siliconflow",

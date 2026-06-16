@@ -5,6 +5,7 @@ from .dashscope import DashScopeEmbedder
 from .gemini import GeminiEmbedder
 from .local import LocalEmbedder
 from .openai_compat import OpenAICompatEmbedder
+from .sentence_transformer import SentenceTransformerEmbedder
 
 
 def create_embedder(config):
@@ -15,6 +16,16 @@ def create_embedder(config):
     if config.embedding_provider == "local":
         logger.info("Using local embeddings (all-MiniLM-L6-v2, 384 dimensions)")
         return LocalEmbedder()
+    elif config.embedding_provider == "sentence-transformer":
+        logger.info(
+            "Using Sentence Transformer embeddings (%s, %s dimensions)",
+            config.embedding_model,
+            config.embedding_dimensions,
+        )
+        return SentenceTransformerEmbedder(
+            model_name=config.embedding_model,
+            dimensions=config.embedding_dimensions,
+        )
     elif config.embedding_provider == "gemini":
         logger.info(f"Using Gemini embeddings ({config.embedding_model}, {config.embedding_dimensions} dimensions)")
         return GeminiEmbedder(
@@ -80,4 +91,4 @@ def create_embedder(config):
         )
 
 
-__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "OpenAICompatEmbedder", "EmbeddingError", "RateLimitError", "EmbedderProtocol"]  # noqa: E501
+__all__ = ["create_embedder", "GeminiEmbedder", "DashScopeEmbedder", "LocalEmbedder", "OpenAICompatEmbedder", "SentenceTransformerEmbedder", "EmbeddingError", "RateLimitError", "EmbedderProtocol"]  # noqa: E501
