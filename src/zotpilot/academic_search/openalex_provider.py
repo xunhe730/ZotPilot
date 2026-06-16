@@ -1,20 +1,23 @@
 """OpenAlex academic search provider."""
 from __future__ import annotations
 
+import importlib
 import logging
 
 from ..openalex_client import OpenAlexClient
-from ..tools.ingestion.search import (
-    fetch_openalex_by_doi,
-    format_openalex_paper,
-    reconstruct_abstract,
-    search_openalex,
-    _mark_top_venue_relative,
-    _resolve_names_to_ids,
-)
 from . import AcademicSearchResult, register_academic_search_provider
 
 logger = logging.getLogger(__name__)
+
+
+def _get_search_openalex():
+    mod = importlib.import_module("zotpilot.tools.ingestion.search")
+    return mod.search_openalex
+
+
+def _get_fetch_openalex_by_doi():
+    mod = importlib.import_module("zotpilot.tools.ingestion.search")
+    return mod.fetch_openalex_by_doi
 
 
 class OpenAlexSearchProvider:
@@ -40,6 +43,7 @@ class OpenAlexSearchProvider:
         source_id: str | None = None,
         cursor: str | None = None,
     ) -> AcademicSearchResult:
+        search_openalex = _get_search_openalex()
         data = search_openalex(
             query,
             limit,
@@ -61,6 +65,7 @@ class OpenAlexSearchProvider:
         )
 
     def get_by_doi(self, doi: str) -> list[dict]:
+        fetch_openalex_by_doi = _get_fetch_openalex_by_doi()
         return fetch_openalex_by_doi(doi, client=self._client)
 
 

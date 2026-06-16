@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import logging
 
-from .pubmed_client import PubMedClient
 from . import AcademicSearchResult, register_academic_search_provider
+from .pubmed_client import PubMedClient
 
 logger = logging.getLogger(__name__)
 

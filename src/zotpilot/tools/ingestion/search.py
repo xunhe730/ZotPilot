@@ -224,6 +224,9 @@ def search_openalex(
     }
     sort_value = sort_map.get(sort_by, "relevance_score:desc")
 
+    if sort_value == "relevance_score:desc" and not query:
+        sort_value = "publication_date:desc"
+
     data = client.search_works(
         query,
         per_page=min(limit * 2, 200),
@@ -476,21 +479,26 @@ def search_academic_databases_impl(
     provider_results = []
     for pname in provider_names:
         try:
-            kwargs = _provider_kwargs(pname, config)
+            provider = create_academic_search_provider(
+                pname,
+                **_provider_kwargs(pname, config),
+            )
+            search_kwargs: dict[str, Any] = {
+                "min_citations": min_citations,
+                "oa_only": oa_only,
+                "cursor": cursor,
+            }
             if pname == "openalex":
-                kwargs["concept_ids"] = openalex_concept_ids
-                kwargs["institution_ids"] = openalex_institution_ids
-                kwargs["source_id"] = openalex_source_id
-            provider = create_academic_search_provider(pname, **kwargs)
+                search_kwargs["concept_ids"] = openalex_concept_ids
+                search_kwargs["institution_ids"] = openalex_institution_ids
+                search_kwargs["source_id"] = openalex_source_id
             result = provider.search(
                 query or "",
                 limit,
                 year_min,
                 year_max,
                 sort_by,
-                min_citations=min_citations,
-                oa_only=oa_only,
-                cursor=cursor,
+                **search_kwargs,
             )
             provider_results.append(result)
         except httpx_module.TimeoutException:

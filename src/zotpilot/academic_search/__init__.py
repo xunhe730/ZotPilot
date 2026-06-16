@@ -51,10 +51,10 @@ def register_academic_search_provider(name: str, cls: type) -> None:
 
 def _ensure_providers_registered() -> None:
     """Lazily import and register all providers."""
-    if ACADEMIC_SEARCH_PROVIDERS:
-        return
-    from . import openalex_provider  # noqa: F401
-    from . import pubmed_provider  # noqa: F401
+    from . import (
+        openalex_provider,  # noqa: F401
+        pubmed_provider,  # noqa: F401
+    )
 
 
 def create_academic_search_provider(name: str, **kwargs) -> AcademicSearchProvider:
@@ -88,7 +88,14 @@ def merge_results(
             merged.append(paper)
 
     merged.sort(key=lambda p: p.get("relevance_score") or 0, reverse=True)
+
+    last_cursor = None
+    for pr in provider_results:
+        if pr.results:
+            last_cursor = pr.next_cursor
+
     return AcademicSearchResult(
         results=merged[:limit],
+        next_cursor=last_cursor,
         total_count=total_count,
     )

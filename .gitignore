@@ -37,6 +37,9 @@ docs/test-runs/
 *.swp
 *.swo
 
+# Local MiMo Code config
+mimocode.jsonc
+
 # OS
 .DS_Store
 Thumbs.db
