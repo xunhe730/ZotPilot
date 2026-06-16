@@ -67,11 +67,12 @@ class TestEmbeddingAllowList:
         for provider in EXISTING_DEFAULTS:
             assert provider in providers.EMBEDDING_PROVIDERS
 
-    def test_allow_list_is_existing_four_plus_openai_compatible(self):
-        # The ONLY delta vs the historical {gemini,dashscope,local,none} allow-list
-        # is the documented addition of openai-compatible.
+    def test_allow_list_is_existing_four_plus_new_providers(self):
+        # The delta vs the historical {gemini,dashscope,local,none} allow-list
+        # includes openai-compatible and sentence-transformer (biomedical embeddings).
         assert set(providers.EMBEDDING_PROVIDERS) == set(EXISTING_DEFAULTS) | {
-            "openai-compatible"
+            "openai-compatible",
+            "sentence-transformer",
         }
 
 
@@ -260,9 +261,10 @@ class TestResolveVendor:
         choices = providers.vendor_cli_choices()
         assert "none" not in choices
         assert "gemini" in choices and "openai-compatible" in choices
+        assert "sentence-transformer" in choices
         assert choices == [
             "google", "gemini", "dashscope", "local",
-            "siliconflow", "zhipu", "ollama", "custom", "openai-compatible",
+            "sentence-transformer", "siliconflow", "zhipu", "ollama", "custom", "openai-compatible",
         ]
 
     def test_qwen_only_under_siliconflow(self):
