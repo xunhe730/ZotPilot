@@ -535,13 +535,21 @@ def search_academic_databases(
         str | None,
         Field(description="Pagination cursor from previous call's next_cursor"),
     ] = None,
+    providers: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description=(
+            "Academic databases to search. Default: ['openalex']. "
+            "Options: 'openalex', 'pubmed'. Multiple providers merge and "
+            "deduplicate results by DOI."
+        )),
+    ] = None,
 ) -> dict:
-    """Search OpenAlex with full filter suite (concepts/venue/institutions).
+    """Search academic databases (OpenAlex, PubMed) with full filter suite.
 
     Returns: {"results": [...], "next_cursor": str|None, "total_count": int,
-    "unresolved_filters": [...]}. Fuzzy queries are rejected unless a
-    structured filter narrows the space. Use concepts+venue+year_min for
-    precise topic discovery; use DOI or quoted phrase for known papers.
+    "unresolved_filters": [...]}. Fuzzy queries are rejected for OpenAlex
+    unless a structured filter narrows the space.
     """
     # MCP client compatibility: some clients wrap list[str] params as JSON
     # strings. Coerce defensively — mirrors the same pattern used by
@@ -561,6 +569,9 @@ def search_academic_databases(
 
     config = _get_config()
     sort_map = {"relevance": "relevance", "citations": "citationCount", "date": "publicationDate"}
+    providers = _parse_json_string_list(providers)
+    if isinstance(providers, str):
+        providers = [providers]
     return search.search_academic_databases_impl(
         config, query, limit=limit,
         year_min=year_min, year_max=year_max,
@@ -574,6 +585,7 @@ def search_academic_databases(
         cursor=cursor,
         lookup_by_doi=_lookup_local_item_key_by_doi,
         lookup_by_arxiv_extra=_lookup_local_item_key_by_arxiv_extra,
+        providers=providers,
     )
 
 

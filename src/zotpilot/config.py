@@ -117,6 +117,9 @@ class Config:
     ocr_language: str
     # OpenAlex settings
     openalex_email: str | None  # Optional email for polite pool (10 req/sec vs 1 req/sec)
+    # PubMed settings
+    pubmed_api_key: str | None = None
+    pubmed_email: str | None = None
     # Vision extraction settings
     vision_enabled: bool
     vision_provider: str
