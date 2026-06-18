@@ -199,7 +199,19 @@ zotpilot config set formula_ocr_enabled true
 zotpilot index
 ```
 
-This phase targets **display formulas in PDFs with a text layer**. ZotPilot detects local formula candidates, stores them as formula chunks, and makes them searchable together with text, tables, and figures. The default `local` provider runs on your machine and does not send formula crops or LaTeX to any external service; the first run downloads RapidLaTeXOCR model weights from the network (tens of MB), and later runs can stay offline. Inline math, image/vector-only formulas, full-page fallback, SimpleTex, and cloud vision formula recognition are left for later phases.
+This phase targets **display formulas in PDFs with a text layer**. ZotPilot detects local formula candidates, stores them as formula chunks, and makes them searchable together with text, tables, and figures. The default `local` provider runs on your machine and does not send formula crops or LaTeX to any external service; the first run downloads RapidLaTeXOCR model weights from the network (tens of MB), and later runs can stay offline.
+
+If you want cloud formula recognition, explicitly switch to the SimpleTex provider. It sends formula crop images to the configured SimpleTex HTTPS endpoint, so enable it only when that data-egress boundary is acceptable for your library:
+
+```bash
+zotpilot config set formula_ocr_provider simpletex
+zotpilot config set formula_ocr_simpletex_token <your-uat-token>
+# Or use APP authentication:
+zotpilot config set formula_ocr_simpletex_app_id <your-app-id>
+zotpilot config set formula_ocr_simpletex_app_secret <your-app-secret>
+```
+
+The default endpoint is the standard `https://server.simpletex.net/api/latex_ocr`, with `formula_ocr_simpletex_min_interval=0.55` and `formula_ocr_simpletex_max_retries=2` as the standard-endpoint throttle defaults. For the faster lightweight endpoint, set `formula_ocr_simpletex_endpoint` to `https://server.simpletex.net/api/latex_ocr_turbo` and tune the minimum request interval for your quota. Inline math, image/vector-only formulas, and full-page fallback are still left for later phases.
 
 </details>
 

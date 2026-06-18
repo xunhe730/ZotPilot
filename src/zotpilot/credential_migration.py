@@ -17,6 +17,13 @@ _ENV_TO_SECRET_FIELD = {
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "ZOTERO_API_KEY": "zotero_api_key",
     "S2_API_KEY": "semantic_scholar_api_key",
+    "SIMPLETEX_UAT": "formula_ocr_simpletex_token",
+    "SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "ZOTPILOT_SIMPLETEX_TOKEN": "formula_ocr_simpletex_token",
+    "SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "ZOTPILOT_SIMPLETEX_APP_ID": "formula_ocr_simpletex_app_id",
+    "SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
+    "ZOTPILOT_SIMPLETEX_APP_SECRET": "formula_ocr_simpletex_app_secret",
 }
 
 

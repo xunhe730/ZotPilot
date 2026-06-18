@@ -7,15 +7,21 @@ out of scope for this local-first pass.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import logging
 import re
+import secrets
+import string
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+import httpx
 import pymupdf
 
+from .. import providers
 from ..models import ExtractedFormula
 
 logger = logging.getLogger(__name__)
@@ -41,6 +47,9 @@ EQUATION_NUMBER_RE = re.compile(
 )
 NOISE_RE = re.compile(r"\b(?:abstract|references|figure|table|copyright|doi|keywords)\b", re.IGNORECASE)
 VARIABLE_GLOSS_RE = re.compile(r"\bwhere\b[^.。;；]{0,260}|其中[^.。;；]{0,260}|式中[^.。;；]{0,260}", re.IGNORECASE)
+SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+SIMPLETEX_MIN_RETRY_DELAY = 0.25
+SIMPLETEX_MAX_RETRY_DELAY = 30.0
 
 
 @dataclass(frozen=True)
@@ -91,8 +100,99 @@ class LocalFormulaOCRProvider:
         return _coerce_provider_result(raw)
 
 
-FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider]] = {
+class SimpleTexFormulaOCRProvider:
+    """SimpleTex Open Platform formula OCR provider."""
+    name = "simpletex"
+
+    def __init__(
+        self,
+        *,
+        token: str | None = None,
+        app_id: str | None = None,
+        app_secret: str | None = None,
+        endpoint: str = "https://server.simpletex.net/api/latex_ocr",
+        timeout: float = 30.0,
+        min_interval: float = 0.55,
+        max_retries: int = 2,
+    ) -> None:
+        if not token and not (app_id and app_secret):
+            raise RuntimeError(
+                "SimpleTex formula OCR requires formula_ocr_simpletex_token "
+                "or formula_ocr_simpletex_app_id + formula_ocr_simpletex_app_secret."
+            )
+        self._token = token
+        self._app_id = app_id
+        self._app_secret = app_secret
+        self._endpoint = endpoint.rstrip("/")
+        self._timeout = timeout
+        self._min_interval = min_interval
+        self._max_retries = max_retries
+        self._last_request_at: float | None = None
+
+    def recognize(self, image_bytes: bytes) -> FormulaOCRResult:
+        data: dict[str, str] = {}
+        files = {"file": ("formula.png", image_bytes, "image/png")}
+        with httpx.Client(timeout=self._timeout) as client:
+            response = self._post_with_retries(client, data=data, files=files)
+        try:
+            payload = response.json()
+        except ValueError as e:
+            raise RuntimeError("SimpleTex response is not valid JSON") from e
+        return _coerce_simpletex_response(payload)
+
+    def _headers(self, data: dict[str, str]) -> dict[str, str]:
+        if self._token:
+            return {"token": self._token}
+        if not self._app_id or not self._app_secret:
+            raise RuntimeError("SimpleTex APP authentication requires app_id and app_secret")
+        return _simpletex_app_headers(data, self._app_id, self._app_secret)
+
+    def _post_with_retries(
+        self,
+        client: httpx.Client,
+        *,
+        data: dict[str, str],
+        files: dict[str, tuple[str, bytes, str]],
+    ) -> httpx.Response:
+        max_retries = max(self._max_retries, 0)
+        attempts = max_retries + 1
+        for attempt in range(attempts):
+            self._throttle()
+            headers = self._headers(data)
+            try:
+                response = client.post(self._endpoint, headers=headers, data=data, files=files)
+            except httpx.RequestError as e:
+                if attempt >= max_retries:
+                    raise RuntimeError("SimpleTex formula OCR exhausted retries after request error") from e
+                time.sleep(_simpletex_retry_delay(None, attempt, self._min_interval))
+                continue
+            status_code = response.status_code
+            if (
+                isinstance(status_code, int)
+                and status_code in SIMPLETEX_RETRIABLE_STATUS_CODES
+            ):
+                if attempt >= max_retries:
+                    raise RuntimeError(f"SimpleTex formula OCR exhausted retries after HTTP {status_code}")
+                time.sleep(_simpletex_retry_delay(response, attempt, self._min_interval))
+                continue
+            response.raise_for_status()
+            return response
+        raise RuntimeError("SimpleTex formula OCR exhausted retries")
+
+    def _throttle(self) -> None:
+        if self._min_interval <= 0:
+            return
+        now = time.monotonic()
+        if self._last_request_at is not None:
+            wait_seconds = self._min_interval - (now - self._last_request_at)
+            if wait_seconds > 0:
+                time.sleep(wait_seconds)
+        self._last_request_at = time.monotonic()
+
+
+FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider] | type[SimpleTexFormulaOCRProvider]] = {
     "local": LocalFormulaOCRProvider,
+    "simpletex": SimpleTexFormulaOCRProvider,
 }
 
 
@@ -108,13 +208,36 @@ def ensure_formula_ocr_provider_dependency(name: str) -> None:
         )
 
 
-def create_formula_ocr_provider(name: str) -> FormulaOCRProvider:
+def create_formula_ocr_provider(name: str, *, config: Any | None = None) -> FormulaOCRProvider:
     """Create a formula OCR provider from the registry."""
     try:
         provider_cls = FORMULA_OCR_PROVIDERS[name]
     except KeyError as e:
         valid = ", ".join(sorted(FORMULA_OCR_PROVIDERS))
         raise ValueError(f"Unknown formula OCR provider {name!r}. Valid providers: {valid}") from e
+    if name == "simpletex":
+        return SimpleTexFormulaOCRProvider(
+            token=providers._resolve_secret(
+                getattr(config, "formula_ocr_simpletex_token", None),
+                "ZOTPILOT_SIMPLETEX_TOKEN",
+                "SIMPLETEX_UAT",
+                "SIMPLETEX_TOKEN",
+            ),
+            app_id=providers._resolve_secret(
+                getattr(config, "formula_ocr_simpletex_app_id", None),
+                "ZOTPILOT_SIMPLETEX_APP_ID",
+                "SIMPLETEX_APP_ID",
+            ),
+            app_secret=providers._resolve_secret(
+                getattr(config, "formula_ocr_simpletex_app_secret", None),
+                "ZOTPILOT_SIMPLETEX_APP_SECRET",
+                "SIMPLETEX_APP_SECRET",
+            ),
+            endpoint=getattr(config, "formula_ocr_simpletex_endpoint", "https://server.simpletex.net/api/latex_ocr"),
+            timeout=float(getattr(config, "formula_ocr_simpletex_timeout", 30.0)),
+            min_interval=float(getattr(config, "formula_ocr_simpletex_min_interval", 0.55)),
+            max_retries=int(getattr(config, "formula_ocr_simpletex_max_retries", 2)),
+        )
     return provider_cls()
 
 
@@ -255,6 +378,55 @@ def _coerce_provider_result(raw: Any) -> FormulaOCRResult:
         # RapidLaTeXOCR returns (latex, elapsed_seconds), not a confidence score.
         return FormulaOCRResult(latex=latex)
     return FormulaOCRResult(latex=str(raw))
+
+
+def _coerce_simpletex_response(payload: Any) -> FormulaOCRResult:
+    if not isinstance(payload, dict):
+        raise RuntimeError("SimpleTex response is not a JSON object")
+    if payload.get("status") is not True:
+        error = payload.get("err_info") or payload.get("error") or payload.get("msg") or payload
+        raise RuntimeError(f"SimpleTex formula OCR failed: {error}")
+    result = payload.get("res")
+    if not isinstance(result, dict):
+        raise RuntimeError("SimpleTex response missing result payload")
+    latex = str(result.get("latex") or result.get("text") or result.get("result") or "")
+    if not latex.strip():
+        raise RuntimeError("SimpleTex response missing LaTeX")
+    confidence = result.get("conf")
+    if confidence is None:
+        confidence = result.get("confidence")
+    return FormulaOCRResult(latex=latex, confidence=float(confidence) if confidence is not None else None)
+
+
+def _simpletex_app_headers(data: dict[str, str], app_id: str, app_secret: str) -> dict[str, str]:
+    headers = {
+        "timestamp": str(int(time.time())),
+        "random-str": _random_simpletex_nonce(),
+        "app-id": app_id,
+    }
+    sign_data = {**data, **headers}
+    sign_body = "&".join(f"{key}={sign_data[key]}" for key in sorted(sign_data))
+    sign_body += f"&secret={app_secret}"
+    headers["sign"] = hashlib.md5(sign_body.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return headers
+
+
+def _simpletex_retry_delay(response: httpx.Response | None, attempt: int, min_interval: float) -> float:
+    if response is not None:
+        retry_after = response.headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                retry_after_seconds = float(str(retry_after))
+                return min(max(retry_after_seconds, 0.0), SIMPLETEX_MAX_RETRY_DELAY)
+            except ValueError:
+                pass
+    base_delay = max(float(min_interval), SIMPLETEX_MIN_RETRY_DELAY)
+    return min(float(base_delay * (2**attempt)), SIMPLETEX_MAX_RETRY_DELAY)
+
+
+def _random_simpletex_nonce(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def _extract_block_signals(

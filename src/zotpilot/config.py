@@ -143,6 +143,13 @@ class Config:
     formula_ocr_max_formulas_per_doc: int = 40
     formula_ocr_max_formulas_per_page: int = 6
     formula_ocr_min_confidence: float = 0.6
+    formula_ocr_simpletex_token: str | None = None
+    formula_ocr_simpletex_app_id: str | None = None
+    formula_ocr_simpletex_app_secret: str | None = None
+    formula_ocr_simpletex_endpoint: str = "https://server.simpletex.net/api/latex_ocr"
+    formula_ocr_simpletex_timeout: float = 30.0
+    formula_ocr_simpletex_min_interval: float = 0.55
+    formula_ocr_simpletex_max_retries: int = 2
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -229,6 +236,16 @@ class Config:
             formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
             formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
             formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
+            formula_ocr_simpletex_token=data.get("formula_ocr_simpletex_token"),
+            formula_ocr_simpletex_app_id=data.get("formula_ocr_simpletex_app_id"),
+            formula_ocr_simpletex_app_secret=data.get("formula_ocr_simpletex_app_secret"),
+            formula_ocr_simpletex_endpoint=data.get(
+                "formula_ocr_simpletex_endpoint",
+                "https://server.simpletex.net/api/latex_ocr",
+            ),
+            formula_ocr_simpletex_timeout=data.get("formula_ocr_simpletex_timeout", 30.0),
+            formula_ocr_simpletex_min_interval=data.get("formula_ocr_simpletex_min_interval", 0.55),
+            formula_ocr_simpletex_max_retries=data.get("formula_ocr_simpletex_max_retries", 2),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -283,6 +300,13 @@ class Config:
             "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
             "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
             "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
+            "formula_ocr_simpletex_token": self.formula_ocr_simpletex_token,
+            "formula_ocr_simpletex_app_id": self.formula_ocr_simpletex_app_id,
+            "formula_ocr_simpletex_app_secret": self.formula_ocr_simpletex_app_secret,
+            "formula_ocr_simpletex_endpoint": self.formula_ocr_simpletex_endpoint,
+            "formula_ocr_simpletex_timeout": self.formula_ocr_simpletex_timeout,
+            "formula_ocr_simpletex_min_interval": self.formula_ocr_simpletex_min_interval,
+            "formula_ocr_simpletex_max_retries": self.formula_ocr_simpletex_max_retries,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -389,6 +413,37 @@ class Config:
             errors.append("formula_ocr_max_formulas_per_page must be >= 0")
         if not 0.0 <= self.formula_ocr_min_confidence <= 1.0:
             errors.append("formula_ocr_min_confidence must be between 0.0 and 1.0")
+        if self.formula_ocr_simpletex_timeout <= 0:
+            errors.append("formula_ocr_simpletex_timeout must be > 0")
+        if self.formula_ocr_simpletex_min_interval < 0:
+            errors.append("formula_ocr_simpletex_min_interval must be >= 0")
+        if self.formula_ocr_simpletex_max_retries < 0:
+            errors.append("formula_ocr_simpletex_max_retries must be >= 0")
+        if self.formula_ocr_provider == "simpletex":
+            simpletex_token = providers._resolve_secret(
+                self.formula_ocr_simpletex_token,
+                "ZOTPILOT_SIMPLETEX_TOKEN",
+                "SIMPLETEX_UAT",
+                "SIMPLETEX_TOKEN",
+            )
+            simpletex_app_id = providers._resolve_secret(
+                self.formula_ocr_simpletex_app_id,
+                "ZOTPILOT_SIMPLETEX_APP_ID",
+                "SIMPLETEX_APP_ID",
+            )
+            simpletex_app_secret = providers._resolve_secret(
+                self.formula_ocr_simpletex_app_secret,
+                "ZOTPILOT_SIMPLETEX_APP_SECRET",
+                "SIMPLETEX_APP_SECRET",
+            )
+            if not simpletex_token and not (simpletex_app_id and simpletex_app_secret):
+                errors.append(
+                    "SimpleTex formula OCR requires formula_ocr_simpletex_token "
+                    "or formula_ocr_simpletex_app_id + formula_ocr_simpletex_app_secret"
+                )
+            parsed = urlparse(self.formula_ocr_simpletex_endpoint)
+            if parsed.scheme != "https" or not parsed.netloc:
+                errors.append("formula_ocr_simpletex_endpoint must be a valid https:// URL")
 
         return errors
 
