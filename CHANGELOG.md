@@ -4,6 +4,7 @@
 
 ### Added
 - **可选 SimpleTex 云端公式 OCR / optional SimpleTex cloud formula OCR**（公式索引 Phase B 首步）—— 在默认本地公式 OCR 之外，可显式把 `formula_ocr_provider` 切到 `simpletex`，调用 SimpleTex 开放平台识别公式（UAT token 或 APP 签名鉴权，标准/轻量 endpoint，可配最小请求间隔与 429/5xx 重试）；仅在显式开启时才把公式裁剪图发往配置的 HTTPS endpoint，`local` 仍为默认、不外发数据。Opt-in cloud formula OCR; formula crops are sent only when `formula_ocr_provider=simpletex` is explicitly set, with `local` remaining the default. Thanks @lwz20210407 (#26).
+- **公式 backfill 每日预算与断点续跑 / formula backfill daily budget and resume** —— 新增只读 `estimate-formula-backfill`，以及 `index-formulas` 的每日调用预算、`resume_after`、append-only 状态 JSONL、SimpleTex 余额 / 配额 / 限流停止和低置信度 review queue，便于用轻量模型免费额度逐日增量回填。Adds a read-only estimate command plus daily call caps, resume cursor, JSONL state stream, quota/rate-limit stop, and low-confidence review queue for gradual formula backfills.
 
 ## [0.5.3] - 2026-06-16
 

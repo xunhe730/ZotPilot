@@ -22,3 +22,9 @@ alpha = 0.7
 [vision]
 enabled = true
 model = "claude-haiku-4-5-20251001"
+
+[formula_ocr]
+enabled = false
+provider = "local"  # or "simpletex"
+daily_call_budget = 0  # 0 means uncapped; use 1600-1800 for free daily SimpleTex backfills
+low_confidence_threshold = 0.0  # e.g. 0.75 to return a manual review queue

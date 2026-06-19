@@ -387,6 +387,22 @@ def index_formulas(
         bool,
         Field(description="Delete existing formula chunks before writing new ones"),
     ] = True,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Max formula OCR provider calls for this run; None uses config, 0 disables the cap", ge=0),
+    ] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume after the item_key returned as resume_cursor by a previous run"),
+    ] = None,
+    stop_on_quota: Annotated[
+        bool,
+        Field(description="Stop the batch immediately on quota, balance, or rate-limit provider errors"),
+    ] = True,
+    low_confidence_threshold: Annotated[
+        float | None,
+        Field(description="Return recognized formulas below this confidence in a review queue", ge=0.0, le=1.0),
+    ] = None,
 ) -> dict:
     """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
     if not _index_lock.acquire(blocking=False):
@@ -417,6 +433,11 @@ def index_formulas(
                 item_keys=item_keys,
                 limit=limit,
                 refresh_existing=refresh_existing,
+                daily_call_budget=daily_call_budget,
+                resume_after=resume_after,
+                stop_on_quota=stop_on_quota,
+                status_jsonl="",
+                low_confidence_threshold=low_confidence_threshold,
             )
         except (
             ConfigDriftError,
@@ -432,6 +453,52 @@ def index_formulas(
         if lease is not None:
             release_lease(lease)
         _index_lock.release()
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def estimate_formula_backfill(
+    item_key: Annotated[
+        str | None,
+        Field(description="Estimate formula OCR candidates for one Zotero item key"),
+    ] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Estimate formula OCR candidates for these Zotero item keys"),
+    ] = None,
+    limit: Annotated[int | None, Field(description="Max already-indexed papers to estimate", ge=1)] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume estimate after this Zotero item key"),
+    ] = None,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Daily call budget to use for estimated run count", ge=0),
+    ] = None,
+) -> dict:
+    """Estimate formula OCR candidate volume for already-indexed papers without writing chunks."""
+    from ..indexer import ConfigDriftError, Indexer
+    from ..vector_store import IndexUnavailableError
+
+    item_keys = _parse_json_string_list(item_keys)
+    _config = _get_config()
+    errors = _config.validate()
+    blocking_errors = [
+        e for e in errors
+        if "SimpleTex formula OCR requires" not in e and "_API_KEY not set" not in e
+    ]
+    if blocking_errors:
+        raise ToolError(f"Config errors: {'; '.join(blocking_errors)}")
+    try:
+        return Indexer(_config).estimate_formula_backfill(
+            item_key=item_key,
+            item_keys=item_keys,
+            limit=limit,
+            resume_after=resume_after,
+            daily_call_budget=daily_call_budget,
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool(tags=tool_tags("core", "indexing"))

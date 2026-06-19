@@ -57,6 +57,8 @@ class TestConfigLoadDefaults:
         assert cfg.formula_ocr_simpletex_timeout == 30.0
         assert cfg.formula_ocr_simpletex_min_interval == 0.55
         assert cfg.formula_ocr_simpletex_max_retries == 2
+        assert cfg.formula_ocr_daily_call_budget == 0
+        assert cfg.formula_ocr_low_confidence_threshold == 0.0
 
 
 class TestConfigLoadFromFile:
@@ -443,6 +445,8 @@ class TestOpenAICompatConfigSchema:
             formula_ocr_min_confidence=1.5,
             formula_ocr_simpletex_min_interval=-0.1,
             formula_ocr_simpletex_max_retries=-1,
+            formula_ocr_daily_call_budget=-1,
+            formula_ocr_low_confidence_threshold=1.5,
         )
 
         errors = cfg.validate()
@@ -452,6 +456,8 @@ class TestOpenAICompatConfigSchema:
         assert any("formula_ocr_min_confidence" in e for e in errors)
         assert any("formula_ocr_simpletex_min_interval" in e for e in errors)
         assert any("formula_ocr_simpletex_max_retries" in e for e in errors)
+        assert any("formula_ocr_daily_call_budget" in e for e in errors)
+        assert any("formula_ocr_low_confidence_threshold" in e for e in errors)
 
     def test_validate_simpletex_requires_auth(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(tmp_path, monkeypatch, formula_ocr_provider="simpletex")
@@ -554,6 +560,8 @@ class TestConfigHashOpenAICompat:
             formula_ocr_max_formulas_per_doc=12,
             formula_ocr_max_formulas_per_page=3,
             formula_ocr_min_confidence=0.8,
+            formula_ocr_daily_call_budget=1800,
+            formula_ocr_low_confidence_threshold=0.7,
         )
 
         assert _config_hash(cfg) == _config_hash(changed)

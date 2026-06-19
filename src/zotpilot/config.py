@@ -150,6 +150,8 @@ class Config:
     formula_ocr_simpletex_timeout: float = 30.0
     formula_ocr_simpletex_min_interval: float = 0.55
     formula_ocr_simpletex_max_retries: int = 2
+    formula_ocr_daily_call_budget: int = 0
+    formula_ocr_low_confidence_threshold: float = 0.0
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -246,6 +248,8 @@ class Config:
             formula_ocr_simpletex_timeout=data.get("formula_ocr_simpletex_timeout", 30.0),
             formula_ocr_simpletex_min_interval=data.get("formula_ocr_simpletex_min_interval", 0.55),
             formula_ocr_simpletex_max_retries=data.get("formula_ocr_simpletex_max_retries", 2),
+            formula_ocr_daily_call_budget=data.get("formula_ocr_daily_call_budget", 0),
+            formula_ocr_low_confidence_threshold=data.get("formula_ocr_low_confidence_threshold", 0.0),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -307,6 +311,8 @@ class Config:
             "formula_ocr_simpletex_timeout": self.formula_ocr_simpletex_timeout,
             "formula_ocr_simpletex_min_interval": self.formula_ocr_simpletex_min_interval,
             "formula_ocr_simpletex_max_retries": self.formula_ocr_simpletex_max_retries,
+            "formula_ocr_daily_call_budget": self.formula_ocr_daily_call_budget,
+            "formula_ocr_low_confidence_threshold": self.formula_ocr_low_confidence_threshold,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -419,6 +425,10 @@ class Config:
             errors.append("formula_ocr_simpletex_min_interval must be >= 0")
         if self.formula_ocr_simpletex_max_retries < 0:
             errors.append("formula_ocr_simpletex_max_retries must be >= 0")
+        if self.formula_ocr_daily_call_budget < 0:
+            errors.append("formula_ocr_daily_call_budget must be >= 0")
+        if not 0.0 <= self.formula_ocr_low_confidence_threshold <= 1.0:
+            errors.append("formula_ocr_low_confidence_threshold must be between 0.0 and 1.0")
         if self.formula_ocr_provider == "simpletex":
             simpletex_token = providers._resolve_secret(
                 self.formula_ocr_simpletex_token,

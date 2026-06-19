@@ -12,7 +12,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from .config import Config, _config_hash, _vision_only_drift
+from .config import Config, _config_hash, _vision_only_drift, index_data_dir
 from .embeddings import create_embedder
 from .embeddings.base import RateLimitError
 from .index_authority import (
@@ -91,6 +91,129 @@ def _progress_counts(counts: dict) -> dict[str, object]:
     if "skipped_no_pdf" in counts:
         payload["skipped_no_pdf_count"] = len(counts["skipped_no_pdf"])
     return payload
+
+
+def _formula_backfill_state_path(config: Config) -> Path:
+    """Default append-only state stream for formula-only backfill runs."""
+    return index_data_dir(config) / "formula_backfill_state.jsonl"
+
+
+def _append_formula_backfill_state(path: Path | None, payload: dict[str, object]) -> None:
+    """Append one formula backfill status event without affecting indexing."""
+    if path is None:
+        return
+    event = {
+        "schema_version": 1,
+        "event": "formula_backfill_item",
+        "timestamp": time.time(),
+        **payload,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True, default=str))
+            f.write("\n")
+    except OSError as e:
+        logger.warning("Failed to append formula backfill state to %s: %s", path, e)
+
+
+def _formula_backfill_row(
+    *,
+    item_key: str,
+    title: str,
+    status: str,
+    reason: str = "",
+    candidate_count: int = 0,
+    provider_calls: int = 0,
+    external_calls: int = 0,
+    n_formulas: int = 0,
+    existing_formulas_kept: int = 0,
+    low_confidence_count: int = 0,
+    error: str = "",
+    error_message: str = "",
+) -> dict[str, object]:
+    """Return a stable per-paper formula backfill status row."""
+    return {
+        "item_key": item_key,
+        "title": title,
+        "status": status,
+        "reason": reason,
+        "candidate_count": candidate_count,
+        "provider_calls": provider_calls,
+        "external_calls": external_calls,
+        "n_formulas": n_formulas,
+        "existing_formulas_kept": existing_formulas_kept,
+        "low_confidence_count": low_confidence_count,
+        "error": error,
+        "error_message": error_message,
+    }
+
+
+def _format_estimated_duration(seconds: float) -> str:
+    """Return a compact human-readable duration for planning output."""
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60:
+        return f"{round(seconds, 1):g}s"
+    total_seconds = int(round(seconds))
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    return f"{hours}h {remaining_minutes}m"
+
+
+def _formula_backfill_next_action(
+    *,
+    processed: int,
+    failed_papers: int,
+    candidate_count: int,
+    data_egress: bool,
+    daily_call_budget: int,
+) -> str:
+    """Summarize the likely next step after a formula backfill estimate."""
+    if processed == 0:
+        return "No already-indexed PDFs matched this request; check the item filters or index papers first."
+    if failed_papers == processed:
+        return "Candidate detection failed for every matched PDF; inspect the per-paper errors before backfilling."
+    if candidate_count == 0:
+        return "No formula candidates were found; running index_formulas is unlikely to add formula chunks."
+    if daily_call_budget > 0 and data_egress:
+        return "Run index_formulas with the same daily_call_budget; rerun tomorrow with resume_after=resume_cursor."
+    if failed_papers:
+        return "Some PDFs failed candidate detection; review the per-paper errors, then backfill the remaining papers."
+    if data_egress:
+        return "SimpleTex is configured; review the external-call estimate and endpoint before running index_formulas."
+    return "Local formula OCR is configured; run index_formulas when ready."
+
+
+def _formula_backfill_warnings(
+    *,
+    processed: int,
+    failed_papers: int,
+    candidate_count: int,
+    data_egress: bool,
+    daily_call_budget: int,
+) -> list[str]:
+    """Collect concise caveats for formula backfill planning."""
+    warnings: list[str] = []
+    if processed == 0:
+        warnings.append("No already-indexed PDFs matched this request.")
+    if failed_papers:
+        warnings.append(f"{failed_papers} paper(s) failed local candidate detection.")
+    if candidate_count == 0:
+        warnings.append("No formula candidates were detected.")
+    if data_egress and candidate_count > 0:
+        warnings.append("SimpleTex will send formula crops to the configured HTTPS endpoint.")
+    if daily_call_budget > 0 and data_egress and candidate_count > daily_call_budget:
+        warnings.append("The estimate exceeds the daily call budget; the backfill will need multiple runs.")
+    return warnings
+
+
+def _looks_like_formula_quota_error(exc: Exception) -> bool:
+    """Classify provider errors that should stop formula backfill immediately."""
+    message = str(exc).lower()
+    hints = ("401", "402", "429", "balance", "insufficient", "limit", "quota", "rate", "余额", "次数", "额度", "限流")
+    return any(hint in message for hint in hints)
 
 
 class ConfigDriftError(RuntimeError):
@@ -221,7 +344,7 @@ class Indexer:
                 "then rerun indexing; or set formula_ocr_enabled=false."
             ) from e
 
-    def _recognize_formulas_for_item(self, item: ZoteroItem):
+    def _recognize_formulas_for_item(self, item: ZoteroItem, *, candidates: list | None = None) -> list:
         """Run text-layer formula OCR for one item if possible."""
         if item.pdf_path is None or not item.pdf_path.exists():
             return []
@@ -233,6 +356,7 @@ class Indexer:
             max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
             max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
             min_confidence=self.config.formula_ocr_min_confidence,
+            candidates=candidates,
         )
 
     def index_formulas(
@@ -242,6 +366,11 @@ class Indexer:
         item_keys: list[str] | None = None,
         limit: int | None = None,
         refresh_existing: bool = True,
+        daily_call_budget: int | None = None,
+        resume_after: str | None = None,
+        stop_on_quota: bool = True,
+        status_jsonl: Path | str | None = None,
+        low_confidence_threshold: float | None = None,
     ) -> dict:
         """Backfill formula chunks for already-indexed documents."""
         if not self.config.formula_ocr_enabled:
@@ -249,21 +378,122 @@ class Indexer:
         self._ensure_formula_provider_available()
         self._assert_config_hash_current()
 
-        indexed_ids = self.store.get_indexed_doc_ids()
-        items = [
-            item for item in self.zotero.get_all_items_with_pdfs()
-            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
-        ]
-        if item_key:
-            items = [item for item in items if item.item_key == item_key]
-        if item_keys:
-            wanted = set(item_keys)
-            items = [item for item in items if item.item_key in wanted]
-        if limit:
-            items = items[:limit]
+        budget = (
+            int(getattr(self.config, "formula_ocr_daily_call_budget", 0) or 0)
+            if daily_call_budget is None
+            else int(daily_call_budget)
+        )
+        if budget < 0:
+            raise ValueError("daily_call_budget must be >= 0")
+        review_threshold = (
+            float(getattr(self.config, "formula_ocr_low_confidence_threshold", 0.0) or 0.0)
+            if low_confidence_threshold is None
+            else float(low_confidence_threshold)
+        )
+        if not 0.0 <= review_threshold <= 1.0:
+            raise ValueError("low_confidence_threshold must be between 0.0 and 1.0")
 
-        results = []
+        provider_name = getattr(self.config, "formula_ocr_provider", "local")
+        has_external_egress = provider_name == "simpletex"
+        state_path = (
+            _formula_backfill_state_path(self.config)
+            if status_jsonl == ""
+            else Path(status_jsonl).expanduser() if status_jsonl is not None else None
+        )
+        matched_items = self._formula_backfill_items(
+            item_key=item_key,
+            item_keys=item_keys,
+        )
+        resume_after_found = (
+            resume_after is None
+            or any(item.item_key == resume_after for item in matched_items)
+        )
+        items = self._formula_backfill_items(
+            item_key=item_key,
+            item_keys=item_keys,
+            limit=limit,
+            resume_after=resume_after,
+        )
+
+        from .feature_extraction.formula_ocr import extract_formula_candidates
+
+        results: list[dict[str, object]] = []
+        low_confidence_review_queue: list[dict[str, object]] = []
+        provider_calls_used = 0
+        external_calls_used = 0
+        stopped_reason = ""
+        resume_cursor = ""
+        next_item_key = ""
+        next_item_candidate_count = 0
+        run_warnings: list[str] = []
+        run_id = uuid.uuid4().hex
+        if not resume_after_found:
+            run_warnings.append(
+                f"resume_after item_key {resume_after!r} was not found in the matched backfill set."
+            )
+        _append_formula_backfill_state(
+            state_path,
+            {
+                "event": "formula_backfill_run_started",
+                "run_id": run_id,
+                "provider": provider_name,
+                "selected": len(items),
+                "matched": len(matched_items),
+                "daily_call_budget": budget,
+                "resume_after": resume_after or "",
+                "resume_after_found": resume_after_found,
+                "data_egress": has_external_egress,
+            },
+        )
         for item in items:
+            try:
+                candidates = extract_formula_candidates(
+                    item.pdf_path,
+                    max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
+                    max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
+                    min_confidence=self.config.formula_ocr_min_confidence,
+                )
+            except Exception as exc:
+                row = _formula_backfill_row(
+                    item_key=item.item_key,
+                    title=item.title,
+                    status="failed",
+                    reason="candidate_detection_failed",
+                    error=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                results.append(row)
+                resume_cursor = item.item_key
+                _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+                continue
+
+            candidate_count = len(candidates)
+            remaining_budget = budget - provider_calls_used if budget > 0 else None
+            if remaining_budget is not None and candidate_count > remaining_budget:
+                stopped_reason = "daily_call_budget"
+                next_item_key = item.item_key
+                next_item_candidate_count = candidate_count
+                reason = (
+                    "single_paper_exceeds_daily_budget"
+                    if candidate_count > budget
+                    else "candidate_count_exceeds_remaining_budget"
+                )
+                if reason == "single_paper_exceeds_daily_budget":
+                    run_warnings.append(
+                        f"{item.item_key} has {candidate_count} candidates, more than the daily budget {budget}; "
+                        "raise the budget or backfill this paper separately."
+                    )
+                row = _formula_backfill_row(
+                    item_key=item.item_key,
+                    title=item.title,
+                    status="deferred_budget",
+                    reason=reason,
+                    candidate_count=candidate_count,
+                )
+                results.append(row)
+                _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+                break
+
             journal_quartile = self.journal_ranker.lookup(item.publication)
             doc_meta = {
                 "title": item.title,
@@ -278,7 +508,42 @@ class Indexer:
                 "pdf_hash": self._pdf_hash(item.pdf_path),
                 "quality_grade": "",
             }
-            formulas = self._recognize_formulas_for_item(item)
+            try:
+                formulas = self._recognize_formulas_for_item(item, candidates=candidates)
+            except Exception as exc:
+                if stop_on_quota and _looks_like_formula_quota_error(exc):
+                    stopped_reason = "provider_quota_or_rate_limit"
+                    next_item_key = item.item_key
+                    next_item_candidate_count = candidate_count
+                    row = _formula_backfill_row(
+                        item_key=item.item_key,
+                        title=item.title,
+                        status="stopped_quota",
+                        reason="provider_quota_or_rate_limit",
+                        candidate_count=candidate_count,
+                        error=type(exc).__name__,
+                        error_message=str(exc),
+                    )
+                    results.append(row)
+                    _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+                    break
+                row = _formula_backfill_row(
+                    item_key=item.item_key,
+                    title=item.title,
+                    status="failed",
+                    reason="formula_ocr_failed",
+                    candidate_count=candidate_count,
+                    error=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                results.append(row)
+                resume_cursor = item.item_key
+                _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+                continue
+
+            provider_calls_used += candidate_count
+            if has_external_egress:
+                external_calls_used += candidate_count
             existing_formula_count = self._count_existing_formulas(item.item_key) if refresh_existing else 0
             kept_existing = 0
             if refresh_existing and formulas:
@@ -292,18 +557,252 @@ class Indexer:
                 )
             if formulas:
                 self.store.add_formulas(item.item_key, doc_meta, formulas)
+            review_rows = self._formula_review_rows(
+                item=item,
+                formulas=formulas,
+                threshold=review_threshold,
+            )
+            low_confidence_review_queue.extend(review_rows)
+            row = _formula_backfill_row(
+                item_key=item.item_key,
+                title=item.title,
+                status="indexed" if formulas else "no_formula",
+                reason="" if formulas else "no_formula_recognized",
+                candidate_count=candidate_count,
+                provider_calls=candidate_count,
+                external_calls=candidate_count if has_external_egress else 0,
+                n_formulas=len(formulas),
+                existing_formulas_kept=kept_existing,
+                low_confidence_count=len(review_rows),
+            )
+            results.append(row)
+            resume_cursor = item.item_key
+            _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+
+        processed_count = sum(1 for row in results if row.get("status") not in {"deferred_budget"})
+        formulas_indexed = sum(
+            row["n_formulas"] if isinstance(row.get("n_formulas"), int) else 0
+            for row in results
+        )
+        result = {
+            "run_id": run_id,
+            "provider": provider_name,
+            "processed": processed_count,
+            "selected": len(items),
+            "matched": len(matched_items),
+            "formulas_indexed": formulas_indexed,
+            "provider_calls_used": provider_calls_used,
+            "external_calls_used": external_calls_used,
+            "daily_call_budget": budget,
+            "daily_call_budget_remaining": max(budget - provider_calls_used, 0) if budget > 0 else None,
+            "budget_exhausted": stopped_reason == "daily_call_budget",
+            "stopped_reason": stopped_reason,
+            "resume_cursor": resume_cursor,
+            "next_item_key": next_item_key,
+            "next_item_candidate_count": next_item_candidate_count,
+            "resume_after_found": resume_after_found,
+            "state_path": str(state_path) if state_path is not None else "",
+            "low_confidence_review_count": len(low_confidence_review_queue),
+            "low_confidence_review_queue": low_confidence_review_queue,
+            "warnings": run_warnings,
+            "results": results,
+        }
+        _append_formula_backfill_state(
+            state_path,
+            {
+                "event": "formula_backfill_run_finished",
+                "run_id": run_id,
+                "processed": result["processed"],
+                "selected": result["selected"],
+                "formulas_indexed": result["formulas_indexed"],
+                "provider_calls_used": result["provider_calls_used"],
+                "external_calls_used": result["external_calls_used"],
+                "stopped_reason": stopped_reason,
+                "resume_cursor": resume_cursor,
+                "next_item_key": next_item_key,
+                "next_item_candidate_count": next_item_candidate_count,
+                "warnings": run_warnings,
+            },
+        )
+        return result
+
+    def estimate_formula_backfill(
+        self,
+        *,
+        item_key: str | None = None,
+        item_keys: list[str] | None = None,
+        limit: int | None = None,
+        resume_after: str | None = None,
+        daily_call_budget: int | None = None,
+    ) -> dict:
+        """Estimate formula OCR candidate volume without OCR calls or index writes."""
+        self._assert_config_hash_current()
+        from .feature_extraction.formula_ocr import extract_formula_candidates
+
+        provider_name = getattr(self.config, "formula_ocr_provider", "local")
+        min_interval = float(getattr(self.config, "formula_ocr_simpletex_min_interval", 0.55))
+        has_external_egress = provider_name == "simpletex"
+        budget = (
+            int(getattr(self.config, "formula_ocr_daily_call_budget", 0) or 0)
+            if daily_call_budget is None
+            else int(daily_call_budget)
+        )
+        if budget < 0:
+            raise ValueError("daily_call_budget must be >= 0")
+        matched_items = self._formula_backfill_items(
+            item_key=item_key,
+            item_keys=item_keys,
+        )
+        resume_after_found = (
+            resume_after is None
+            or any(item.item_key == resume_after for item in matched_items)
+        )
+        items = self._formula_backfill_items(
+            item_key=item_key,
+            item_keys=item_keys,
+            limit=limit,
+            resume_after=resume_after,
+        )
+
+        results: list[dict[str, object]] = []
+        total_candidates = 0
+        failed_papers = 0
+        for item in items:
+            try:
+                candidates = extract_formula_candidates(
+                    item.pdf_path,
+                    max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
+                    max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
+                    min_confidence=self.config.formula_ocr_min_confidence,
+                )
+                candidate_count = len(candidates)
+                error = ""
+            except Exception as exc:
+                candidate_count = 0
+                failed_papers += 1
+                error = type(exc).__name__
+            total_candidates += candidate_count
             results.append({
                 "item_key": item.item_key,
                 "title": item.title,
-                "n_formulas": len(formulas),
-                "existing_formulas_kept": kept_existing,
+                "candidate_count": candidate_count,
+                "estimated_provider_calls": candidate_count,
+                "estimated_external_calls": candidate_count if has_external_egress else 0,
+                "error": error,
             })
 
+        estimated_min_duration_seconds = total_candidates * min_interval if has_external_egress else 0.0
+        processed = len(results)
+        average_candidates_per_paper = round(total_candidates / processed, 2) if processed else 0.0
+        estimated_runs = (total_candidates + budget - 1) // budget if budget > 0 else 1
+        warnings = _formula_backfill_warnings(
+            processed=processed,
+            failed_papers=failed_papers,
+            candidate_count=total_candidates,
+            data_egress=has_external_egress,
+            daily_call_budget=budget,
+        )
+        if not resume_after_found:
+            warnings.append(
+                f"resume_after item_key {resume_after!r} was not found in the matched backfill set."
+            )
+        summary = {
+            "papers": processed,
+            "matched": len(matched_items),
+            "candidates": total_candidates,
+            "provider_calls": total_candidates,
+            "external_calls": total_candidates if has_external_egress else 0,
+            "average_candidates_per_paper": average_candidates_per_paper,
+            "estimated_min_duration": _format_estimated_duration(estimated_min_duration_seconds),
+            "data_egress": has_external_egress,
+            "daily_call_budget": budget,
+            "estimated_runs": estimated_runs,
+            "resume_after_found": resume_after_found,
+            "warnings": warnings,
+            "next_action": _formula_backfill_next_action(
+                processed=processed,
+                failed_papers=failed_papers,
+                candidate_count=total_candidates,
+                data_egress=has_external_egress,
+                daily_call_budget=budget,
+            ),
+        }
         return {
-            "processed": len(results),
-            "formulas_indexed": sum(row["n_formulas"] for row in results),
+            "provider": provider_name,
+            "processed": processed,
+            "matched": len(matched_items),
+            "failed_papers": failed_papers,
+            "candidate_count": total_candidates,
+            "average_candidates_per_paper": average_candidates_per_paper,
+            "estimated_provider_calls": total_candidates,
+            "estimated_external_calls": total_candidates if has_external_egress else 0,
+            "estimated_min_duration_seconds": round(estimated_min_duration_seconds, 3),
+            "estimated_min_duration": summary["estimated_min_duration"],
+            "daily_call_budget": budget,
+            "estimated_runs": estimated_runs,
+            "resume_after_found": resume_after_found,
+            "data_egress": has_external_egress,
+            "summary": summary,
             "results": results,
         }
+
+    def _formula_backfill_items(
+        self,
+        *,
+        item_key: str | None = None,
+        item_keys: list[str] | None = None,
+        limit: int | None = None,
+        resume_after: str | None = None,
+    ) -> list[ZoteroItem]:
+        indexed_ids = self.store.get_indexed_doc_ids()
+        items = [
+            item for item in self.zotero.get_all_items_with_pdfs()
+            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
+        ]
+        if item_key:
+            items = [item for item in items if item.item_key == item_key]
+        if item_keys:
+            wanted = set(item_keys)
+            items = [item for item in items if item.item_key in wanted]
+        items.sort(key=lambda item: item.item_key)
+        if resume_after:
+            skipped = True
+            resumed_items = []
+            for item in items:
+                if skipped:
+                    skipped = item.item_key != resume_after
+                    continue
+                resumed_items.append(item)
+            items = resumed_items
+        if limit:
+            items = items[:limit]
+        return items
+
+    @staticmethod
+    def _formula_review_rows(
+        *,
+        item: ZoteroItem,
+        formulas: list,
+        threshold: float,
+    ) -> list[dict[str, object]]:
+        if threshold <= 0:
+            return []
+        rows: list[dict[str, object]] = []
+        for formula in formulas:
+            confidence = getattr(formula, "confidence", None)
+            if confidence is None or confidence >= threshold:
+                continue
+            rows.append({
+                "item_key": item.item_key,
+                "title": item.title,
+                "page_num": formula.page_num,
+                "formula_index": formula.formula_index,
+                "equation_number": formula.equation_number,
+                "confidence": confidence,
+                "provider": formula.provider,
+                "latex": formula.latex,
+            })
+        return rows
 
     def _count_existing_formulas(self, item_key: str) -> int:
         """Best-effort count of existing formula chunks for one document."""

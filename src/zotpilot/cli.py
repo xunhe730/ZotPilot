@@ -846,6 +846,145 @@ def cmd_index(args):
     return 1 if result["failed"] > 0 and result["indexed"] == 0 else 0
 
 
+def cmd_index_formulas(args):
+    """Backfill formula chunks for already-indexed documents."""
+    from .indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
+    from .vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
+
+    config = resolve_runtime_config(args.config)
+    errors = config.validate()
+    blocking_errors, api_warnings = _split_validate_errors(errors)
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    for w in api_warnings:
+        print(f"Warning: {w} (configure with `zotpilot setup` or `zotpilot config set ...`)", file=sys.stderr)
+    if not config.formula_ocr_enabled:
+        print("Error: formula_ocr_enabled must be true before running index-formulas", file=sys.stderr)
+        return 1
+
+    from .index_authority import IndexLease, LeaseContentionError, acquire_lease, release_lease
+
+    lease = IndexLease(index_lease_path(config))
+    try:
+        acquire_lease(lease)
+    except LeaseContentionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    status_jsonl = getattr(args, "status_jsonl", None)
+    try:
+        result = Indexer(config).index_formulas(
+            item_key=args.item_key,
+            item_keys=args.item_keys,
+            limit=args.limit,
+            refresh_existing=not getattr(args, "no_refresh_existing", False),
+            daily_call_budget=getattr(args, "daily_call_budget", None),
+            resume_after=getattr(args, "resume_after", None),
+            stop_on_quota=not getattr(args, "no_stop_on_quota", False),
+            status_jsonl=("" if status_jsonl == "" else status_jsonl),
+            low_confidence_threshold=getattr(args, "low_confidence_threshold", None),
+        )
+    except (
+        ConfigDriftError,
+        FormulaProviderUnavailableError,
+        EmbeddingDimensionMismatchError,
+        IndexUnavailableError,
+        ValueError,
+    ) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        release_lease(lease)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    print("Formula backfill complete:")
+    print(f"  Provider:                {result.get('provider', '')}")
+    print(f"  Processed:               {result.get('processed', 0)}")
+    print(f"  Formulas indexed:        {result.get('formulas_indexed', 0)}")
+    print(f"  Provider calls used:     {result.get('provider_calls_used', 0)}")
+    print(f"  External calls used:     {result.get('external_calls_used', 0)}")
+    if result.get("daily_call_budget"):
+        print(f"  Daily budget:            {result.get('daily_call_budget')}")
+        print(f"  Budget remaining:        {result.get('daily_call_budget_remaining')}")
+    if result.get("stopped_reason"):
+        print(f"  Stopped:                 {result.get('stopped_reason')}")
+    if result.get("resume_cursor"):
+        print(f"  Resume after:            {result.get('resume_cursor')}")
+    if result.get("next_item_key"):
+        print(f"  Next item:               {result.get('next_item_key')}")
+    if result.get("next_item_candidate_count"):
+        print(f"  Next item candidates:    {result.get('next_item_candidate_count')}")
+    if result.get("state_path"):
+        print(f"  State JSONL:             {result.get('state_path')}")
+    if result.get("low_confidence_review_count"):
+        print(f"  Needs review:            {result.get('low_confidence_review_count')}")
+        print("  Review details:          rerun with --json to inspect the low-confidence queue")
+    warnings = result.get("warnings") or []
+    if warnings:
+        print("\nWarnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    return 0
+
+
+def cmd_estimate_formula_backfill(args):
+    """Estimate formula backfill volume without OCR calls or index writes."""
+    from .indexer import ConfigDriftError, Indexer
+    from .vector_store import IndexUnavailableError
+
+    config = resolve_runtime_config(args.config)
+    errors = config.validate()
+    blocking_errors = [
+        e for e in errors
+        if "SimpleTex formula OCR requires" not in e and "_API_KEY not set" not in e
+    ]
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    try:
+        result = Indexer(config).estimate_formula_backfill(
+            item_key=args.item_key,
+            item_keys=args.item_keys,
+            limit=args.limit,
+            resume_after=getattr(args, "resume_after", None),
+            daily_call_budget=getattr(args, "daily_call_budget", None),
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    summary = result.get("summary", {})
+    print("Formula backfill estimate:")
+    print(f"  Provider:                  {result.get('provider', '')}")
+    print(f"  Papers:                    {result.get('processed', 0)}")
+    print(f"  Formula candidates:        {result.get('candidate_count', 0)}")
+    print(f"  Avg candidates / paper:    {result.get('average_candidates_per_paper', 0)}")
+    print(f"  Estimated provider calls:  {result.get('estimated_provider_calls', 0)}")
+    print(f"  Estimated external calls:  {result.get('estimated_external_calls', 0)}")
+    print(f"  Estimated minimum runtime: {result.get('estimated_min_duration', '0s')}")
+    print(f"  Daily call budget:         {result.get('daily_call_budget', 0)}")
+    print(f"  Estimated runs:            {result.get('estimated_runs', 1)}")
+    print(f"  Data egress:               {'yes' if result.get('data_egress') else 'no'}")
+    if summary.get("next_action"):
+        print(f"\nNext: {summary['next_action']}")
+    warnings = summary.get("warnings") or []
+    if warnings:
+        print("\nWarnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    return 0
+
+
 def cmd_status(args):
     """Show configuration and index stats."""
     from . import __version__
@@ -1229,6 +1368,8 @@ _SCALAR_TYPES = {
     "formula_ocr_simpletex_timeout": float,
     "formula_ocr_simpletex_min_interval": float,
     "formula_ocr_simpletex_max_retries": int,
+    "formula_ocr_daily_call_budget": int,
+    "formula_ocr_low_confidence_threshold": float,
 }
 
 
@@ -1839,6 +1980,87 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)
+
+    # index-formulas
+    sub_index_formulas = subparsers.add_parser(
+        "index-formulas",
+        help="Backfill formula chunks for already-indexed papers",
+    )
+    sub_index_formulas.add_argument("--item-key", type=str, default=None, help="Backfill one Zotero item key")
+    sub_index_formulas.add_argument(
+        "--item-keys",
+        nargs="+",
+        default=None,
+        help="Backfill a space-separated list of Zotero item keys",
+    )
+    sub_index_formulas.add_argument("--limit", type=int, default=None, help="Max already-indexed papers to process")
+    sub_index_formulas.add_argument(
+        "--no-refresh-existing",
+        action="store_true",
+        help="Keep existing formula chunks and only add newly recognized formulas",
+    )
+    sub_index_formulas.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Max formula OCR provider calls for this run; 0 disables the cap",
+    )
+    sub_index_formulas.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume after the item key returned as resume_cursor by a previous run",
+    )
+    sub_index_formulas.add_argument(
+        "--no-stop-on-quota",
+        action="store_true",
+        help="Do not stop the batch on quota, balance, or rate-limit provider errors",
+    )
+    sub_index_formulas.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=None,
+        help="Return recognized formulas below this confidence in a review queue",
+    )
+    sub_index_formulas.add_argument(
+        "--status-jsonl",
+        nargs="?",
+        const="",
+        default=None,
+        help="Append per-paper formula backfill status to JSONL (default path when no path is provided)",
+    )
+    sub_index_formulas.add_argument("--json", action="store_true", help="Output the full result as JSON")
+    sub_index_formulas.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_index_formulas.set_defaults(func=cmd_index_formulas)
+
+    # estimate-formula-backfill
+    sub_formula_estimate = subparsers.add_parser(
+        "estimate-formula-backfill",
+        help="Estimate formula OCR backfill volume without writing the index",
+    )
+    sub_formula_estimate.add_argument("--item-key", type=str, default=None, help="Estimate one Zotero item key")
+    sub_formula_estimate.add_argument(
+        "--item-keys",
+        nargs="+",
+        default=None,
+        help="Estimate a space-separated list of Zotero item keys",
+    )
+    sub_formula_estimate.add_argument("--limit", type=int, default=None, help="Max already-indexed papers to scan")
+    sub_formula_estimate.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume estimate after this Zotero item key",
+    )
+    sub_formula_estimate.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Daily call budget to use for estimated run count",
+    )
+    sub_formula_estimate.add_argument("--json", action="store_true", help="Output the full estimate as JSON")
+    sub_formula_estimate.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_formula_estimate.set_defaults(func=cmd_estimate_formula_backfill)
 
     # status
     sub_status = subparsers.add_parser("status", help="Show config and index stats")

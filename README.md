@@ -215,6 +215,18 @@ zotpilot config set formula_ocr_simpletex_app_secret <your-app-secret>
 
 默认 endpoint 是标准版 `https://server.simpletex.net/api/latex_ocr`，并按标准版限流预设 `formula_ocr_simpletex_min_interval=0.55` 与 `formula_ocr_simpletex_max_retries=2`；如需更快的轻量版，可设置 `formula_ocr_simpletex_endpoint` 为 `https://server.simpletex.net/api/latex_ocr_turbo`，并按你的配额调整最小请求间隔。inline math、纯图片 / 矢量公式和整页 fallback 仍留到后续阶段。
 
+大批量 SimpleTex 回填建议走独立的公式 backfill 流程，不要直接一口气重跑全库。先做只读估算（不调用 SimpleTex、不写索引），再按每日免费额度小批量跑：
+
+```bash
+zotpilot estimate-formula-backfill --limit 100 --daily-call-budget 1800
+
+zotpilot config set formula_ocr_daily_call_budget 1800
+zotpilot config set formula_ocr_low_confidence_threshold 0.75
+zotpilot index-formulas --daily-call-budget 1800 --status-jsonl
+```
+
+`index-formulas` 只处理已经完成正文索引的论文，并把公式作为增量 chunk 回填；如果达到每日预算、遇到 SimpleTex 余额 / 配额 / 限流类错误，会停止本批次并返回 `resume_cursor` / `next_item_key`。第二天可用 `--resume-after <resume_cursor>` 继续。低置信度结果会进入 review queue（用 `--json` 查看），不会自动触发标准模型复核；标准模型抽样复核建议后续单独做。
+
 </details>
 
 <details>

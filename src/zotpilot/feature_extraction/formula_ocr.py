@@ -50,6 +50,21 @@ VARIABLE_GLOSS_RE = re.compile(r"\bwhere\b[^.。;；]{0,260}|其中[^.。;；]{0
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
+SIMPLETEX_STOP_STATUS_CODES = {401, 402, 429}
+SIMPLETEX_STOP_ERROR_HINTS = (
+    "401",
+    "402",
+    "429",
+    "balance",
+    "insufficient",
+    "limit",
+    "quota",
+    "rate",
+    "余额",
+    "次数",
+    "额度",
+    "限流",
+)
 
 
 @dataclass(frozen=True)
@@ -317,15 +332,17 @@ def recognize_formulas(
     max_formulas_per_doc: int = 40,
     max_formulas_per_page: int = 6,
     min_confidence: float = 0.6,
+    candidates: list[FormulaCandidate] | None = None,
 ) -> list[ExtractedFormula]:
     """Detect text-layer formula candidates and OCR them with the provider."""
     formulas: list[ExtractedFormula] = []
-    candidates = extract_formula_candidates(
-        pdf_path,
-        max_formulas_per_doc=max_formulas_per_doc,
-        max_formulas_per_page=max_formulas_per_page,
-        min_confidence=min_confidence,
-    )
+    if candidates is None:
+        candidates = extract_formula_candidates(
+            pdf_path,
+            max_formulas_per_doc=max_formulas_per_doc,
+            max_formulas_per_page=max_formulas_per_page,
+            min_confidence=min_confidence,
+        )
     if not candidates:
         return []
 
@@ -336,6 +353,8 @@ def recognize_formulas(
             try:
                 result = provider.recognize(crop)
             except Exception as e:
+                if _should_stop_formula_batch(e):
+                    raise
                 logger.warning(
                     "Formula OCR provider %s failed on page %d: %s",
                     getattr(provider, "name", "unknown"),
@@ -396,6 +415,16 @@ def _coerce_simpletex_response(payload: Any) -> FormulaOCRResult:
     if confidence is None:
         confidence = result.get("confidence")
     return FormulaOCRResult(latex=latex, confidence=float(confidence) if confidence is not None else None)
+
+
+def _should_stop_formula_batch(exc: Exception) -> bool:
+    """Return True for provider errors where continuing would waste paid calls."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        if status_code in SIMPLETEX_STOP_STATUS_CODES:
+            return True
+    message = str(exc).lower()
+    return any(hint in message for hint in SIMPLETEX_STOP_ERROR_HINTS)
 
 
 def _simpletex_app_headers(data: dict[str, str], app_id: str, app_secret: str) -> dict[str, str]:

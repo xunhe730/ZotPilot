@@ -213,6 +213,18 @@ zotpilot config set formula_ocr_simpletex_app_secret <your-app-secret>
 
 The default endpoint is the standard `https://server.simpletex.net/api/latex_ocr`, with `formula_ocr_simpletex_min_interval=0.55` and `formula_ocr_simpletex_max_retries=2` as the standard-endpoint throttle defaults. For the faster lightweight endpoint, set `formula_ocr_simpletex_endpoint` to `https://server.simpletex.net/api/latex_ocr_turbo` and tune the minimum request interval for your quota. Inline math, image/vector-only formulas, and full-page fallback are still left for later phases.
 
+For large SimpleTex backfills, use the dedicated formula backfill flow instead of reindexing the whole library at once. Start with a read-only estimate (no SimpleTex calls and no index writes), then run a daily-budgeted batch:
+
+```bash
+zotpilot estimate-formula-backfill --limit 100 --daily-call-budget 1800
+
+zotpilot config set formula_ocr_daily_call_budget 1800
+zotpilot config set formula_ocr_low_confidence_threshold 0.75
+zotpilot index-formulas --daily-call-budget 1800 --status-jsonl
+```
+
+`index-formulas` only processes papers that already have a text index and writes formula chunks additively. When the daily budget is reached, or when SimpleTex returns quota / balance / rate-limit style failures, the batch stops and returns `resume_cursor` / `next_item_key`. Run the next day with `--resume-after <resume_cursor>` to continue. Low-confidence results are returned in a review queue (use `--json` to inspect it); standard-model rechecks are intentionally left as a later/manual step.
+
 </details>
 
 <details>
