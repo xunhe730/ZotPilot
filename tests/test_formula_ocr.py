@@ -779,6 +779,103 @@ def test_mineru_json_provider_manifest_ignores_markdown_reference(tmp_path):
     assert candidates == []
 
 
+def test_pdf_extract_kit_provider_reads_formula_recognition_json(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "formula_recognition.json").write_text(
+        json.dumps([
+            {
+                "label": "formula",
+                "page_index": 0,
+                "points": [[10, 20], [200, 20], [200, 60], [10, 60]],
+                "latex_styled": r"$$E = mc^2$$",
+                "confidence_score": 0.88,
+            }
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(tmp_path / "pdf-extract-kit")),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 1
+    assert candidates[0].bbox == (10.0, 20.0, 200.0, 60.0)
+    assert candidates[0].latex == r"E = mc^2"
+    assert candidates[0].confidence == 0.88
+    assert candidates[0].source == "pdf_extract_kit_json"
+
+
+def test_pdf_extract_kit_provider_reads_common_formula_field_variants(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "results.json").write_text(
+        json.dumps({
+            "pages": [
+                {
+                    "page_id": 2,
+                    "blocks": [
+                        {
+                            "cls_name": "equation",
+                            "layout_bbox": [5, 6, 100, 40],
+                            "rec_formula": r"\sigma = E\epsilon",
+                        },
+                        {
+                            "det_label": "plain_text",
+                            "layout_bbox": [0, 0, 1, 1],
+                            "text": "Introduction",
+                        },
+                    ],
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(tmp_path / "pdf-extract-kit")),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 3
+    assert candidates[0].bbox == (5.0, 6.0, 100.0, 40.0)
+    assert candidates[0].latex == r"\sigma = E\epsilon"
+
+
+def test_pdf_extract_kit_provider_accepts_detection_only_bbox(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "formula_detection.json").write_text(
+        json.dumps([
+            {
+                "det_label": "formula",
+                "page_no": 4,
+                "dt_boxes": [[[15, 30], [210, 30], [210, 70], [15, 70]]],
+                "score": 0.76,
+            }
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(tmp_path / "pdf-extract-kit")),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 4
+    assert candidates[0].bbox == (15.0, 30.0, 210.0, 70.0)
+    assert candidates[0].latex == ""
+    assert candidates[0].raw_text == "formula"
+    assert candidates[0].source == "pdf_extract_kit_json"
+
+
 def test_cached_latex_does_not_open_pdf_or_call_ocr_provider(tmp_path):
     class CachedCandidateProvider:
         name = "cached-test"
