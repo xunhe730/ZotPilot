@@ -119,6 +119,7 @@ class TestVectorStore:
                 confidence=0.91,
                 reference_context="Energy is defined by the following equation.",
                 equation_number="(1)",
+                equation_number_status="provided",
             ),
             ExtractedFormula(
                 page_num=3,
@@ -146,6 +147,11 @@ class TestVectorStore:
         assert indices == [0, 1]
         assert counts == {"text": 3, "table": 0, "figure": 0, "formula": 2}
         assert all(doc.startswith("Formula on page") for doc in results["documents"])
+        meta_by_index = {meta["formula_index"]: meta for meta in results["metadatas"]}
+        assert meta_by_index[0]["formula_equation_number_status"] == "provided"
+        assert meta_by_index[0]["formula_locator"] == "page 2, index #1, equation (1)"
+        assert meta_by_index[1]["formula_equation_number_status"] == "missing"
+        assert meta_by_index[1]["formula_locator"] == "page 3, index #2"
         assert populated_store._doc_id_from_chunk_id("TEST001_formula_0001") == "TEST001"
 
     def test_delete_chunks_by_type_removes_only_formulas(self, populated_store):

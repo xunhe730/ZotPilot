@@ -99,15 +99,22 @@ class ExtractedFormula:
     raw_text: str = ""
     reference_context: str | None = None
     equation_number: str = ""
+    equation_number_status: str = ""
     variable_gloss: str = ""
     source: str = "text_block"
     provider: str = "local"
 
     def to_searchable_text(self) -> str:
         """Return natural-language-first text for embedding."""
-        label = f"Formula on page {self.page_num}"
+        label = f"Formula on page {self.page_num}, index #{self.formula_index + 1}"
+        equation_number_status = (
+            self.equation_number_status
+            or ("provided" if self.equation_number else "missing")
+        )
         if self.equation_number:
             label += f" {self.equation_number}"
+        elif equation_number_status == "unnumbered":
+            label += " (unnumbered in source)"
 
         parts = [label]
         if self.reference_context:
@@ -344,6 +351,8 @@ class RetrievalResult:
     chunk_type: str = "text"
     formula_latex: str = ""
     formula_equation_number: str = ""
+    formula_equation_number_status: str = ""
+    formula_locator: str = ""
     formula_variable_gloss: str = ""
     formula_provider: str = ""
     formula_source: str = ""

@@ -13,6 +13,7 @@ from zotpilot.feature_extraction.formula_ocr import (
     _dedupe_candidates,
     _extract_block_signals,
     _extract_equation_number,
+    _is_likely_non_formula_text,
     _simpletex_app_headers,
     create_formula_ocr_provider,
     is_high_quality_formula_latex,
@@ -298,9 +299,38 @@ def test_formula_candidate_confidence_uses_font_and_span_flags_as_boosts():
     assert math_score > plain_score
 
 
+def test_formula_candidate_confidence_rejects_common_paper_prose_noise():
+    noisy_blocks = [
+        "Abstract",
+        "Keywords: ductile fracture; stress triaxiality; finite element simulation",
+        "John Smith, Department of Mechanical Engineering, Example University",
+        "https://doi.org/10.1016/j.ijsolstr.2024.112345",
+        "Figure 3. Force-displacement curves for different specimens.",
+        "The model parameters were calibrated according to Bai et al. [12].",
+        "References",
+    ]
+
+    for text in noisy_blocks:
+        assert _is_likely_non_formula_text(text)
+        assert _candidate_confidence(text, (10.0, 20.0, 260.0, 42.0), set(), set()) == 0.0
+
+    formula_text = r"\sigma_{eq} = \sqrt{3J_2} (1)"
+    assert not _is_likely_non_formula_text(formula_text)
+    assert _candidate_confidence(
+        formula_text,
+        (10.0, 20.0, 260.0, 42.0),
+        {"CMMI10"},
+        {2},
+    ) > 0.0
+
+
 def test_equation_number_detection_avoids_plain_step_numbers():
     assert _extract_equation_number("E = mc^2 (1)") == "(1)"
     assert _extract_equation_number("Eq. (3)") == "(3)"
+    assert _extract_equation_number(
+        r"\bar{\theta}=\frac{2\sigma_2-\sigma_1-\sigma_3}{\sigma_1-\sigma_3} (1.10)"
+    ) == "(1.10)"
+    assert _extract_equation_number(r"\varepsilon_f = D_1 + D_2 e^{D_3\eta} (2-1)") == "(2-1)"
     assert _extract_equation_number("Follow step (3)") == ""
     assert _extract_equation_number("(1) (2)") == ""
 
@@ -355,6 +385,20 @@ def test_extracted_formula_searchable_text_leads_with_context_before_latex():
 
     text = formula.to_searchable_text()
 
-    assert text.splitlines()[0] == "Formula on page 3 (1)"
+    assert text.splitlines()[0] == "Formula on page 3, index #2 (1)"
     assert "Context: Energy is defined" in text
     assert text.splitlines()[-1] == r"LaTeX: E = mc^2"
+
+
+def test_extracted_formula_searchable_text_labels_unnumbered_formulas():
+    formula = ExtractedFormula(
+        page_num=4,
+        formula_index=0,
+        bbox=(0, 0, 10, 10),
+        latex=r"x+y",
+        equation_number_status="unnumbered",
+    )
+
+    assert formula.to_searchable_text().splitlines()[0] == (
+        "Formula on page 4, index #1 (unnumbered in source)"
+    )

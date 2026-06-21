@@ -85,6 +85,8 @@ class Retriever:
                 chunk_type=chunk_type,
                 formula_latex=hit.metadata.get("formula_latex", ""),
                 formula_equation_number=hit.metadata.get("formula_equation_number", ""),
+                formula_equation_number_status=hit.metadata.get("formula_equation_number_status", ""),
+                formula_locator=hit.metadata.get("formula_locator", ""),
                 formula_variable_gloss=hit.metadata.get("formula_variable_gloss", ""),
                 formula_provider=hit.metadata.get("formula_provider", ""),
                 formula_source=hit.metadata.get("formula_source", ""),

@@ -39,13 +39,55 @@ MATH_FONT_HINTS = (
     "xits math",
 )
 MATH_SYMBOL_RE = re.compile(r"[=+\-*/<>≤≥≈≠∑∏∫√∞∂∇α-ωΑ-Ω_{}^]|\\[A-Za-z]+")
+MATH_RELATION_RE = re.compile(r"(?:=|≤|≥|≈|≠|<|>|\\(?:leq?|geq?|approx|neq|equiv)\b)")
 WORD_RE = re.compile(r"[A-Za-z]{3,}")
+EQUATION_NUMBER_PATTERN = r"\d+(?:(?:\.|-)\d+)*(?:[A-Za-z])?"
 EQUATION_NUMBER_RE = re.compile(
-    r"(?:\bEq\.?\s*\((?P<eq>\d+(?:\.\d+)?)\)|"
-    r"[=+\-*/<>≤≥≈≠∑∏∫√∞∂∇_{}^][^()\n]{0,160}\((?P<tail>\d+(?:\.\d+)?)\)\s*$)",
+    rf"(?:\bEq\.?\s*\(\s*(?P<eq>{EQUATION_NUMBER_PATTERN})\s*\)|"
+    rf"[=+\-*/<>≤≥≈≠∑∏∫√∞∂∇_{{}}^][^()\n]{{0,180}}\(\s*(?P<tail>{EQUATION_NUMBER_PATTERN})\s*\)\s*$)",
     re.IGNORECASE,
 )
-NOISE_RE = re.compile(r"\b(?:abstract|references|figure|table|copyright|doi|keywords)\b", re.IGNORECASE)
+TRAILING_EQUATION_NUMBER_RE = re.compile(
+    rf"[\(（]\s*(?P<number>{EQUATION_NUMBER_PATTERN})\s*[\)）]\s*$",
+    re.IGNORECASE,
+)
+NOISE_RE = re.compile(
+    r"\b(?:abstract|keywords|introduction|conclusion|conclusions|references|"
+    r"acknowledg(?:e)?ments?|figure|fig\.?|table|tab\.?|copyright|doi|"
+    r"received|accepted|available\s+online|corresponding\s+author|"
+    r"supplementary|publisher|license|creative\s+commons)\b|"
+    r"(?:摘要|关键词|引言|前言|结论|参考文献|致谢|图\s*\d+|表\s*\d+|通讯作者|版权)",
+    re.IGNORECASE,
+)
+SECTION_HEADING_RE = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*\.?\s*)?"
+    r"(?:abstract|keywords|introduction|background|methods?|materials?|results?|discussion|"
+    r"conclusions?|references|acknowledgements?|appendix|前言|摘要|关键词|引言|绪论|"
+    r"方法|材料|结果|讨论|结论|参考文献|致谢)\s*$",
+    re.IGNORECASE,
+)
+AUTHOR_AFFILIATION_RE = re.compile(
+    r"(?:@|(?:university|institute|college|school|department|laboratory|academy)\b|"
+    r"(?:^|[,;])\s*[A-Z][a-z]+,\s*[A-Z]\.)",
+    re.IGNORECASE,
+)
+CAPTION_OR_REFERENCE_RE = re.compile(
+    r"^\s*(?:(?:fig(?:ure)?|tab(?:le)?)\.?\s*\d+|[图表]\s*\d+)"
+    r"|^\s*(?:\[\d+\]|\d+\.)\s+[A-Z][A-Za-z .,'-]{8,}"
+    r"|(?:\b(?:journal|vol\.?|volume|issue|pp\.?|pages?|et\s+al\.|"
+    r"springer|elsevier|wiley|mdpi|science\s+direct|crossref)\b)",
+    re.IGNORECASE,
+)
+INLINE_CITATION_RE = re.compile(
+    r"(?:\[[0-9,\-\s]{1,24}\]|\b[A-Z][A-Za-z-]+\s+et\s+al\.|\([A-Z][A-Za-z-]+,?\s+\d{4}\))",
+    re.IGNORECASE,
+)
+PROSE_CUE_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being|calculated|defined|shown|used|obtained|given|"
+    r"according|model|models|result|results|specimen|specimens|sample|samples|paper|study)\b|"
+    r"(?:计算|得到|表示|定义|根据|其中|式中|试样|样品|模型|结果|研究|本文|如图|表明)",
+    re.IGNORECASE,
+)
 VARIABLE_GLOSS_RE = re.compile(r"\bwhere\b[^.。;；]{0,260}|其中[^.。;；]{0,260}|式中[^.。;；]{0,260}", re.IGNORECASE)
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
@@ -64,6 +106,8 @@ class FormulaCandidate:
     reference_context: str = ""
     variable_gloss: str = ""
     equation_number: str = ""
+    equation_number_status: str = ""
+    source: str = "text_layer"
 
 
 @dataclass(frozen=True)
@@ -287,6 +331,7 @@ def extract_formula_candidates(
                 confidence = _candidate_confidence(raw_text, bbox, font_names, span_flags)
                 if confidence < min_confidence:
                     continue
+                equation_number = _extract_equation_number(raw_text)
                 page_candidates.append(
                     FormulaCandidate(
                         page_num=page_num,
@@ -297,7 +342,8 @@ def extract_formula_candidates(
                         span_flags=tuple(sorted(span_flags)),
                         reference_context=_extract_reference_context(page_text, raw_text),
                         variable_gloss=_extract_variable_gloss(page_text, raw_text),
-                        equation_number=_extract_equation_number(raw_text),
+                        equation_number=equation_number,
+                        equation_number_status="provided" if equation_number else "missing",
                     )
                 )
             page_candidates.sort(key=lambda c: c.confidence, reverse=True)
@@ -358,8 +404,9 @@ def recognize_formulas(
                     raw_text=candidate.raw_text,
                     reference_context=candidate.reference_context,
                     equation_number=candidate.equation_number,
+                    equation_number_status=candidate.equation_number_status,
                     variable_gloss=candidate.variable_gloss,
-                    source="text_block",
+                    source=candidate.source,
                     provider=getattr(provider, "name", "unknown"),
                 )
             )
@@ -467,7 +514,7 @@ def _candidate_confidence(
 ) -> float:
     if len(text) < 4 or len(text) > 900:
         return 0.0
-    if NOISE_RE.search(text):
+    if _is_likely_non_formula_text(text):
         return 0.0
 
     x0, y0, x1, y1 = bbox
@@ -499,6 +546,41 @@ def _candidate_confidence(
         score -= 0.25
 
     return max(0.0, min(score, 1.0))
+
+
+def _is_likely_non_formula_text(text: str) -> bool:
+    """Reject common paper metadata/prose blocks before they reach OCR."""
+    normalized = _normalize_space(text)
+    if not normalized:
+        return True
+    symbol_hits = len(MATH_SYMBOL_RE.findall(normalized))
+    word_hits = len(WORD_RE.findall(normalized))
+    has_relation = bool(MATH_RELATION_RE.search(normalized))
+    has_equation_number = bool(TRAILING_EQUATION_NUMBER_RE.search(normalized))
+    math_signal = symbol_hits >= 2 or has_relation
+    if SECTION_HEADING_RE.fullmatch(normalized):
+        return True
+    if NOISE_RE.search(normalized) and not math_signal:
+        return True
+    if AUTHOR_AFFILIATION_RE.search(normalized) and not math_signal:
+        return True
+    if CAPTION_OR_REFERENCE_RE.search(normalized) and not math_signal:
+        return True
+    if INLINE_CITATION_RE.search(normalized) and not math_signal:
+        return True
+    if _looks_like_doi_or_url(normalized):
+        return True
+    if has_equation_number and not math_signal and word_hits >= 4:
+        return True
+    if word_hits >= 18 and symbol_hits < 3:
+        return True
+    if word_hits >= 8 and PROSE_CUE_RE.search(normalized) and symbol_hits < 2:
+        return True
+    return False
+
+
+def _looks_like_doi_or_url(text: str) -> bool:
+    return bool(re.search(r"(?:https?://|www\.|doi\s*:|10\.\d{4,9}/)", text, re.IGNORECASE))
 
 
 def _has_math_font(font_names: set[str]) -> bool:
@@ -574,8 +656,15 @@ def _extract_variable_gloss(page_text: str, raw_text: str) -> str:
 def _extract_equation_number(raw_text: str) -> str:
     match = EQUATION_NUMBER_RE.search(raw_text)
     if match is None:
-        return ""
-    number = match.group("eq") or match.group("tail")
+        match = TRAILING_EQUATION_NUMBER_RE.search(raw_text)
+        if match is None:
+            return ""
+        before_number = raw_text[:match.start()]
+        if not (MATH_RELATION_RE.search(before_number) or len(MATH_SYMBOL_RE.findall(before_number)) >= 2):
+            return ""
+        number = match.group("number")
+    else:
+        number = match.group("eq") or match.group("tail")
     return f"({number})" if number else ""
 
 
