@@ -387,6 +387,26 @@ def index_formulas(
         bool,
         Field(description="Delete existing formula chunks before writing new ones"),
     ] = True,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Maximum OCR provider calls allowed for this formula backfill run", ge=0),
+    ] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume after this Zotero item key; useful for daily incremental backfill"),
+    ] = None,
+    stop_on_quota: Annotated[
+        bool,
+        Field(description="Stop the batch on quota/rate-limit/balance errors"),
+    ] = True,
+    status_jsonl: Annotated[
+        str | None,
+        Field(description="Append per-item formula backfill status rows to this JSONL path"),
+    ] = None,
+    low_confidence_threshold: Annotated[
+        float | None,
+        Field(description="Queue formulas below this confidence for review", ge=0.0, le=1.0),
+    ] = None,
 ) -> dict:
     """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
     if not _index_lock.acquire(blocking=False):
@@ -417,6 +437,11 @@ def index_formulas(
                 item_keys=item_keys,
                 limit=limit,
                 refresh_existing=refresh_existing,
+                daily_call_budget=daily_call_budget,
+                resume_after=resume_after,
+                stop_on_quota=stop_on_quota,
+                status_jsonl=status_jsonl,
+                low_confidence_threshold=low_confidence_threshold,
             )
         except (
             ConfigDriftError,

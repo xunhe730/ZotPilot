@@ -846,6 +846,78 @@ def cmd_index(args):
     return 1 if result["failed"] > 0 and result["indexed"] == 0 else 0
 
 
+def cmd_index_formulas(args):
+    """Backfill formula chunks for already-indexed Zotero items."""
+    from .indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
+    from .vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+    )
+
+    config = resolve_runtime_config(args.config)
+    errors = config.validate()
+    blocking_errors, api_warnings = _split_validate_errors(errors)
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    for w in api_warnings:
+        print(f"Warning: {w} (configure with `zotpilot setup` or `zotpilot config set ...`)", file=sys.stderr)
+    if not config.formula_ocr_enabled:
+        print("Error: formula_ocr_enabled must be true before running index-formulas", file=sys.stderr)
+        return 1
+
+    from .index_authority import IndexLease, LeaseContentionError, acquire_lease, release_lease
+
+    lease = IndexLease(index_lease_path(config))
+    try:
+        acquire_lease(lease)
+    except LeaseContentionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    indexer = Indexer(config)
+    try:
+        result = indexer.index_formulas(
+            item_key=args.item_key,
+            item_keys=args.item_keys,
+            limit=args.limit,
+            refresh_existing=args.refresh_existing,
+            daily_call_budget=args.daily_call_budget,
+            resume_after=args.resume_after,
+            stop_on_quota=args.stop_on_quota,
+            status_jsonl=args.status_jsonl,
+            low_confidence_threshold=args.low_confidence_threshold,
+        )
+    except (
+        ConfigDriftError,
+        FormulaProviderUnavailableError,
+        IndexUnavailableError,
+        EmbeddingDimensionMismatchError,
+        ValueError,
+    ) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        release_lease(lease)
+
+    print("\nFormula backfill complete:")
+    print(f"  Processed:          {result['processed']}")
+    print(f"  Formulas indexed:   {result['formulas_indexed']}")
+    print(f"  OCR calls used:     {result.get('provider_calls_used', 0)}")
+    if result.get("daily_call_budget") is not None:
+        print(f"  Budget remaining:   {result.get('daily_call_budget_remaining')}")
+    if result.get("stopped_reason"):
+        print(f"  Stopped:            {result['stopped_reason']}")
+        if result.get("next_item_key"):
+            print(f"  Resume from after:  {result['next_item_key']}")
+    if result.get("low_confidence_review_count"):
+        print(f"  Review queue:       {result['low_confidence_review_count']}")
+    return 0
+
+
 def cmd_status(args):
     """Show configuration and index stats."""
     from . import __version__
@@ -1226,6 +1298,8 @@ _SCALAR_TYPES = {
     "formula_ocr_max_formulas_per_doc": int,
     "formula_ocr_max_formulas_per_page": int,
     "formula_ocr_min_confidence": float,
+    "formula_ocr_daily_call_budget": int,
+    "formula_ocr_low_confidence_threshold": float,
     "formula_ocr_simpletex_timeout": float,
     "formula_ocr_simpletex_min_interval": float,
     "formula_ocr_simpletex_max_retries": int,
@@ -1841,6 +1915,63 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)
+
+    # formula backfill
+    sub_formula = subparsers.add_parser(
+        "index-formulas",
+        help="Backfill formula chunks for already-indexed papers",
+    )
+    sub_formula.add_argument("--item-key", type=str, default=None, help="Backfill one Zotero item")
+    sub_formula.add_argument("--item-keys", nargs="+", default=None, help="Backfill these Zotero items")
+    sub_formula.add_argument("--limit", type=int, default=None, help="Max already-indexed papers to process")
+    sub_formula.add_argument(
+        "--no-refresh-existing",
+        dest="refresh_existing",
+        action="store_false",
+        help="Keep existing formula chunks and append new results",
+    )
+    sub_formula.set_defaults(refresh_existing=True)
+    sub_formula.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Maximum OCR provider calls allowed in this run",
+    )
+    sub_formula.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume after this Zotero item key",
+    )
+    sub_formula.add_argument(
+        "--stop-on-quota",
+        dest="stop_on_quota",
+        action="store_true",
+        default=True,
+        help="Stop on quota/rate-limit/balance errors",
+    )
+    sub_formula.add_argument(
+        "--no-stop-on-quota",
+        dest="stop_on_quota",
+        action="store_false",
+        help="Raise quota/rate-limit errors instead of stopping the batch",
+    )
+    sub_formula.add_argument(
+        "--status-jsonl",
+        nargs="?",
+        const="",
+        default=None,
+        help="Append per-item formula backfill status rows to JSONL",
+    )
+    sub_formula.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=None,
+        help="Queue formulas below this confidence for review",
+    )
+    sub_formula.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_formula.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
+    sub_formula.set_defaults(func=cmd_index_formulas)
 
     # status
     sub_status = subparsers.add_parser("status", help="Show config and index stats")

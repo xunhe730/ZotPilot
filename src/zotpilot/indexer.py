@@ -93,6 +93,34 @@ def _progress_counts(counts: dict) -> dict[str, object]:
     return payload
 
 
+def _looks_like_formula_quota_error(e: Exception) -> bool:
+    """Best-effort formula OCR quota/rate-limit classifier."""
+    message = str(e).lower()
+    return any(
+        marker in message
+        for marker in (
+            "402",
+            "429",
+            "balance",
+            "insufficient",
+            "limit",
+            "quota",
+            "rate",
+            "too many requests",
+        )
+    )
+
+
+def _append_formula_backfill_status(path: Path | str | None, payload: dict) -> None:
+    """Append one formula backfill status event as JSONL."""
+    if path is None:
+        return
+    status_path = Path(path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    with status_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 class ConfigDriftError(RuntimeError):
     """Raised when the persisted index config hash differs from the current config.
 
@@ -235,31 +263,55 @@ class Indexer:
                 "then rerun indexing; or set formula_ocr_enabled=false."
             ) from e
 
-    def _recognize_formulas_for_item(self, item: ZoteroItem):
+    def _formula_cache_paths_for_item(self, item: ZoteroItem) -> tuple[Path | str, ...]:
+        """Resolve cached formula sidecars for one Zotero item."""
+        cache_path_resolver = getattr(self.zotero, "mineru_cache_paths_for_item", None)
+        if not callable(cache_path_resolver):
+            return ()
+        try:
+            return tuple(cache_path_resolver(item.item_key, pdf_path=item.pdf_path))
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve MinerU formula cache paths for %s: %s",
+                item.item_key,
+                exc,
+            )
+            return ()
+
+    def _extract_formula_candidates_for_item(self, item: ZoteroItem):
+        """Extract formula candidates before deciding whether OCR can run."""
+        if item.pdf_path is None or not item.pdf_path.exists():
+            return []
+        from .feature_extraction.formula_ocr import extract_formula_candidates
+
+        return extract_formula_candidates(
+            item.pdf_path,
+            candidate_provider=self._get_formula_candidate_provider(),
+            item_key=item.item_key,
+            cache_paths=self._formula_cache_paths_for_item(item),
+            max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
+            max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
+            min_confidence=self.config.formula_ocr_min_confidence,
+        )
+
+    def _recognize_formulas_for_item(self, item: ZoteroItem, *, candidates=None):
         """Run text-layer formula OCR for one item if possible."""
         if item.pdf_path is None or not item.pdf_path.exists():
             return []
-        from .feature_extraction.formula_ocr import recognize_formulas
+        from .feature_extraction.formula_ocr import count_formula_provider_calls, recognize_formulas
 
-        cache_paths: tuple[Path | str, ...] = ()
-        cache_path_resolver = getattr(self.zotero, "mineru_cache_paths_for_item", None)
-        if callable(cache_path_resolver):
-            try:
-                cache_paths = tuple(cache_path_resolver(item.item_key, pdf_path=item.pdf_path))
-            except Exception as exc:
-                logger.warning(
-                    "Failed to resolve MinerU formula cache paths for %s: %s",
-                    item.item_key,
-                    exc,
-                )
         candidate_provider_name = getattr(self.config, "formula_candidate_provider", "text_layer")
-        provider = None if candidate_provider_name == "mineru_cache" else self._get_formula_provider()
+        provider = None
+        if candidate_provider_name != "mineru_cache":
+            if candidates is None or count_formula_provider_calls(candidates) > 0:
+                provider = self._get_formula_provider()
         return recognize_formulas(
             item.pdf_path,
             provider,
+            candidates=candidates,
             candidate_provider=self._get_formula_candidate_provider(),
             item_key=item.item_key,
-            cache_paths=cache_paths,
+            cache_paths=self._formula_cache_paths_for_item(item),
             max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
             max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
             min_confidence=self.config.formula_ocr_min_confidence,
@@ -272,12 +324,44 @@ class Indexer:
         item_keys: list[str] | None = None,
         limit: int | None = None,
         refresh_existing: bool = True,
+        daily_call_budget: int | None = None,
+        resume_after: str | None = None,
+        stop_on_quota: bool = True,
+        status_jsonl: Path | str | None = None,
+        low_confidence_threshold: float | None = None,
     ) -> dict:
         """Backfill formula chunks for already-indexed documents."""
         if not self.config.formula_ocr_enabled:
             raise ValueError("formula_ocr_enabled must be true before running formula backfill")
-        self._ensure_formula_provider_available()
+        if daily_call_budget is None:
+            daily_call_budget = getattr(self.config, "formula_ocr_daily_call_budget", None)
+        if low_confidence_threshold is None:
+            low_confidence_threshold = getattr(
+                self.config,
+                "formula_ocr_low_confidence_threshold",
+                None,
+            )
+        if daily_call_budget is not None and daily_call_budget < 0:
+            raise ValueError("daily_call_budget must be >= 0")
+        if (
+            low_confidence_threshold is not None
+            and not 0.0 <= low_confidence_threshold <= 1.0
+        ):
+            raise ValueError("low_confidence_threshold must be between 0.0 and 1.0")
+        preextract_for_run = (
+            daily_call_budget is not None
+            or resume_after is not None
+            or status_jsonl is not None
+            or low_confidence_threshold is not None
+            or getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+        )
+        provider_preflight_done = False
+        if not preextract_for_run:
+            self._ensure_formula_provider_available()
+            provider_preflight_done = True
         self._assert_config_hash_current()
+
+        from .feature_extraction.formula_ocr import count_formula_provider_calls
 
         indexed_ids = self.store.get_indexed_doc_ids()
         items = [
@@ -289,11 +373,56 @@ class Indexer:
         if item_keys:
             wanted = set(item_keys)
             items = [item for item in items if item.item_key in wanted]
+        resume_after_found = resume_after is None
+        skipped_before_resume = 0
+        if resume_after is not None:
+            filtered_items = []
+            for item in items:
+                if resume_after_found:
+                    filtered_items.append(item)
+                elif item.item_key == resume_after:
+                    resume_after_found = True
+                    skipped_before_resume += 1
+                else:
+                    skipped_before_resume += 1
+            items = filtered_items
         if limit:
             items = items[:limit]
 
         results = []
+        provider_calls_used = 0
+        budget_exhausted = False
+        stopped_reason = ""
+        next_item_key = None
+        low_confidence_review_queue: list[dict] = []
+        if status_jsonl == "":
+            status_jsonl = Path(self.config.chroma_db_path).parent / "formula_backfill_status.jsonl"
         for item in items:
+            candidates = (
+                self._extract_formula_candidates_for_item(item)
+                if preextract_for_run
+                else None
+            )
+            provider_calls = count_formula_provider_calls(candidates) if candidates is not None else 0
+            if (
+                daily_call_budget is not None
+                and provider_calls_used + provider_calls > daily_call_budget
+            ):
+                budget_exhausted = True
+                stopped_reason = "daily_call_budget_exhausted"
+                next_item_key = item.item_key
+                break
+            if (
+                provider_calls > 0
+                and daily_call_budget is None
+                and getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+            ):
+                raise ValueError(
+                    "daily_call_budget must be set before running SimpleTex formula backfill"
+                )
+            if provider_calls > 0 and not provider_preflight_done:
+                self._ensure_formula_provider_available()
+                provider_preflight_done = True
             journal_quartile = self.journal_ranker.lookup(item.publication)
             doc_meta = {
                 "title": item.title,
@@ -308,7 +437,18 @@ class Indexer:
                 "pdf_hash": self._pdf_hash(item.pdf_path),
                 "quality_grade": "",
             }
-            formulas = self._recognize_formulas_for_item(item)
+            try:
+                if candidates is None:
+                    formulas = self._recognize_formulas_for_item(item)
+                else:
+                    formulas = self._recognize_formulas_for_item(item, candidates=candidates)
+            except Exception as exc:
+                if stop_on_quota and _looks_like_formula_quota_error(exc):
+                    stopped_reason = "formula_provider_quota_or_rate_limit"
+                    next_item_key = item.item_key
+                    break
+                raise
+            provider_calls_used += provider_calls
             existing_formula_count = self._count_existing_formulas(item.item_key) if refresh_existing else 0
             kept_existing = 0
             if refresh_existing and formulas:
@@ -322,16 +462,58 @@ class Indexer:
                 )
             if formulas:
                 self.store.add_formulas(item.item_key, doc_meta, formulas)
-            results.append({
+            review_rows = []
+            if low_confidence_threshold is not None:
+                for formula in formulas:
+                    if formula.confidence is not None and formula.confidence < low_confidence_threshold:
+                        review_rows.append(
+                            {
+                                "item_key": item.item_key,
+                                "title": item.title,
+                                "page_num": formula.page_num,
+                                "formula_index": formula.formula_index,
+                                "equation_number": formula.equation_number,
+                                "confidence": formula.confidence,
+                                "provider": formula.provider,
+                            }
+                        )
+                low_confidence_review_queue.extend(review_rows)
+            row = {
                 "item_key": item.item_key,
                 "title": item.title,
                 "n_formulas": len(formulas),
                 "existing_formulas_kept": kept_existing,
-            })
+                "provider_calls": provider_calls,
+                "low_confidence_review": len(review_rows),
+            }
+            results.append(row)
+            _append_formula_backfill_status(
+                status_jsonl,
+                {
+                    "item_key": item.item_key,
+                    "status": "indexed",
+                    "n_formulas": len(formulas),
+                    "provider_calls": provider_calls,
+                    "low_confidence_review": len(review_rows),
+                },
+            )
 
         return {
             "processed": len(results),
             "formulas_indexed": sum(row["n_formulas"] for row in results),
+            "provider_calls_used": provider_calls_used,
+            "daily_call_budget": daily_call_budget,
+            "daily_call_budget_remaining": (
+                None if daily_call_budget is None else max(daily_call_budget - provider_calls_used, 0)
+            ),
+            "budget_exhausted": budget_exhausted,
+            "stopped_reason": stopped_reason,
+            "next_item_key": next_item_key,
+            "resume_after": resume_after,
+            "resume_after_found": resume_after_found,
+            "skipped_before_resume": skipped_before_resume,
+            "low_confidence_review_count": len(low_confidence_review_queue),
+            "low_confidence_review_queue": low_confidence_review_queue,
             "results": results,
         }
 

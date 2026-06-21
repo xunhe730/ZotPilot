@@ -94,6 +94,8 @@ class TestConfigSet:
         assert _coerce_value("formula_ocr_simpletex_timeout", "12.5") == 12.5
         assert _coerce_value("formula_ocr_simpletex_min_interval", "0.25") == 0.25
         assert _coerce_value("formula_ocr_simpletex_max_retries", "3") == 3
+        assert _coerce_value("formula_ocr_daily_call_budget", "1800") == 1800
+        assert _coerce_value("formula_ocr_low_confidence_threshold", "0.5") == 0.5
 
 
 class TestConfigCommand:

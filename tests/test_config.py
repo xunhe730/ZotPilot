@@ -52,6 +52,8 @@ class TestConfigLoadDefaults:
         assert cfg.formula_ocr_max_formulas_per_doc == 40
         assert cfg.formula_ocr_max_formulas_per_page == 6
         assert cfg.formula_ocr_min_confidence == 0.6
+        assert cfg.formula_ocr_daily_call_budget is None
+        assert cfg.formula_ocr_low_confidence_threshold is None
         assert cfg.formula_ocr_simpletex_token is None
         assert cfg.formula_ocr_simpletex_app_id is None
         assert cfg.formula_ocr_simpletex_app_secret is None
@@ -84,6 +86,23 @@ class TestConfigLoadFromFile:
         assert cfg.zotero_user_id == "12345"
         assert cfg.openalex_email == "user@example.com"
         assert cfg.gemini_api_key is None
+
+    def test_load_formula_backfill_scheduler_fields(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "formula_ocr_daily_call_budget": 1800,
+                    "formula_ocr_low_confidence_threshold": 0.5,
+                }
+            )
+        )
+
+        cfg = Config.load(path=config_file)
+
+        assert cfg.formula_ocr_daily_call_budget == 1800
+        assert cfg.formula_ocr_low_confidence_threshold == 0.5
 
     def test_dashscope_vision_provider_gets_qwen_default_model(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)

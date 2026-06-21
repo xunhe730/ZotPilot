@@ -544,6 +544,37 @@ def is_high_quality_formula_latex(latex: str) -> bool:
     return symbol_hits >= 2 or has_latex_command or (has_assignment and has_math_variable)
 
 
+def formula_candidate_needs_ocr(candidate: FormulaCandidate) -> bool:
+    """Return true when a candidate has no reusable cached LaTeX."""
+    return not is_high_quality_formula_latex(candidate.latex.strip())
+
+
+def count_formula_provider_calls(candidates: list[FormulaCandidate]) -> int:
+    """Count OCR provider calls needed for a candidate list.
+
+    Cached LaTeX candidates are intentionally zero-cost. They should not open
+    the PDF, call SimpleTex/local OCR, or count against a daily call budget.
+    """
+    return sum(1 for candidate in candidates if formula_candidate_needs_ocr(candidate))
+
+
+def _looks_like_formula_provider_quota_error(e: Exception) -> bool:
+    message = str(e).lower()
+    return any(
+        marker in message
+        for marker in (
+            "402",
+            "429",
+            "balance",
+            "insufficient",
+            "limit",
+            "quota",
+            "rate",
+            "too many requests",
+        )
+    )
+
+
 def extract_formula_candidates(
     pdf_path: Path | str,
     *,
@@ -639,6 +670,7 @@ def recognize_formulas(
     pdf_path: Path | str,
     provider: FormulaOCRProvider | None,
     *,
+    candidates: list[FormulaCandidate] | None = None,
     candidate_provider: str | FormulaCandidateProvider = "text_layer",
     item_key: str | None = None,
     cache_paths: tuple[Path | str, ...] | None = None,
@@ -649,16 +681,17 @@ def recognize_formulas(
 ) -> list[ExtractedFormula]:
     """Detect text-layer formula candidates and OCR them with the provider."""
     formulas: list[ExtractedFormula] = []
-    candidates = extract_formula_candidates(
-        pdf_path,
-        candidate_provider=candidate_provider,
-        item_key=item_key,
-        cache_paths=cache_paths,
-        cache_dirs=cache_dirs,
-        max_formulas_per_doc=max_formulas_per_doc,
-        max_formulas_per_page=max_formulas_per_page,
-        min_confidence=min_confidence,
-    )
+    if candidates is None:
+        candidates = extract_formula_candidates(
+            pdf_path,
+            candidate_provider=candidate_provider,
+            item_key=item_key,
+            cache_paths=cache_paths,
+            cache_dirs=cache_dirs,
+            max_formulas_per_doc=max_formulas_per_doc,
+            max_formulas_per_page=max_formulas_per_page,
+            min_confidence=min_confidence,
+        )
     if not candidates:
         return []
 
@@ -681,6 +714,8 @@ def recognize_formulas(
             try:
                 result = provider.recognize(crop)
             except Exception as e:
+                if _looks_like_formula_provider_quota_error(e):
+                    raise
                 logger.warning(
                     "Formula OCR provider %s failed on page %d: %s",
                     getattr(provider, "name", "unknown"),

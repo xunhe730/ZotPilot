@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from zotpilot.cli import cmd_index, cmd_register, cmd_setup, cmd_sync, cmd_update
+from zotpilot.cli import cmd_index, cmd_index_formulas, cmd_register, cmd_setup, cmd_sync, cmd_update
 from zotpilot.runtime_settings import resolve_runtime_settings
 
 
@@ -278,6 +278,60 @@ class TestIndexCli:
 
         assert rc == 0
         assert indexer.index_all.call_args.kwargs["batch_size"] == 2
+
+    def test_index_formulas_cli_forwards_scheduler_options(self, tmp_path, monkeypatch):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config = MagicMock()
+        config.validate.return_value = []
+        config.formula_ocr_enabled = True
+        config.chroma_db_path = tmp_path / "chroma"
+
+        indexer = MagicMock()
+        indexer.index_formulas.return_value = {
+            "processed": 0,
+            "formulas_indexed": 0,
+            "provider_calls_used": 0,
+            "budget_exhausted": False,
+            "stopped_reason": "",
+            "results": [],
+        }
+
+        args = type(
+            "Args",
+            (),
+            {
+                "config": None,
+                "verbose": False,
+                "item_key": None,
+                "item_keys": ["DOC1", "DOC2"],
+                "limit": 10,
+                "refresh_existing": True,
+                "daily_call_budget": 1800,
+                "resume_after": "DOC1",
+                "stop_on_quota": False,
+                "status_jsonl": str(tmp_path / "formula_status.jsonl"),
+                "low_confidence_threshold": 0.5,
+            },
+        )()
+
+        with (
+            patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+            patch("zotpilot.indexer.Indexer", return_value=indexer),
+        ):
+            rc = cmd_index_formulas(args)
+
+        assert rc == 0
+        assert indexer.index_formulas.call_args.kwargs == {
+            "item_key": None,
+            "item_keys": ["DOC1", "DOC2"],
+            "limit": 10,
+            "refresh_existing": True,
+            "daily_call_budget": 1800,
+            "resume_after": "DOC1",
+            "stop_on_quota": False,
+            "status_jsonl": str(tmp_path / "formula_status.jsonl"),
+            "low_confidence_threshold": 0.5,
+        }
 
 
 class TestRegister:

@@ -1,4 +1,5 @@
 """Tests for the Indexer pipeline — specifically P0-3 ReDoS protection."""
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +120,66 @@ class TestFormulaBackfill:
             formula_ocr_max_formulas_per_doc=40,
             formula_ocr_max_formulas_per_page=6,
             formula_ocr_min_confidence=0.6,
+            formula_candidate_provider="text_layer",
+        )
+
+    def _make_formula_item(self, tmp_path, key: str, title: str = "Paper"):
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / f"{key}.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        return ZoteroItem(
+            item_key=key,
+            title=title,
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+            citation_key=f"{key.lower()}2024",
+            publication="Nature",
+        )
+
+    def _make_indexer_for_formula_backfill(self, items):
+        from zotpilot.indexer import Indexer
+
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {item.item_key for item in items}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = list(items)
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._count_existing_formulas = MagicMock(return_value=0)
+        return indexer
+
+    def _formula_candidate(self, *, latex: str = "", confidence: float = 0.9):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+
+        return FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 10, 10),
+            raw_text="E = mc^2",
+            confidence=confidence,
+            equation_number="1",
+            equation_number_status="provided",
+            latex=latex,
+        )
+
+    def _extracted_formula(self, *, confidence: float | None = 0.9, provider: str = "local"):
+        from zotpilot.models import ExtractedFormula
+
+        return ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            confidence=confidence,
+            equation_number="1",
+            equation_number_status="provided",
+            provider=provider,
         )
 
     def test_backfill_requires_existing_matching_config_hash(self, tmp_path):
@@ -181,6 +242,126 @@ class TestFormulaBackfill:
         indexer._assert_config_hash_current.assert_called_once()
         indexer.store.delete_chunks_by_type.assert_called_once_with("DOC1", "formula")
         indexer.store.add_formulas.assert_called_once()
+
+    def test_formula_backfill_daily_budget_stops_before_next_ocr_call(self, tmp_path):
+        item1 = self._make_formula_item(tmp_path, "DOC1", "Paper 1")
+        item2 = self._make_formula_item(tmp_path, "DOC2", "Paper 2")
+        indexer = self._make_indexer_for_formula_backfill([item1, item2])
+        candidate1 = self._formula_candidate()
+        candidate2 = self._formula_candidate()
+        formula1 = self._extracted_formula()
+        indexer._extract_formula_candidates_for_item = MagicMock(side_effect=[[candidate1], [candidate2]])
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula1])
+
+        result = indexer.index_formulas(daily_call_budget=1)
+
+        assert result["processed"] == 1
+        assert result["provider_calls_used"] == 1
+        assert result["daily_call_budget_remaining"] == 0
+        assert result["budget_exhausted"] is True
+        assert result["stopped_reason"] == "daily_call_budget_exhausted"
+        assert result["next_item_key"] == "DOC2"
+        indexer._recognize_formulas_for_item.assert_called_once_with(item1, candidates=[candidate1])
+        indexer.store.add_formulas.assert_called_once()
+
+    def test_formula_backfill_cached_latex_does_not_spend_daily_budget(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        cached_candidate = self._formula_candidate(latex=r"E = mc^2")
+        cached_formula = self._extracted_formula(provider="cache")
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[cached_candidate])
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[cached_formula])
+
+        result = indexer.index_formulas(daily_call_budget=0)
+
+        assert result["processed"] == 1
+        assert result["provider_calls_used"] == 0
+        assert result["daily_call_budget_remaining"] == 0
+        assert result["budget_exhausted"] is False
+        indexer._ensure_formula_provider_available.assert_not_called()
+        indexer._recognize_formulas_for_item.assert_called_once_with(item, candidates=[cached_candidate])
+        indexer.store.add_formulas.assert_called_once()
+
+    def test_formula_backfill_resume_after_skips_processed_prefix(self, tmp_path):
+        item1 = self._make_formula_item(tmp_path, "DOC1", "Paper 1")
+        item2 = self._make_formula_item(tmp_path, "DOC2", "Paper 2")
+        indexer = self._make_indexer_for_formula_backfill([item1, item2])
+        candidate = self._formula_candidate()
+        formula = self._extracted_formula()
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        result = indexer.index_formulas(resume_after="DOC1")
+
+        assert result["processed"] == 1
+        assert result["resume_after_found"] is True
+        assert result["skipped_before_resume"] == 1
+        assert result["results"][0]["item_key"] == "DOC2"
+        indexer._recognize_formulas_for_item.assert_called_once_with(item2, candidates=[candidate])
+
+    def test_formula_backfill_quota_error_stops_without_writing_current_item(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        candidate = self._formula_candidate()
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
+        indexer._recognize_formulas_for_item = MagicMock(side_effect=RuntimeError("HTTP 429 quota exceeded"))
+
+        result = indexer.index_formulas(daily_call_budget=10, stop_on_quota=True)
+
+        assert result["processed"] == 0
+        assert result["stopped_reason"] == "formula_provider_quota_or_rate_limit"
+        assert result["next_item_key"] == "DOC1"
+        assert result["budget_exhausted"] is False
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.delete_chunks_by_type.assert_not_called()
+
+    def test_formula_backfill_low_confidence_results_are_queued_for_review(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        candidate = self._formula_candidate()
+        formula = self._extracted_formula(confidence=0.35)
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        result = indexer.index_formulas(low_confidence_threshold=0.5)
+
+        assert result["processed"] == 1
+        assert result["low_confidence_review_count"] == 1
+        assert result["low_confidence_review_queue"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Paper",
+                "page_num": 1,
+                "formula_index": 0,
+                "equation_number": "1",
+                "confidence": 0.35,
+                "provider": "local",
+            }
+        ]
+        indexer.store.add_formulas.assert_called_once()
+
+    def test_formula_backfill_writes_status_jsonl(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        candidate = self._formula_candidate()
+        formula = self._extracted_formula()
+        status_path = tmp_path / "formula_backfill_status.jsonl"
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        result = indexer.index_formulas(status_jsonl=status_path)
+
+        assert result["processed"] == 1
+        rows = [json.loads(line) for line in status_path.read_text(encoding="utf-8").splitlines()]
+        assert rows == [
+            {
+                "item_key": "DOC1",
+                "status": "indexed",
+                "n_formulas": 1,
+                "provider_calls": 1,
+                "low_confidence_review": 0,
+            }
+        ]
 
     def test_formula_provider_preflight_has_actionable_install_hint(self):
         from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
@@ -415,6 +596,43 @@ class TestFormulaBackfill:
              patch("zotpilot.indexer.Indexer", FakeIndexer):
             with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
                 idx_mod.index_formulas()
+
+    def test_index_formulas_tool_forwards_scheduler_options(self, tmp_path):
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = []
+        config.formula_ocr_enabled = True
+        config.chroma_db_path = tmp_path / "chroma"
+        captured_kwargs = {}
+
+        class FakeIndexer:
+            def __init__(self, _config):
+                pass
+
+            def index_formulas(self, **kwargs):
+                captured_kwargs.update(kwargs)
+                return {"processed": 0, "formulas_indexed": 0, "results": []}
+
+        status_path = tmp_path / "formula_status.jsonl"
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch.object(idx_mod, "acquire_lease"), \
+             patch.object(idx_mod, "release_lease"), \
+             patch("zotpilot.indexer.Indexer", FakeIndexer):
+            result = idx_mod.index_formulas(
+                daily_call_budget=1800,
+                resume_after="DOC1",
+                stop_on_quota=False,
+                status_jsonl=str(status_path),
+                low_confidence_threshold=0.5,
+            )
+
+        assert result["processed"] == 0
+        assert captured_kwargs["daily_call_budget"] == 1800
+        assert captured_kwargs["resume_after"] == "DOC1"
+        assert captured_kwargs["stop_on_quota"] is False
+        assert captured_kwargs["status_jsonl"] == str(status_path)
+        assert captured_kwargs["low_confidence_threshold"] == 0.5
 
     def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):
         from zotpilot.indexer import FormulaProviderUnavailableError

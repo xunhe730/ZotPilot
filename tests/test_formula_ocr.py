@@ -971,6 +971,29 @@ def test_cached_latex_does_not_open_pdf_or_call_ocr_provider(tmp_path):
     ocr_provider.recognize.assert_not_called()
 
 
+def test_recognize_formulas_reraises_quota_errors(tmp_path):
+    candidate = FormulaCandidate(
+        page_num=1,
+        bbox=(0, 0, 10, 10),
+        raw_text=r"E = mc^2",
+        confidence=0.95,
+    )
+    ocr_provider = MagicMock()
+    ocr_provider.name = "simpletex"
+    ocr_provider.recognize.side_effect = RuntimeError("HTTP 429 quota exceeded")
+    doc = MagicMock()
+    doc.__enter__.return_value = [object()]
+
+    with patch("zotpilot.feature_extraction.formula_ocr.pymupdf.open", return_value=doc), \
+         patch("zotpilot.feature_extraction.formula_ocr._render_crop", return_value=b"png"):
+        with pytest.raises(RuntimeError, match="429"):
+            recognize_formulas(
+                tmp_path / "paper.pdf",
+                ocr_provider,
+                candidates=[candidate],
+            )
+
+
 def test_extracted_formula_searchable_text_leads_with_context_before_latex():
     formula = ExtractedFormula(
         page_num=3,
