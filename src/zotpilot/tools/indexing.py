@@ -400,6 +400,14 @@ def estimate_formula_backfill(
         int | None,
         Field(description="Budget used only to estimate how many daily runs are needed", ge=0),
     ] = None,
+    sample_size: Annotated[
+        int | None,
+        Field(description="Randomly sample N matched already-indexed papers for read-only estimation", ge=0),
+    ] = None,
+    sample_seed: Annotated[
+        int,
+        Field(description="Seed for sample_size so validation batches are reproducible"),
+    ] = 0,
     candidate_preview_limit: Annotated[
         int,
         Field(description="Number of candidate previews per paper; use -1 for all", ge=-1),
@@ -426,6 +434,8 @@ def estimate_formula_backfill(
             limit=limit,
             resume_after=resume_after,
             daily_call_budget=daily_call_budget,
+            sample_size=sample_size,
+            sample_seed=sample_seed,
             candidate_preview_limit=candidate_preview_limit,
             candidate_preview_chars=candidate_preview_chars,
         )

@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import tempfile
@@ -367,41 +368,69 @@ class Indexer:
         daily_call_budget: int | None = None,
         candidate_preview_limit: int = 0,
         candidate_preview_chars: int = 160,
+        sample_size: int | None = None,
+        sample_seed: int = 0,
     ) -> dict:
         """Estimate formula OCR volume without running OCR or writing chunks."""
         if daily_call_budget is None:
             daily_call_budget = getattr(self.config, "formula_ocr_daily_call_budget", None)
         if daily_call_budget is not None and daily_call_budget < 0:
             raise ValueError("daily_call_budget must be >= 0")
+        effective_sample_size = int(sample_size or 0)
+        if effective_sample_size < 0:
+            raise ValueError("sample_size must be >= 0")
+        if effective_sample_size > 0 and (item_key or item_keys):
+            raise ValueError("sample_size can only be used without item_key or item_keys")
+        effective_sample_seed = int(sample_seed)
         self._assert_config_hash_current()
 
         from .feature_extraction.formula_ocr import count_formula_provider_calls
 
         indexed_ids = self.store.get_indexed_doc_ids()
-        items = [
-            item for item in self.zotero.get_all_items_with_pdfs()
-            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
-        ]
-        if item_key:
-            items = [item for item in items if item.item_key == item_key]
-        if item_keys:
-            wanted = set(item_keys)
-            items = [item for item in items if item.item_key in wanted]
-        resume_after_found = resume_after is None
         skipped_before_resume = 0
-        if resume_after is not None:
-            filtered_items = []
-            for item in items:
-                if resume_after_found:
-                    filtered_items.append(item)
-                elif item.item_key == resume_after:
-                    resume_after_found = True
-                    skipped_before_resume += 1
-                else:
-                    skipped_before_resume += 1
-            items = filtered_items
-        if limit is not None:
-            items = items[:limit]
+        sampled_from = 0
+        if effective_sample_size > 0:
+            candidate_keys = sorted(indexed_ids)
+            resume_after_found = resume_after is None or resume_after in set(candidate_keys)
+            if resume_after is not None:
+                candidate_keys, skipped_before_resume = self._keys_after_resume(
+                    candidate_keys,
+                    resume_after,
+                )
+            if limit is not None:
+                candidate_keys = candidate_keys[:limit]
+            sampled_from = len(candidate_keys)
+            if len(candidate_keys) > effective_sample_size:
+                candidate_keys = random.Random(effective_sample_seed).sample(
+                    candidate_keys,
+                    effective_sample_size,
+                )
+            items = self._formula_backfill_items_for_indexed_keys(candidate_keys)
+        else:
+            items = [
+                item for item in self.zotero.get_all_items_with_pdfs()
+                if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
+            ]
+            if item_key:
+                items = [item for item in items if item.item_key == item_key]
+            if item_keys:
+                wanted = set(item_keys)
+                items = [item for item in items if item.item_key in wanted]
+            resume_after_found = resume_after is None
+            if resume_after is not None:
+                filtered_items = []
+                for item in items:
+                    if resume_after_found:
+                        filtered_items.append(item)
+                    elif item.item_key == resume_after:
+                        resume_after_found = True
+                        skipped_before_resume += 1
+                    else:
+                        skipped_before_resume += 1
+                items = filtered_items
+            if limit is not None:
+                items = items[:limit]
+            sampled_from = len(items)
 
         preview_all = candidate_preview_limit < 0
         preview_limit = max(candidate_preview_limit, 0)
@@ -482,12 +511,45 @@ class Indexer:
             "resume_after": resume_after,
             "resume_after_found": resume_after_found,
             "skipped_before_resume": skipped_before_resume,
+            "sample_size": effective_sample_size,
+            "sample_seed": effective_sample_seed,
+            "sampled_from": sampled_from,
             "summary": {
                 "next_action": "Review candidates before running index-formulas.",
+                "sample_size": effective_sample_size,
+                "sample_seed": effective_sample_seed,
+                "sampled_from": sampled_from,
                 "warnings": [],
             },
             "results": results,
         }
+
+    @staticmethod
+    def _keys_after_resume(item_keys: list[str], resume_after: str) -> tuple[list[str], int]:
+        """Return keys after resume_after plus the number skipped before it."""
+        resumed_keys: list[str] = []
+        skipped_before_resume = 0
+        resume_found = False
+        for item_key in item_keys:
+            if resume_found:
+                resumed_keys.append(item_key)
+            elif item_key == resume_after:
+                resume_found = True
+                skipped_before_resume += 1
+            else:
+                skipped_before_resume += 1
+        return resumed_keys, skipped_before_resume
+
+    def _formula_backfill_items_for_indexed_keys(self, item_keys: list[str]) -> list[ZoteroItem]:
+        """Load Zotero items for selected indexed keys without scanning the full library."""
+        items: list[ZoteroItem] = []
+        for requested_key in dict.fromkeys(item_keys):
+            if not requested_key:
+                continue
+            item = self.zotero.get_item(requested_key)
+            if item is not None and item.pdf_path and item.pdf_path.exists():
+                items.append(item)
+        return items
 
     def index_formulas(
         self,

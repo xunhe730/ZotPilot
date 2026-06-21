@@ -1,5 +1,6 @@
 """Tests for the Indexer pipeline — specifically P0-3 ReDoS protection."""
 import json
+import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -393,6 +394,46 @@ class TestFormulaBackfill:
         indexer.store.add_formulas.assert_not_called()
         indexer.store.delete_chunks_by_type.assert_not_called()
 
+    def test_estimate_formula_backfill_samples_matched_items_reproducibly(self, tmp_path):
+        from zotpilot.models import ZoteroItem
+
+        items = []
+        for index in range(5):
+            pdf_path = tmp_path / f"paper-{index}.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4")
+            items.append(ZoteroItem(f"DOC{index}", f"Paper {index}", "Auth", 2024, pdf_path))
+        indexer = self._make_indexer_for_formula_backfill(items)
+        items_by_key = {item.item_key: item for item in items}
+        indexer.zotero.get_item.side_effect = lambda item_key: items_by_key.get(item_key)
+        indexer.zotero.get_all_items_with_pdfs = MagicMock(side_effect=AssertionError("full scan must not run"))
+        indexer._extract_formula_candidates_for_item = MagicMock(
+            return_value=[self._formula_candidate(latex="")]
+        )
+        expected_keys = random.Random(7).sample(sorted(items_by_key), 2)
+
+        result = indexer.estimate_formula_backfill(
+            daily_call_budget=1800,
+            sample_size=2,
+            sample_seed=7,
+        )
+
+        assert [row["item_key"] for row in result["results"]] == expected_keys
+        assert indexer.zotero.get_item.call_count == 2
+        assert result["processed"] == 2
+        assert result["sample_size"] == 2
+        assert result["sample_seed"] == 7
+        assert result["sampled_from"] == 5
+        assert result["summary"]["sample_size"] == 2
+        assert result["summary"]["sample_seed"] == 7
+        assert result["summary"]["sampled_from"] == 5
+
+    def test_estimate_formula_backfill_rejects_sample_with_explicit_item_keys(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+
+        with pytest.raises(ValueError, match="without item_key or item_keys"):
+            indexer.estimate_formula_backfill(item_keys=["DOC1"], sample_size=1)
+
     def test_formula_provider_preflight_has_actionable_install_hint(self):
         from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
 
@@ -682,13 +723,16 @@ class TestFormulaBackfill:
              patch.object(idx_mod, "acquire_lease") as acquire_lease, \
              patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer):
             result = idx_mod.estimate_formula_backfill(
-                item_key="DOC1",
                 daily_call_budget=10,
+                sample_size=2,
+                sample_seed=7,
             )
 
         assert result["processed"] == 0
-        assert captured_kwargs["item_key"] == "DOC1"
+        assert captured_kwargs["item_key"] is None
         assert captured_kwargs["daily_call_budget"] == 10
+        assert captured_kwargs["sample_size"] == 2
+        assert captured_kwargs["sample_seed"] == 7
         acquire_lease.assert_not_called()
 
     def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):

@@ -948,6 +948,10 @@ def _print_formula_backfill_estimate(result: dict) -> None:
     if result.get("resume_after"):
         print(f"  Resume after:              {result.get('resume_after')}")
         print(f"  Resume key found:          {'yes' if result.get('resume_after_found') else 'no'}")
+    if result.get("sample_size"):
+        print(f"  Sample size:               {result.get('sample_size')}")
+        print(f"  Sample seed:               {result.get('sample_seed')}")
+        print(f"  Sampled from:              {result.get('sampled_from')}")
 
     warnings = result.get("summary", {}).get("warnings", [])
     if warnings:
@@ -997,6 +1001,8 @@ def cmd_estimate_formula_backfill(args):
             daily_call_budget=args.daily_call_budget,
             candidate_preview_limit=preview_limit,
             candidate_preview_chars=args.preview_chars,
+            sample_size=args.sample_size,
+            sample_seed=args.sample_seed,
         )
     except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -2093,6 +2099,18 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="Budget used only to estimate how many daily runs are needed",
+    )
+    sub_formula_estimate.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="Randomly sample N already-indexed papers for read-only estimation",
+    )
+    sub_formula_estimate.add_argument(
+        "--sample-seed",
+        type=int,
+        default=0,
+        help="Seed for --sample-size so validation batches are reproducible",
     )
     sub_formula_estimate.add_argument(
         "--preview-candidates",

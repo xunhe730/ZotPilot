@@ -366,11 +366,13 @@ class TestIndexCli:
             (),
             {
                 "config": None,
-                "item_key": "DOC1",
+                "item_key": None,
                 "item_keys": None,
                 "limit": None,
                 "resume_after": None,
                 "daily_call_budget": 10,
+                "sample_size": 2,
+                "sample_seed": 7,
                 "preview_candidates": 1,
                 "preview_all_candidates": False,
                 "preview_chars": 160,
@@ -389,13 +391,15 @@ class TestIndexCli:
         assert "Formula backfill estimate:" in out
         assert "Candidate provider:        mineru_cache" in out
         indexer.estimate_formula_backfill.assert_called_once_with(
-            item_key="DOC1",
+            item_key=None,
             item_keys=None,
             limit=None,
             resume_after=None,
             daily_call_budget=10,
             candidate_preview_limit=1,
             candidate_preview_chars=160,
+            sample_size=2,
+            sample_seed=7,
         )
 
 
