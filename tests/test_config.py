@@ -47,6 +47,8 @@ class TestConfigLoadDefaults:
         assert cfg.zotero_user_id is None
         assert cfg.formula_ocr_enabled is False
         assert cfg.formula_ocr_provider == "local"
+        assert cfg.formula_candidate_provider == "text_layer"
+        assert cfg.formula_candidate_cache_dirs == ""
         assert cfg.formula_ocr_max_formulas_per_doc == 40
         assert cfg.formula_ocr_max_formulas_per_page == 6
         assert cfg.formula_ocr_min_confidence == 0.6
@@ -433,6 +435,13 @@ class TestOpenAICompatConfigSchema:
         errors = cfg.validate()
 
         assert any("Invalid formula_ocr_provider" in e and "'simpletex'" in e for e in errors)
+
+    def test_validate_formula_candidate_provider_uses_registry(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="bogus")
+
+        errors = cfg.validate()
+
+        assert any("Invalid formula_candidate_provider" in e and "'mineru_cache'" in e for e in errors)
 
     def test_validate_formula_limits(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(

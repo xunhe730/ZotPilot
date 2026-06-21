@@ -89,6 +89,8 @@ class TestConfigSet:
 
     def test_formula_ocr_scalars(self):
         assert _coerce_value("formula_ocr_enabled", "true") is True
+        assert _coerce_value("formula_candidate_provider", "mineru_cache") == "mineru_cache"
+        assert _coerce_value("formula_candidate_cache_dirs", "C:/cache;D:/cache") == "C:/cache;D:/cache"
         assert _coerce_value("formula_ocr_simpletex_timeout", "12.5") == 12.5
         assert _coerce_value("formula_ocr_simpletex_min_interval", "0.25") == 0.25
         assert _coerce_value("formula_ocr_simpletex_max_retries", "3") == 3

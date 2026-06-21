@@ -58,6 +58,13 @@ def _normalize_arxiv_id_text(arxiv_id: str | None) -> str | None:
     return cleaned or None
 
 
+_MINERU_CACHE_KEY_RE = re.compile(r"mineru[-_\s]*cache[-_\s]*([A-Za-z0-9]{8,12})", re.IGNORECASE)
+
+
+def _looks_like_zotero_key(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9]{8}", value.strip()))
+
+
 class ZoteroClient:
     """
     Read-only access to Zotero's SQLite database.
@@ -243,6 +250,69 @@ class ZoteroClient:
             return full_path if full_path.exists() else None
 
         return None
+
+    def mineru_cache_paths_for_item(
+        self,
+        item_key: str,
+        *,
+        pdf_path: Path | None = None,
+    ) -> list[Path]:
+        """Return local MinerU cache archives attached to an item.
+
+        When ``pdf_path`` is provided, cache archives whose names reference a
+        different PDF attachment key are ignored. This keeps multi-attachment
+        items from accidentally using a bilingual/translated PDF cache.
+        """
+        selected_pdf_key = ""
+        if pdf_path is not None and _looks_like_zotero_key(Path(pdf_path).parent.name):
+            selected_pdf_key = Path(pdf_path).parent.name.upper()
+
+        conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT attachment_items."key" AS attachmentKey,
+                       ia.linkMode,
+                       ia.path
+                FROM items base
+                JOIN itemAttachments ia ON ia.parentItemID = base.itemID
+                JOIN items attachment_items ON attachment_items.itemID = ia.itemID
+                WHERE base."key" = ?
+                  AND base.libraryID = ?
+                  AND lower(COALESCE(ia.path, '')) LIKE '%mineru%'
+                  AND (
+                      lower(COALESCE(ia.path, '')) LIKE '%.zip'
+                      OR lower(COALESCE(ia.contentType, '')) LIKE '%zip%'
+                  )
+                ORDER BY ia.itemID
+                """,
+                (item_key, self.library_id),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        paths: list[Path] = []
+        seen: set[Path] = set()
+        for row in rows:
+            raw_path = str(row["path"] or "")
+            cache_key_match = _MINERU_CACHE_KEY_RE.search(raw_path)
+            if selected_pdf_key and cache_key_match and cache_key_match.group(1).upper() != selected_pdf_key:
+                continue
+            if selected_pdf_key and not cache_key_match and selected_pdf_key.lower() not in raw_path.lower():
+                continue
+            path = self._resolve_pdf_path(raw_path, row["linkMode"], row["attachmentKey"])
+            if path is None or not path.exists():
+                continue
+            try:
+                resolved = path.resolve()
+            except OSError:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            paths.append(path)
+        return paths
 
     def get_all_items_with_pdfs(self) -> list[ZoteroItem]:
         """Get all Zotero items that have PDF attachments."""
