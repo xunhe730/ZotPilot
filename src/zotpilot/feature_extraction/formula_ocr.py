@@ -102,6 +102,7 @@ TABLE_HEADER_CUE_RE = re.compile(
 )
 LATEX_TAG_RE = re.compile(r"\\tag\s*\{\s*(?P<tag>[^{}]+?)\s*\}")
 DISPLAY_MATH_RE = re.compile(r"\$\$(?P<latex>.+?)\$\$|\\\[(?P<bracket>.+?)\\\]", re.DOTALL)
+FENCED_MATH_RE = re.compile(r"```(?:math|latex)\s*(?P<latex>.+?)```", re.DOTALL | re.IGNORECASE)
 MARKDOWN_PAGE_RE = re.compile(r"<!--\s*page\s*(?P<page>\d+)\s*-->", re.IGNORECASE)
 FORMULA_CACHE_NAMES = {"content_list.json", "content_list_v2.json", "middle.json", "manifest.json", "full.md"}
 MAX_FORMULA_CACHE_ZIP_MEMBERS = 128
@@ -372,6 +373,11 @@ class AutoFormulaCandidateProvider:
         )
 
 
+class MinerUJsonFormulaCandidateProvider(MinerUCacheFormulaCandidateProvider):
+    """Read candidates from generic MinerU JSON/Markdown output paths."""
+    name = "mineru_json"
+
+
 FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider] | type[SimpleTexFormulaOCRProvider]] = {
     "local": LocalFormulaOCRProvider,
     "simpletex": SimpleTexFormulaOCRProvider,
@@ -380,10 +386,12 @@ FORMULA_CANDIDATE_PROVIDERS: dict[
     str,
     type[TextLayerFormulaCandidateProvider]
     | type[MinerUCacheFormulaCandidateProvider]
+    | type[MinerUJsonFormulaCandidateProvider]
     | type[AutoFormulaCandidateProvider],
 ] = {
     "text_layer": TextLayerFormulaCandidateProvider,
     "mineru_cache": MinerUCacheFormulaCandidateProvider,
+    "mineru_json": MinerUJsonFormulaCandidateProvider,
     "auto": AutoFormulaCandidateProvider,
 }
 
@@ -443,6 +451,8 @@ def create_formula_candidate_provider(name: str, *, config: Any | None = None) -
         return TextLayerFormulaCandidateProvider()
     if name == "mineru_cache":
         return MinerUCacheFormulaCandidateProvider(cache_dirs=cache_dirs)
+    if name == "mineru_json":
+        return MinerUJsonFormulaCandidateProvider(cache_dirs=cache_dirs)
     return AutoFormulaCandidateProvider(cache_dirs=cache_dirs)
 
 
@@ -769,7 +779,8 @@ def _candidate_cache_paths(
 
     for root in cache_dirs:
         if root.is_file() and _is_formula_cache_path(root):
-            found.append(root)
+            if item_key is None or root.name.lower() in FORMULA_CACHE_NAMES or _cache_path_matches_keys(root, keys):
+                found.append(root)
             continue
         if not root.is_dir():
             continue
@@ -1036,8 +1047,10 @@ def _parse_mineru_markdown_candidates(path: Path) -> list[FormulaCandidate]:
 
 def _parse_mineru_markdown_text(markdown: str, *, source: str) -> list[FormulaCandidate]:
     candidates: list[FormulaCandidate] = []
-    for index, match in enumerate(DISPLAY_MATH_RE.finditer(markdown)):
-        latex = _clean_candidate_latex(match.group("latex") or match.group("bracket") or "")
+    matches = list(DISPLAY_MATH_RE.finditer(markdown)) + list(FENCED_MATH_RE.finditer(markdown))
+    matches.sort(key=lambda match: match.start())
+    for index, match in enumerate(matches):
+        latex = _clean_candidate_latex(match.groupdict().get("latex") or match.groupdict().get("bracket") or "")
         if not is_high_quality_formula_latex(latex):
             continue
         equation_number = _candidate_equation_number({"text": latex}, latex)
@@ -1099,11 +1112,18 @@ def _iter_formula_records(
 def _record_looks_like_formula(record: dict[str, Any]) -> bool:
     labels = [
         str(record.get(key) or "").lower()
-        for key in ("type", "category", "role", "block_type", "cls_name")
+        for key in ("type", "category", "role", "block_type", "cls_name", "layout_type")
     ]
     if any("equation" in label or "formula" in label for label in labels):
         return True
-    return bool(record.get("latex") or record.get("latex_styled") or record.get("formula_text"))
+    if str(record.get("text_format") or "").lower() in {"latex", "math", "equation"}:
+        return True
+    return bool(
+        record.get("latex")
+        or record.get("latex_styled")
+        or record.get("formula_text")
+        or record.get("math_content")
+    )
 
 
 def _candidate_from_formula_record(record: dict[str, Any], *, source: str) -> FormulaCandidate | None:

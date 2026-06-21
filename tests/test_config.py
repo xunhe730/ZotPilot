@@ -443,6 +443,13 @@ class TestOpenAICompatConfigSchema:
 
         assert any("Invalid formula_candidate_provider" in e and "'mineru_cache'" in e for e in errors)
 
+    def test_validate_accepts_mineru_json_formula_candidate_provider(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="mineru_json")
+
+        errors = cfg.validate()
+
+        assert not any("formula_candidate_provider" in e for e in errors)
+
     def test_validate_formula_limits(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(
             tmp_path,
