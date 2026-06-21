@@ -305,6 +305,7 @@ def test_formula_candidate_confidence_rejects_common_paper_prose_noise():
         "Keywords: ductile fracture; stress triaxiality; finite element simulation",
         "John Smith, Department of Mechanical Engineering, Example University",
         "https://doi.org/10.1016/j.ijsolstr.2024.112345",
+        "10.1016/j.ijsolstr.2024.112345",
         "Figure 3. Force-displacement curves for different specimens.",
         "The model parameters were calibrated according to Bai et al. [12].",
         "References",
@@ -321,6 +322,15 @@ def test_formula_candidate_confidence_rejects_common_paper_prose_noise():
         (10.0, 20.0, 260.0, 42.0),
         {"CMMI10"},
         {2},
+    ) > 0.0
+
+    decimal_division = "k = 10.5847/d"
+    assert not _is_likely_non_formula_text(decimal_division)
+    assert _candidate_confidence(
+        decimal_division,
+        (10.0, 20.0, 260.0, 42.0),
+        set(),
+        set(),
     ) > 0.0
 
 

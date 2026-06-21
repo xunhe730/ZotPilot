@@ -568,7 +568,9 @@ def _is_likely_non_formula_text(text: str) -> bool:
         return True
     if INLINE_CITATION_RE.search(normalized) and not math_signal:
         return True
-    if _looks_like_doi_or_url(normalized):
+    if _looks_like_explicit_doi_or_url(normalized):
+        return True
+    if _looks_like_bare_doi(normalized) and not math_signal:
         return True
     if has_equation_number and not math_signal and word_hits >= 4:
         return True
@@ -579,8 +581,12 @@ def _is_likely_non_formula_text(text: str) -> bool:
     return False
 
 
-def _looks_like_doi_or_url(text: str) -> bool:
-    return bool(re.search(r"(?:https?://|www\.|doi\s*:|10\.\d{4,9}/)", text, re.IGNORECASE))
+def _looks_like_explicit_doi_or_url(text: str) -> bool:
+    return bool(re.search(r"(?:https?://|www\.|doi\s*:)", text, re.IGNORECASE))
+
+
+def _looks_like_bare_doi(text: str) -> bool:
+    return bool(re.search(r"10\.\d{4,9}/", text, re.IGNORECASE))
 
 
 def _has_math_font(font_names: set[str]) -> bool:
