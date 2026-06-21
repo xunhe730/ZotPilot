@@ -905,6 +905,7 @@ def cmd_index_formulas(args):
             stop_on_quota=args.stop_on_quota,
             status_jsonl=args.status_jsonl,
             low_confidence_threshold=args.low_confidence_threshold,
+            include_high_density=args.include_high_density,
         )
     except (
         ConfigDriftError,
@@ -930,6 +931,8 @@ def cmd_index_formulas(args):
             print(f"  Resume from after:  {result['next_item_key']}")
     if result.get("low_confidence_review_count"):
         print(f"  Review queue:       {result['low_confidence_review_count']}")
+    if result.get("high_density_deferred_count"):
+        print(f"  High-density deferred: {result['high_density_deferred_count']}")
     return 0
 
 
@@ -1397,6 +1400,8 @@ _SCALAR_TYPES = {
     "formula_ocr_min_confidence": float,
     "formula_ocr_daily_call_budget": int,
     "formula_ocr_low_confidence_threshold": float,
+    "formula_ocr_high_density_call_threshold": int,
+    "formula_ocr_high_density_candidate_threshold": int,
     "formula_ocr_simpletex_timeout": float,
     "formula_ocr_simpletex_min_interval": float,
     "formula_ocr_simpletex_max_retries": int,
@@ -2065,6 +2070,11 @@ def main(argv: list[str] | None = None) -> int:
         type=float,
         default=None,
         help="Queue formulas below this confidence for review",
+    )
+    sub_formula.add_argument(
+        "--include-high-density",
+        action="store_true",
+        help="Allow high-density formula documents in this run after reviewing an estimate",
     )
     sub_formula.add_argument("--config", type=str, default=None, help="Config file path")
     sub_formula.add_argument("-v", "--verbose", action="store_true", help="Debug logging")

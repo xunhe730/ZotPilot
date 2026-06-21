@@ -319,6 +319,7 @@ class TestIndexCli:
                 "stop_on_quota": False,
                 "status_jsonl": str(tmp_path / "formula_status.jsonl"),
                 "low_confidence_threshold": 0.5,
+                "include_high_density": True,
             },
         )()
 
@@ -339,6 +340,7 @@ class TestIndexCli:
             "stop_on_quota": False,
             "status_jsonl": str(tmp_path / "formula_status.jsonl"),
             "low_confidence_threshold": 0.5,
+            "include_high_density": True,
         }
 
     def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_estimate(

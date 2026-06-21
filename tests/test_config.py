@@ -54,6 +54,8 @@ class TestConfigLoadDefaults:
         assert cfg.formula_ocr_min_confidence == 0.6
         assert cfg.formula_ocr_daily_call_budget is None
         assert cfg.formula_ocr_low_confidence_threshold is None
+        assert cfg.formula_ocr_high_density_call_threshold == 80
+        assert cfg.formula_ocr_high_density_candidate_threshold == 160
         assert cfg.formula_ocr_simpletex_token is None
         assert cfg.formula_ocr_simpletex_app_id is None
         assert cfg.formula_ocr_simpletex_app_secret is None
@@ -95,6 +97,8 @@ class TestConfigLoadFromFile:
                 {
                     "formula_ocr_daily_call_budget": 1800,
                     "formula_ocr_low_confidence_threshold": 0.5,
+                    "formula_ocr_high_density_call_threshold": 120,
+                    "formula_ocr_high_density_candidate_threshold": 240,
                 }
             )
         )
@@ -103,6 +107,8 @@ class TestConfigLoadFromFile:
 
         assert cfg.formula_ocr_daily_call_budget == 1800
         assert cfg.formula_ocr_low_confidence_threshold == 0.5
+        assert cfg.formula_ocr_high_density_call_threshold == 120
+        assert cfg.formula_ocr_high_density_candidate_threshold == 240
 
     def test_dashscope_vision_provider_gets_qwen_default_model(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -483,6 +489,8 @@ class TestOpenAICompatConfigSchema:
             formula_ocr_max_formulas_per_doc=-1,
             formula_ocr_max_formulas_per_page=-1,
             formula_ocr_min_confidence=1.5,
+            formula_ocr_high_density_call_threshold=-1,
+            formula_ocr_high_density_candidate_threshold=-1,
             formula_ocr_simpletex_min_interval=-0.1,
             formula_ocr_simpletex_max_retries=-1,
         )
@@ -492,6 +500,8 @@ class TestOpenAICompatConfigSchema:
         assert any("formula_ocr_max_formulas_per_doc" in e for e in errors)
         assert any("formula_ocr_max_formulas_per_page" in e for e in errors)
         assert any("formula_ocr_min_confidence" in e for e in errors)
+        assert any("formula_ocr_high_density_call_threshold" in e for e in errors)
+        assert any("formula_ocr_high_density_candidate_threshold" in e for e in errors)
         assert any("formula_ocr_simpletex_min_interval" in e for e in errors)
         assert any("formula_ocr_simpletex_max_retries" in e for e in errors)
 

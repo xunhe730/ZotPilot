@@ -149,6 +149,29 @@ def _append_formula_backfill_status(path: Path | str | None, payload: dict) -> N
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _formula_high_density_call_threshold(config: object) -> int:
+    return max(int(getattr(config, "formula_ocr_high_density_call_threshold", 80) or 0), 0)
+
+
+def _formula_high_density_candidate_threshold(config: object) -> int:
+    return max(int(getattr(config, "formula_ocr_high_density_candidate_threshold", 160) or 0), 0)
+
+
+def _formula_high_density_trigger(
+    *,
+    candidate_count: int,
+    provider_call_count: int,
+    call_threshold: int,
+    candidate_threshold: int,
+    data_egress: bool,
+) -> str:
+    if candidate_threshold > 0 and candidate_count > candidate_threshold:
+        return "candidate_count"
+    if data_egress and call_threshold > 0 and provider_call_count > call_threshold:
+        return "provider_calls"
+    return ""
+
+
 class ConfigDriftError(RuntimeError):
     """Raised when the persisted index config hash differs from the current config.
 
@@ -265,7 +288,7 @@ class Indexer:
 
     def _get_formula_provider(self):
         """Create the configured formula OCR provider lazily."""
-        if self._formula_provider is None:
+        if getattr(self, "_formula_provider", None) is None:
             from .feature_extraction.formula_ocr import create_formula_ocr_provider
 
             self._formula_provider = create_formula_ocr_provider(
@@ -276,7 +299,7 @@ class Indexer:
 
     def _get_formula_candidate_provider(self):
         """Create the configured formula candidate detector lazily."""
-        if self._formula_candidate_provider is None:
+        if getattr(self, "_formula_candidate_provider", None) is None:
             from .feature_extraction.formula_ocr import create_formula_candidate_provider
 
             self._formula_candidate_provider = create_formula_candidate_provider(
@@ -460,23 +483,56 @@ class Indexer:
         results = []
         candidate_count = 0
         estimated_provider_calls = 0
+        deferred_high_density_candidate_count = 0
+        deferred_high_density_provider_calls = 0
+        dense_formula_papers: list[dict[str, object]] = []
+        has_external_egress = getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+        high_density_call_threshold = _formula_high_density_call_threshold(self.config)
+        high_density_candidate_threshold = _formula_high_density_candidate_threshold(self.config)
         for item in items:
             candidates = self._extract_formula_candidates_for_item(item)
             provider_calls = count_formula_provider_calls(candidates)
-            candidate_count += len(candidates)
+            item_candidate_count = len(candidates)
+            candidate_count += item_candidate_count
             estimated_provider_calls += provider_calls
+            high_density_trigger = _formula_high_density_trigger(
+                candidate_count=item_candidate_count,
+                provider_call_count=provider_calls,
+                call_threshold=high_density_call_threshold,
+                candidate_threshold=high_density_candidate_threshold,
+                data_egress=has_external_egress,
+            )
             row = {
                 "item_key": item.item_key,
                 "title": item.title,
                 "status": "estimated",
-                "candidate_count": len(candidates),
+                "candidate_count": item_candidate_count,
                 "estimated_provider_calls": provider_calls,
                 "estimated_external_calls": (
                     provider_calls
-                    if getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+                    if has_external_egress
                     else 0
                 ),
             }
+            if high_density_trigger and item_key is None:
+                row["default_batch_status"] = "deferred_high_density"
+                row["high_density_trigger"] = high_density_trigger
+                row["high_density_call_threshold"] = high_density_call_threshold
+                row["high_density_candidate_threshold"] = high_density_candidate_threshold
+                deferred_high_density_candidate_count += item_candidate_count
+                deferred_high_density_provider_calls += provider_calls
+                dense_formula_papers.append(
+                    {
+                        "item_key": item.item_key,
+                        "title": item.title,
+                        "candidate_count": item_candidate_count,
+                        "estimated_provider_calls": provider_calls,
+                        "estimated_external_calls": provider_calls if has_external_egress else 0,
+                        "high_density_trigger": high_density_trigger,
+                        "high_density_call_threshold": high_density_call_threshold,
+                        "high_density_candidate_threshold": high_density_candidate_threshold,
+                    }
+                )
             if preview_all or preview_limit:
                 row["candidate_preview"] = _preview(candidates)
             results.append(row)
@@ -507,6 +563,11 @@ class Indexer:
             "estimated_min_duration": f"{estimated_seconds:.1f}s",
             "daily_call_budget": daily_call_budget,
             "estimated_runs": estimated_runs,
+            "high_density_call_threshold": high_density_call_threshold,
+            "high_density_candidate_threshold": high_density_candidate_threshold,
+            "deferred_high_density_candidate_count": deferred_high_density_candidate_count,
+            "deferred_high_density_provider_calls": deferred_high_density_provider_calls,
+            "dense_formula_papers": dense_formula_papers,
             "data_egress": external_calls > 0,
             "resume_after": resume_after,
             "resume_after_found": resume_after_found,
@@ -519,6 +580,9 @@ class Indexer:
                 "sample_size": effective_sample_size,
                 "sample_seed": effective_sample_seed,
                 "sampled_from": sampled_from,
+                "dense_formula_paper_count": len(dense_formula_papers),
+                "deferred_high_density_candidates": deferred_high_density_candidate_count,
+                "deferred_high_density_provider_calls": deferred_high_density_provider_calls,
                 "warnings": [],
             },
             "results": results,
@@ -563,6 +627,7 @@ class Indexer:
         stop_on_quota: bool = True,
         status_jsonl: Path | str | None = None,
         low_confidence_threshold: float | None = None,
+        include_high_density: bool = False,
     ) -> dict:
         """Backfill formula chunks for already-indexed documents."""
         if not self.config.formula_ocr_enabled:
@@ -582,12 +647,25 @@ class Indexer:
             and not 0.0 <= low_confidence_threshold <= 1.0
         ):
             raise ValueError("low_confidence_threshold must be between 0.0 and 1.0")
+        high_density_checks_enabled = (
+            not include_high_density
+            and item_key is None
+            and (
+                _formula_high_density_call_threshold(self.config) > 0
+                or _formula_high_density_candidate_threshold(self.config) > 0
+            )
+            and (
+                daily_call_budget is not None
+                or getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+            )
+        )
         preextract_for_run = (
             daily_call_budget is not None
             or resume_after is not None
             or status_jsonl is not None
             or low_confidence_threshold is not None
             or getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+            or high_density_checks_enabled
         )
         provider_preflight_done = False
         if not preextract_for_run:
@@ -628,6 +706,7 @@ class Indexer:
         budget_exhausted = False
         stopped_reason = ""
         next_item_key = None
+        high_density_deferred_count = 0
         low_confidence_review_queue: list[dict] = []
         if status_jsonl == "":
             status_jsonl = Path(self.config.chroma_db_path).parent / "formula_backfill_status.jsonl"
@@ -638,6 +717,44 @@ class Indexer:
                 else None
             )
             provider_calls = count_formula_provider_calls(candidates) if candidates is not None else 0
+            candidate_count = len(candidates) if candidates is not None else 0
+            high_density_trigger = _formula_high_density_trigger(
+                candidate_count=candidate_count,
+                provider_call_count=provider_calls,
+                call_threshold=_formula_high_density_call_threshold(self.config),
+                candidate_threshold=_formula_high_density_candidate_threshold(self.config),
+                data_egress=getattr(self.config, "formula_ocr_provider", "") == "simpletex",
+            )
+            if high_density_trigger and high_density_checks_enabled:
+                high_density_deferred_count += 1
+                row = {
+                    "item_key": item.item_key,
+                    "title": item.title,
+                    "status": "deferred_high_density",
+                    "reason": "high_density_formula_document",
+                    "n_formulas": 0,
+                    "existing_formulas_kept": 0,
+                    "candidate_count": candidate_count,
+                    "provider_calls": provider_calls,
+                    "low_confidence_review": 0,
+                    "high_density_trigger": high_density_trigger,
+                    "high_density_call_threshold": _formula_high_density_call_threshold(self.config),
+                    "high_density_candidate_threshold": _formula_high_density_candidate_threshold(self.config),
+                }
+                results.append(row)
+                _append_formula_backfill_status(
+                    status_jsonl,
+                    {
+                        "item_key": item.item_key,
+                        "status": "deferred_high_density",
+                        "reason": "high_density_formula_document",
+                        "n_formulas": 0,
+                        "provider_calls": provider_calls,
+                        "candidate_count": candidate_count,
+                        "high_density_trigger": high_density_trigger,
+                    },
+                )
+                continue
             if (
                 daily_call_budget is not None
                 and provider_calls_used + provider_calls > daily_call_budget
@@ -743,6 +860,8 @@ class Indexer:
             "budget_exhausted": budget_exhausted,
             "stopped_reason": stopped_reason,
             "next_item_key": next_item_key,
+            "high_density_deferred_count": high_density_deferred_count,
+            "include_high_density": include_high_density,
             "resume_after": resume_after,
             "resume_after_found": resume_after_found,
             "skipped_before_resume": skipped_before_resume,

@@ -476,6 +476,10 @@ def index_formulas(
         float | None,
         Field(description="Queue formulas below this confidence for review", ge=0.0, le=1.0),
     ] = None,
+    include_high_density: Annotated[
+        bool,
+        Field(description="Allow high-density formula documents after reviewing an estimate"),
+    ] = False,
 ) -> dict:
     """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
     if not _index_lock.acquire(blocking=False):
@@ -511,6 +515,7 @@ def index_formulas(
                 stop_on_quota=stop_on_quota,
                 status_jsonl=status_jsonl,
                 low_confidence_threshold=low_confidence_threshold,
+                include_high_density=include_high_density,
             )
         except (
             ConfigDriftError,

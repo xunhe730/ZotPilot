@@ -147,6 +147,8 @@ class Config:
     formula_ocr_min_confidence: float = 0.6
     formula_ocr_daily_call_budget: int | None = None
     formula_ocr_low_confidence_threshold: float | None = None
+    formula_ocr_high_density_call_threshold: int = 80
+    formula_ocr_high_density_candidate_threshold: int = 160
     formula_ocr_simpletex_token: str | None = None
     formula_ocr_simpletex_app_id: str | None = None
     formula_ocr_simpletex_app_secret: str | None = None
@@ -244,6 +246,11 @@ class Config:
             formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
             formula_ocr_daily_call_budget=data.get("formula_ocr_daily_call_budget"),
             formula_ocr_low_confidence_threshold=data.get("formula_ocr_low_confidence_threshold"),
+            formula_ocr_high_density_call_threshold=data.get("formula_ocr_high_density_call_threshold", 80),
+            formula_ocr_high_density_candidate_threshold=data.get(
+                "formula_ocr_high_density_candidate_threshold",
+                160,
+            ),
             formula_ocr_simpletex_token=data.get("formula_ocr_simpletex_token"),
             formula_ocr_simpletex_app_id=data.get("formula_ocr_simpletex_app_id"),
             formula_ocr_simpletex_app_secret=data.get("formula_ocr_simpletex_app_secret"),
@@ -312,6 +319,8 @@ class Config:
             "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
             "formula_ocr_daily_call_budget": self.formula_ocr_daily_call_budget,
             "formula_ocr_low_confidence_threshold": self.formula_ocr_low_confidence_threshold,
+            "formula_ocr_high_density_call_threshold": self.formula_ocr_high_density_call_threshold,
+            "formula_ocr_high_density_candidate_threshold": self.formula_ocr_high_density_candidate_threshold,
             "formula_ocr_simpletex_token": self.formula_ocr_simpletex_token,
             "formula_ocr_simpletex_app_id": self.formula_ocr_simpletex_app_id,
             "formula_ocr_simpletex_app_secret": self.formula_ocr_simpletex_app_secret,
@@ -441,6 +450,10 @@ class Config:
             and not 0.0 <= self.formula_ocr_low_confidence_threshold <= 1.0
         ):
             errors.append("formula_ocr_low_confidence_threshold must be between 0.0 and 1.0")
+        if self.formula_ocr_high_density_call_threshold < 0:
+            errors.append("formula_ocr_high_density_call_threshold must be >= 0")
+        if self.formula_ocr_high_density_candidate_threshold < 0:
+            errors.append("formula_ocr_high_density_candidate_threshold must be >= 0")
         if self.formula_ocr_simpletex_timeout <= 0:
             errors.append("formula_ocr_simpletex_timeout must be > 0")
         if self.formula_ocr_simpletex_min_interval < 0:

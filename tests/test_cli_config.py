@@ -96,6 +96,8 @@ class TestConfigSet:
         assert _coerce_value("formula_ocr_simpletex_max_retries", "3") == 3
         assert _coerce_value("formula_ocr_daily_call_budget", "1800") == 1800
         assert _coerce_value("formula_ocr_low_confidence_threshold", "0.5") == 0.5
+        assert _coerce_value("formula_ocr_high_density_call_threshold", "80") == 80
+        assert _coerce_value("formula_ocr_high_density_candidate_threshold", "160") == 160
 
 
 class TestConfigCommand:

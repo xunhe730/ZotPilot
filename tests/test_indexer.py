@@ -434,6 +434,93 @@ class TestFormulaBackfill:
         with pytest.raises(ValueError, match="without item_key or item_keys"):
             indexer.estimate_formula_backfill(item_keys=["DOC1"], sample_size=1)
 
+    def test_estimate_formula_backfill_flags_high_density_documents(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        indexer.config.formula_ocr_provider = "simpletex"
+        indexer.config.formula_ocr_high_density_call_threshold = 2
+        indexer.config.formula_ocr_high_density_candidate_threshold = 160
+        candidates = [self._formula_candidate(latex="") for _ in range(3)]
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
+
+        result = indexer.estimate_formula_backfill(daily_call_budget=10)
+
+        assert result["dense_formula_papers"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Paper",
+                "candidate_count": 3,
+                "estimated_provider_calls": 3,
+                "estimated_external_calls": 3,
+                "high_density_trigger": "provider_calls",
+                "high_density_call_threshold": 2,
+                "high_density_candidate_threshold": 160,
+            }
+        ]
+        assert result["deferred_high_density_provider_calls"] == 3
+        assert result["results"][0]["default_batch_status"] == "deferred_high_density"
+        assert result["summary"]["dense_formula_paper_count"] == 1
+
+    def test_formula_backfill_defers_high_density_external_documents_in_batch(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        indexer.config.formula_ocr_provider = "simpletex"
+        indexer.config.formula_ocr_high_density_call_threshold = 2
+        indexer.config.formula_ocr_high_density_candidate_threshold = 160
+        candidates = [self._formula_candidate(latex="") for _ in range(3)]
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
+        indexer._recognize_formulas_for_item = MagicMock(
+            side_effect=AssertionError("high-density document must be deferred before OCR")
+        )
+
+        result = indexer.index_formulas(daily_call_budget=10)
+
+        assert result["high_density_deferred_count"] == 1
+        assert result["provider_calls_used"] == 0
+        assert result["results"][0]["status"] == "deferred_high_density"
+        assert result["results"][0]["high_density_trigger"] == "provider_calls"
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.delete_chunks_by_type.assert_not_called()
+
+    def test_formula_backfill_defers_cached_formula_dense_documents_in_batch(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        indexer.config.formula_ocr_high_density_call_threshold = 80
+        indexer.config.formula_ocr_high_density_candidate_threshold = 2
+        candidates = [self._formula_candidate(latex=rf"x_{idx}=y") for idx in range(3)]
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
+        indexer._recognize_formulas_for_item = MagicMock(
+            side_effect=AssertionError("cached high-density document must be deferred before writes")
+        )
+
+        result = indexer.index_formulas(daily_call_budget=10)
+
+        assert result["high_density_deferred_count"] == 1
+        assert result["results"][0]["status"] == "deferred_high_density"
+        assert result["results"][0]["high_density_trigger"] == "candidate_count"
+        assert result["results"][0]["provider_calls"] == 0
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.delete_chunks_by_type.assert_not_called()
+
+    def test_formula_backfill_allows_high_density_documents_when_explicitly_included(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        indexer.config.formula_ocr_provider = "simpletex"
+        indexer.config.formula_ocr_high_density_call_threshold = 2
+        indexer.config.formula_ocr_high_density_candidate_threshold = 160
+        candidates = [self._formula_candidate(latex="") for _ in range(3)]
+        formula = self._extracted_formula(provider="simpletex")
+        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        result = indexer.index_formulas(daily_call_budget=10, include_high_density=True)
+
+        assert result["high_density_deferred_count"] == 0
+        assert result["include_high_density"] is True
+        assert result["provider_calls_used"] == 3
+        assert result["formulas_indexed"] == 1
+        indexer.store.add_formulas.assert_called_once()
+
     def test_formula_provider_preflight_has_actionable_install_hint(self):
         from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
 
@@ -696,6 +783,7 @@ class TestFormulaBackfill:
                 stop_on_quota=False,
                 status_jsonl=str(status_path),
                 low_confidence_threshold=0.5,
+                include_high_density=True,
             )
 
         assert result["processed"] == 0
@@ -704,6 +792,7 @@ class TestFormulaBackfill:
         assert captured_kwargs["stop_on_quota"] is False
         assert captured_kwargs["status_jsonl"] == str(status_path)
         assert captured_kwargs["low_confidence_threshold"] == 0.5
+        assert captured_kwargs["include_high_density"] is True
 
     def test_estimate_formula_backfill_tool_ignores_simpletex_auth_and_does_not_lease(self, tmp_path):
         from zotpilot.tools import indexing as idx_mod
