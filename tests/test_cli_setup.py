@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from zotpilot.cli import cmd_index, cmd_index_formulas, cmd_register, cmd_setup, cmd_sync, cmd_update
+from zotpilot.cli import (
+    cmd_estimate_formula_backfill,
+    cmd_index,
+    cmd_index_formulas,
+    cmd_register,
+    cmd_setup,
+    cmd_sync,
+    cmd_update,
+)
 from zotpilot.runtime_settings import resolve_runtime_settings
 
 
@@ -332,6 +340,63 @@ class TestIndexCli:
             "status_jsonl": str(tmp_path / "formula_status.jsonl"),
             "low_confidence_threshold": 0.5,
         }
+
+    def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_estimate(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        _use_local_secrets(monkeypatch, tmp_path)
+        config = MagicMock()
+        config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
+        indexer = MagicMock()
+        indexer.estimate_formula_backfill.return_value = {
+            "provider": "simpletex",
+            "candidate_provider": "mineru_cache",
+            "processed": 1,
+            "candidate_count": 2,
+            "estimated_provider_calls": 1,
+            "estimated_external_calls": 1,
+            "daily_call_budget": 10,
+            "estimated_runs": 1,
+            "data_egress": True,
+            "summary": {"warnings": []},
+            "results": [],
+        }
+        args = type(
+            "Args",
+            (),
+            {
+                "config": None,
+                "item_key": "DOC1",
+                "item_keys": None,
+                "limit": None,
+                "resume_after": None,
+                "daily_call_budget": 10,
+                "preview_candidates": 1,
+                "preview_all_candidates": False,
+                "preview_chars": 160,
+                "json": False,
+            },
+        )()
+
+        with (
+            patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+            patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+        ):
+            rc = cmd_estimate_formula_backfill(args)
+
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "Formula backfill estimate:" in out
+        assert "Candidate provider:        mineru_cache" in out
+        indexer.estimate_formula_backfill.assert_called_once_with(
+            item_key="DOC1",
+            item_keys=None,
+            limit=None,
+            resume_after=None,
+            daily_call_budget=10,
+            candidate_preview_limit=1,
+            candidate_preview_chars=160,
+        )
 
 
 class TestRegister:

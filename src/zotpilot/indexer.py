@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 import time
 import uuid
@@ -28,7 +29,7 @@ from .journal_ranker import JournalRanker
 from .models import ZoteroItem
 from .pdf import extract_document
 from .pdf.chunker import Chunker
-from .vector_store import VectorStore
+from .vector_store import IndexUnavailableError, VectorStore
 from .zotero_client import ZoteroClient
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,32 @@ CONSECUTIVE_FAILURE_ABORT_THRESHOLD = 3
 RATE_LIMIT_MAX_RETRIES = 5
 RATE_LIMIT_DEFAULT_WAIT_SECONDS = 30.0  # used when a 429 carries no retry_after
 RATE_LIMIT_MAX_WAIT_SECONDS = 120.0  # per-attempt cap so a bogus retry_after can't hang the run
+
+
+class _ReadOnlyIndexedDocStore:
+    """Read indexed doc ids without constructing a writable Chroma collection."""
+
+    def __init__(self, db_path: Path):
+        self.db_path = Path(db_path)
+
+    def get_indexed_doc_ids(self) -> set[str]:
+        sqlite_path = self.db_path / "chroma.sqlite3"
+        if not sqlite_path.exists():
+            raise IndexUnavailableError(f"Chroma SQLite index not found at {sqlite_path}")
+        uri = f"file:{sqlite_path.as_posix()}?mode=ro&immutable=1"
+        doc_ids: set[str] = set()
+        try:
+            with sqlite3.connect(uri, uri=True) as conn:
+                cursor = conn.execute("SELECT embedding_id FROM embeddings")
+                for (chunk_id,) in cursor:
+                    doc_id = VectorStore._doc_id_from_chunk_id(str(chunk_id))
+                    if doc_id:
+                        doc_ids.add(doc_id)
+        except sqlite3.Error as exc:
+            raise IndexUnavailableError(
+                f"Could not read indexed document ids from {sqlite_path}: {exc}"
+            ) from exc
+        return doc_ids
 
 
 def _failure_signature(e: Exception) -> str:
@@ -206,6 +233,19 @@ class Indexer:
         else:
             self._vision_api = None
 
+    @classmethod
+    def for_formula_estimate(cls, config: Config) -> "Indexer":
+        """Create a read-only indexer for formula volume estimates."""
+        indexer = cls.__new__(cls)
+        indexer.config = config
+        indexer.zotero = ZoteroClient(config.zotero_data_dir)
+        indexer.journal_ranker = JournalRanker()
+        indexer.store = _ReadOnlyIndexedDocStore(config.chroma_db_path)
+        indexer._config_hash_path = config.chroma_db_path / "config_hash.txt"
+        indexer._formula_provider = None
+        indexer._formula_candidate_provider = None
+        return indexer
+
     def _assert_config_hash_current(self) -> None:
         """Block incremental backfills when the embedding-space hash drifted."""
         config_hash = _config_hash(self.config)
@@ -316,6 +356,138 @@ class Indexer:
             max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
             min_confidence=self.config.formula_ocr_min_confidence,
         )
+
+    def estimate_formula_backfill(
+        self,
+        *,
+        item_key: str | None = None,
+        item_keys: list[str] | None = None,
+        limit: int | None = None,
+        resume_after: str | None = None,
+        daily_call_budget: int | None = None,
+        candidate_preview_limit: int = 0,
+        candidate_preview_chars: int = 160,
+    ) -> dict:
+        """Estimate formula OCR volume without running OCR or writing chunks."""
+        if daily_call_budget is None:
+            daily_call_budget = getattr(self.config, "formula_ocr_daily_call_budget", None)
+        if daily_call_budget is not None and daily_call_budget < 0:
+            raise ValueError("daily_call_budget must be >= 0")
+        self._assert_config_hash_current()
+
+        from .feature_extraction.formula_ocr import count_formula_provider_calls
+
+        indexed_ids = self.store.get_indexed_doc_ids()
+        items = [
+            item for item in self.zotero.get_all_items_with_pdfs()
+            if item.item_key in indexed_ids and item.pdf_path and item.pdf_path.exists()
+        ]
+        if item_key:
+            items = [item for item in items if item.item_key == item_key]
+        if item_keys:
+            wanted = set(item_keys)
+            items = [item for item in items if item.item_key in wanted]
+        resume_after_found = resume_after is None
+        skipped_before_resume = 0
+        if resume_after is not None:
+            filtered_items = []
+            for item in items:
+                if resume_after_found:
+                    filtered_items.append(item)
+                elif item.item_key == resume_after:
+                    resume_after_found = True
+                    skipped_before_resume += 1
+                else:
+                    skipped_before_resume += 1
+            items = filtered_items
+        if limit is not None:
+            items = items[:limit]
+
+        preview_all = candidate_preview_limit < 0
+        preview_limit = max(candidate_preview_limit, 0)
+        preview_chars = max(candidate_preview_chars, 0)
+
+        def _preview(candidates) -> list[dict]:
+            rows = []
+            selected_candidates = candidates if preview_all else candidates[:preview_limit]
+            for candidate in selected_candidates:
+                raw_text = str(getattr(candidate, "raw_text", "") or "")
+                latex = str(getattr(candidate, "latex", "") or "")
+                rows.append(
+                    {
+                        "page_num": getattr(candidate, "page_num", 0),
+                        "source": getattr(candidate, "source", ""),
+                        "confidence": getattr(candidate, "confidence", None),
+                        "equation_number": getattr(candidate, "equation_number", ""),
+                        "equation_number_status": getattr(candidate, "equation_number_status", ""),
+                        "has_latex": bool(latex.strip()),
+                        "needs_ocr": count_formula_provider_calls([candidate]) > 0,
+                        "raw_text_preview": raw_text[:preview_chars] if preview_chars else raw_text,
+                        "latex_preview": latex[:preview_chars] if preview_chars else latex,
+                    }
+                )
+            return rows
+
+        results = []
+        candidate_count = 0
+        estimated_provider_calls = 0
+        for item in items:
+            candidates = self._extract_formula_candidates_for_item(item)
+            provider_calls = count_formula_provider_calls(candidates)
+            candidate_count += len(candidates)
+            estimated_provider_calls += provider_calls
+            row = {
+                "item_key": item.item_key,
+                "title": item.title,
+                "status": "estimated",
+                "candidate_count": len(candidates),
+                "estimated_provider_calls": provider_calls,
+                "estimated_external_calls": (
+                    provider_calls
+                    if getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+                    else 0
+                ),
+            }
+            if preview_all or preview_limit:
+                row["candidate_preview"] = _preview(candidates)
+            results.append(row)
+
+        daily_budget = daily_call_budget or 0
+        estimated_runs = (
+            (estimated_provider_calls + daily_budget - 1) // daily_budget
+            if daily_budget > 0 and estimated_provider_calls > 0
+            else 1
+        )
+        external_calls = (
+            estimated_provider_calls
+            if getattr(self.config, "formula_ocr_provider", "") == "simpletex"
+            else 0
+        )
+        min_interval = getattr(self.config, "formula_ocr_simpletex_min_interval", 0.0)
+        estimated_seconds = external_calls * min_interval
+        return {
+            "provider": getattr(self.config, "formula_ocr_provider", ""),
+            "candidate_provider": getattr(self.config, "formula_candidate_provider", "text_layer"),
+            "processed": len(results),
+            "candidate_count": candidate_count,
+            "average_candidates_per_paper": (
+                round(candidate_count / len(results), 2) if results else 0
+            ),
+            "estimated_provider_calls": estimated_provider_calls,
+            "estimated_external_calls": external_calls,
+            "estimated_min_duration": f"{estimated_seconds:.1f}s",
+            "daily_call_budget": daily_call_budget,
+            "estimated_runs": estimated_runs,
+            "data_egress": external_calls > 0,
+            "resume_after": resume_after,
+            "resume_after_found": resume_after_found,
+            "skipped_before_resume": skipped_before_resume,
+            "summary": {
+                "next_action": "Review candidates before running index-formulas.",
+                "warnings": [],
+            },
+            "results": results,
+        }
 
     def index_formulas(
         self,

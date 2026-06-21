@@ -36,6 +36,15 @@ def _parse_json_string_list(value: Any) -> Any:
     return value
 
 
+def _formula_estimate_blocking_config_errors(errors: list[str]) -> list[str]:
+    """Return config errors that still block read-only formula estimates."""
+    return [
+        error for error in errors
+        if "_API_KEY not set" not in error
+        and "SimpleTex formula OCR requires formula_ocr_simpletex_token" not in error
+    ]
+
+
 def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
     """Return unindexed Zotero papers and their total count."""
     zotero = _get_zotero()
@@ -372,6 +381,56 @@ def index_library(
         if lease is not None:
             release_lease(lease)
         _index_lock.release()
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def estimate_formula_backfill(
+    item_key: Annotated[str | None, Field(description="Estimate formulas for one Zotero item key")] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Estimate formulas for these Zotero item keys"),
+    ] = None,
+    limit: Annotated[int | None, Field(description="Max already-indexed papers to scan", ge=1)] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume estimate after this Zotero item key"),
+    ] = None,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Budget used only to estimate how many daily runs are needed", ge=0),
+    ] = None,
+    candidate_preview_limit: Annotated[
+        int,
+        Field(description="Number of candidate previews per paper; use -1 for all", ge=-1),
+    ] = 0,
+    candidate_preview_chars: Annotated[
+        int,
+        Field(description="Max characters per candidate preview", ge=0),
+    ] = 160,
+) -> dict:
+    """Estimate formula backfill volume without OCR calls, leases, or writes."""
+    from ..indexer import ConfigDriftError, Indexer
+    from ..vector_store import IndexUnavailableError
+
+    item_keys = _parse_json_string_list(item_keys)
+    _config = _get_config()
+    blocking_errors = _formula_estimate_blocking_config_errors(_config.validate())
+    if blocking_errors:
+        raise ToolError(f"Config errors: {'; '.join(blocking_errors)}")
+
+    try:
+        return Indexer.for_formula_estimate(_config).estimate_formula_backfill(
+            item_key=item_key,
+            item_keys=item_keys,
+            limit=limit,
+            resume_after=resume_after,
+            daily_call_budget=daily_call_budget,
+            candidate_preview_limit=candidate_preview_limit,
+            candidate_preview_chars=candidate_preview_chars,
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool(tags=tool_tags("extended", "indexing"))

@@ -41,6 +41,21 @@ def _split_validate_errors(errors: list[str]) -> tuple[list[str], list[str]]:
     return blocking, warnings
 
 
+def _split_formula_estimate_validate_errors(errors: list[str]) -> tuple[list[str], list[str]]:
+    """Split validation errors for read-only formula estimates.
+
+    Formula estimates do not call SimpleTex or write chunks, so missing API keys
+    are warnings rather than blockers. Structural config errors still block.
+    """
+    non_blocking = [
+        e for e in errors
+        if "_API_KEY not set" in e
+        or "SimpleTex formula OCR requires formula_ocr_simpletex_token" in e
+    ]
+    blocking = [e for e in errors if e not in non_blocking]
+    return blocking, non_blocking
+
+
 def _import_register_secret_overrides(args, config_path: Path) -> bool:
     imported_any = False
     if getattr(args, "gemini_key", None):
@@ -915,6 +930,82 @@ def cmd_index_formulas(args):
             print(f"  Resume from after:  {result['next_item_key']}")
     if result.get("low_confidence_review_count"):
         print(f"  Review queue:       {result['low_confidence_review_count']}")
+    return 0
+
+
+def _print_formula_backfill_estimate(result: dict) -> None:
+    print("\nFormula backfill estimate:")
+    print(f"  Provider:                  {result.get('provider', '')}")
+    print(f"  Candidate provider:        {result.get('candidate_provider', '')}")
+    print(f"  Papers scanned:            {result.get('processed', 0)}")
+    print(f"  Formula candidates:        {result.get('candidate_count', 0)}")
+    print(f"  Estimated OCR calls:       {result.get('estimated_provider_calls', 0)}")
+    print(f"  Estimated external calls:  {result.get('estimated_external_calls', 0)}")
+    if result.get("daily_call_budget") is not None:
+        print(f"  Daily call budget:         {result.get('daily_call_budget')}")
+        print(f"  Estimated runs:            {result.get('estimated_runs', 1)}")
+    print(f"  Data leaves machine:       {'yes' if result.get('data_egress') else 'no'}")
+    if result.get("resume_after"):
+        print(f"  Resume after:              {result.get('resume_after')}")
+        print(f"  Resume key found:          {'yes' if result.get('resume_after_found') else 'no'}")
+
+    warnings = result.get("summary", {}).get("warnings", [])
+    if warnings:
+        print("\nWarnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+
+    rows = result.get("results", [])
+    preview_rows = [row for row in rows if row.get("candidate_preview")]
+    if preview_rows:
+        print("\nCandidate preview:")
+        for row in preview_rows[:5]:
+            print(f"  {row.get('item_key')}: {row.get('title') or '(no title)'}")
+            for candidate in row.get("candidate_preview", []):
+                text = candidate.get("latex_preview") or candidate.get("raw_text_preview") or ""
+                needs_ocr = "ocr" if candidate.get("needs_ocr") else "cached"
+                page = candidate.get("page_num", 0)
+                number = candidate.get("equation_number") or candidate.get("equation_number_status") or ""
+                print(f"    p{page} {number} [{needs_ocr}] {text}")
+
+
+def cmd_estimate_formula_backfill(args):
+    """Estimate formula backfill volume without OCR calls or writes."""
+    from .indexer import ConfigDriftError, Indexer
+    from .vector_store import IndexUnavailableError
+
+    config = resolve_runtime_config(args.config)
+    errors = config.validate()
+    blocking_errors, warnings = _split_formula_estimate_validate_errors(errors)
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    for warning in warnings:
+        print(
+            f"Warning: {warning} (ignored for read-only estimate)",
+            file=sys.stderr,
+        )
+
+    preview_limit = -1 if args.preview_all_candidates else args.preview_candidates
+    try:
+        result = Indexer.for_formula_estimate(config).estimate_formula_backfill(
+            item_key=args.item_key,
+            item_keys=args.item_keys,
+            limit=args.limit,
+            resume_after=args.resume_after,
+            daily_call_budget=args.daily_call_budget,
+            candidate_preview_limit=preview_limit,
+            candidate_preview_chars=args.preview_chars,
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        _print_formula_backfill_estimate(result)
     return 0
 
 
@@ -1972,6 +2063,57 @@ def main(argv: list[str] | None = None) -> int:
     sub_formula.add_argument("--config", type=str, default=None, help="Config file path")
     sub_formula.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_formula.set_defaults(func=cmd_index_formulas)
+
+    # formula backfill estimate
+    sub_formula_estimate = subparsers.add_parser(
+        "estimate-formula-backfill",
+        help="Estimate formula backfill volume without OCR calls or writes",
+    )
+    sub_formula_estimate.add_argument("--item-key", type=str, default=None, help="Estimate one Zotero item")
+    sub_formula_estimate.add_argument(
+        "--item-keys",
+        nargs="+",
+        default=None,
+        help="Estimate these Zotero items",
+    )
+    sub_formula_estimate.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max already-indexed papers to scan",
+    )
+    sub_formula_estimate.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume estimate after this Zotero item key",
+    )
+    sub_formula_estimate.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Budget used only to estimate how many daily runs are needed",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-candidates",
+        type=int,
+        default=0,
+        help="Include up to N formula candidates per paper in the output",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-all-candidates",
+        action="store_true",
+        help="Include every candidate in the preview output",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-chars",
+        type=int,
+        default=160,
+        help="Max characters per candidate preview",
+    )
+    sub_formula_estimate.add_argument("--json", action="store_true", help="Output JSON")
+    sub_formula_estimate.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_formula_estimate.set_defaults(func=cmd_estimate_formula_backfill)
 
     # status
     sub_status = subparsers.add_parser("status", help="Show config and index stats")

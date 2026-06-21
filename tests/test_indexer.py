@@ -363,6 +363,36 @@ class TestFormulaBackfill:
             }
         ]
 
+    def test_estimate_formula_backfill_counts_candidates_without_ocr_or_writes(self, tmp_path):
+        item = self._make_formula_item(tmp_path, "DOC1")
+        indexer = self._make_indexer_for_formula_backfill([item])
+        cached_candidate = self._formula_candidate(latex=r"E = mc^2")
+        ocr_candidate = self._formula_candidate(latex="")
+        indexer._extract_formula_candidates_for_item = MagicMock(
+            return_value=[cached_candidate, ocr_candidate]
+        )
+        indexer._recognize_formulas_for_item = MagicMock(side_effect=AssertionError("OCR must not run"))
+        indexer._ensure_formula_provider_available = MagicMock(
+            side_effect=AssertionError("provider preflight must not run")
+        )
+
+        result = indexer.estimate_formula_backfill(
+            item_key="DOC1",
+            daily_call_budget=10,
+            candidate_preview_limit=2,
+        )
+
+        assert result["processed"] == 1
+        assert result["candidate_count"] == 2
+        assert result["estimated_provider_calls"] == 1
+        assert result["daily_call_budget"] == 10
+        assert result["estimated_runs"] == 1
+        assert result["results"][0]["candidate_preview"][0]["needs_ocr"] is False
+        assert result["results"][0]["candidate_preview"][1]["needs_ocr"] is True
+        indexer._recognize_formulas_for_item.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.delete_chunks_by_type.assert_not_called()
+
     def test_formula_provider_preflight_has_actionable_install_hint(self):
         from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
 
@@ -633,6 +663,33 @@ class TestFormulaBackfill:
         assert captured_kwargs["stop_on_quota"] is False
         assert captured_kwargs["status_jsonl"] == str(status_path)
         assert captured_kwargs["low_confidence_threshold"] == 0.5
+
+    def test_estimate_formula_backfill_tool_ignores_simpletex_auth_and_does_not_lease(self, tmp_path):
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
+        captured_kwargs = {}
+        indexer = MagicMock()
+        indexer.estimate_formula_backfill.side_effect = lambda **kwargs: captured_kwargs.update(kwargs) or {
+            "processed": 0,
+            "candidate_count": 0,
+            "estimated_provider_calls": 0,
+            "results": [],
+        }
+
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch.object(idx_mod, "acquire_lease") as acquire_lease, \
+             patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer):
+            result = idx_mod.estimate_formula_backfill(
+                item_key="DOC1",
+                daily_call_budget=10,
+            )
+
+        assert result["processed"] == 0
+        assert captured_kwargs["item_key"] == "DOC1"
+        assert captured_kwargs["daily_call_budget"] == 10
+        acquire_lease.assert_not_called()
 
     def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):
         from zotpilot.indexer import FormulaProviderUnavailableError
