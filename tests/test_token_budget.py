@@ -423,19 +423,25 @@ class TestContextAndIndexingContracts:
         store.count_chunks_for_doc_ids.return_value = 120
         store.count_chunk_types.return_value = {"text": 100, "table": 5, "figure": 15, "formula": 0}
         store.collection.get.return_value = {"metadatas": []}
-        zotero = MagicMock()
-        zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(200)]
+        items = [_make_item(i) for i in range(200)]
         config = _make_config()
         config.embedding_provider = "gemini"
         config.stats_sample_limit = 100
         all_doc_ids = {f"KEY{i}" for i in range(200)}
 
+        class _FakeZC:
+            def __init__(self, *a, **k):
+                pass
+            def get_all_items_with_pdfs(self):
+                return items
+
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_retriever"),
             patch("zotpilot.tools.indexing._get_store", return_value=store),
-            patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
             patch("zotpilot.indexer.global_pdf_doc_ids", return_value=all_doc_ids),
+            patch("zotpilot.indexer.enumerate_indexable_libraries", return_value=[(1, "My Library")]),
+            patch("zotpilot.indexer.ZoteroClient", _FakeZC),
         ):
             result = get_index_stats(limit=5)
 
@@ -561,18 +567,24 @@ class TestContextAndIndexingContracts:
         store.get_indexed_doc_ids.return_value = {"KEY0"}
         store.count_chunks_for_doc_ids.return_value = 10
         store.collection.get.return_value = {"metadatas": []}
-        zotero = MagicMock()
-        zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(6)]
+        items = [_make_item(i) for i in range(6)]
         config = _make_config()
         config.stats_sample_limit = 10
         all_doc_ids = {f"KEY{i}" for i in range(6)}
+
+        class _FakeZC:
+            def __init__(self, *a, **k):
+                pass
+            def get_all_items_with_pdfs(self):
+                return items
 
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_retriever"),
             patch("zotpilot.tools.indexing._get_store", return_value=store),
-            patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
             patch("zotpilot.indexer.global_pdf_doc_ids", return_value=all_doc_ids),
+            patch("zotpilot.indexer.enumerate_indexable_libraries", return_value=[(1, "My Library")]),
+            patch("zotpilot.indexer.ZoteroClient", _FakeZC),
         ):
             result = get_index_stats(limit=2, offset=1)
 

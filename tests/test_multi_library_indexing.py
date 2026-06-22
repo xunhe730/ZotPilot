@@ -393,17 +393,68 @@ def test_cli_and_mcp_call_index_all_libraries(monkeypatch):
 # Task 6: cross-library stats
 # ---------------------------------------------------------------------------
 
-def test_collect_unindexed_papers_spans_all_libraries(monkeypatch):
+def test_collect_unindexed_papers_spans_all_libraries(monkeypatch, tmp_path):
+    """Behavioral test: _collect_unindexed_papers must visit ALL libraries.
+
+    Setup:
+      - Two libraries: lib 1 (My Library) has item AAA; lib 3 (Group A) has item BBB.
+      - Global union = {"AAA", "BBB"}.
+      - Nothing is indexed (store returns empty set).
+    Expected: total == 2 and both AAA and BBB appear in the result.
+    This assertion FAILS on the buggy single-library version (total == 1, BBB missing).
+    """
+    import types as _types
     import zotpilot.tools.indexing as ti
-    # Union spans two libraries; only one doc is indexed -> one unindexed remains.
+    from zotpilot.zotero_client import ZoteroItem
+    from unittest.mock import MagicMock
+
+    # --- fake item constructor (mirrors test_token_budget._make_pdf_item_with_key) ---
+    def _make_item(key):
+        pdf_path = MagicMock()
+        pdf_path.exists.return_value = True
+        return ZoteroItem(
+            item_key=key,
+            title=f"Paper {key}",
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+            citation_key=f"{key.lower()}2024",
+            publication="Journal",
+            doi=f"10.1000/{key.lower()}",
+            tags="ml",
+            collections="AI",
+        )
+
+    # lib 1 -> item AAA; lib 3 -> item BBB
+    lib_items = {1: [_make_item("AAA")], 3: [_make_item("BBB")]}
+
+    class _FakeZC:
+        def __init__(self, data_dir, library_id=1):
+            self.library_id = library_id
+        def get_all_items_with_pdfs(self):
+            return lib_items[self.library_id]
+
+    # Patch the seams _collect_unindexed_papers reads from
+    monkeypatch.setattr(ti, "_get_config",
+                        lambda: _types.SimpleNamespace(zotero_data_dir=tmp_path))
+    monkeypatch.setattr("zotpilot.indexer.enumerate_indexable_libraries",
+                        lambda config: [(1, "My Library"), (3, "Group A")])
     monkeypatch.setattr("zotpilot.indexer.global_pdf_doc_ids",
                         lambda config: {"AAA", "BBB"})
-    monkeypatch.setattr(ti, "_get_config", lambda: types.SimpleNamespace())
+    # The fixed code does `from ..indexer import ZoteroClient` at call time,
+    # so patching zotpilot.indexer.ZoteroClient is the correct seam.
+    import zotpilot.indexer
+    monkeypatch.setattr(zotpilot.indexer, "ZoteroClient", _FakeZC)
 
     class _Store:
         def get_indexed_doc_ids(self):
-            return {"AAA"}
+            return set()  # nothing indexed -> both AAA and BBB are unindexed
+
     monkeypatch.setattr(ti, "_get_store", lambda: _Store())
 
-    src = __import__("inspect").getsource(ti._collect_unindexed_papers)
-    assert "global_pdf_doc_ids" in src  # stats use the cross-library union
+    papers, total = ti._collect_unindexed_papers()
+
+    doc_ids = {p["doc_id"] for p in papers}
+    assert total == 2, f"expected total=2, got {total} (BBB from group lib missing?)"
+    assert "AAA" in doc_ids, "AAA not in results"
+    assert "BBB" in doc_ids, f"BBB not in results — group-library paper was skipped! got {doc_ids}"

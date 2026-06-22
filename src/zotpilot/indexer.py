@@ -563,6 +563,8 @@ class Indexer:
             batch_size: Process at most N items per call (None/0 = all at once)
             journal: Optional IndexJournal for commit tracking
             progress_sink: Optional sink for structured progress events
+            reconcile: When False, skip per-library orphan reconciliation (the
+                multi-library orchestrator reconciles once globally instead).
 
         Returns:
             Dict with 'results' (list[IndexResult]) and summary counts.
