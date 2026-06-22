@@ -143,6 +143,8 @@ class Config:
     formula_ocr_max_formulas_per_doc: int = 40
     formula_ocr_max_formulas_per_page: int = 6
     formula_ocr_min_confidence: float = 0.6
+    # Chunker backend: "char" (default, char-based) or "llamaindex" (token-aware)
+    chunker_backend: str = "char"
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -229,6 +231,7 @@ class Config:
             formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
             formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
             formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
+            chunker_backend=data.get("chunker_backend", "char"),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -283,6 +286,7 @@ class Config:
             "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
             "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
             "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
+            "chunker_backend": self.chunker_backend,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -415,8 +419,11 @@ def _config_hash(config: "Config") -> str:
     Changes to these values require re-indexing. The ``embedding_base_url`` is
     folded in CONDITIONALLY -- only for the openai-compatible provider -- so all
     existing providers hash byte-identically to prior releases (no forced
-    reindex on upgrade). Relocated here from ``indexer.py`` so the lightweight
-    CLI can import it without dragging in the indexer's heavy dependencies.
+    reindex on upgrade). Likewise, ``chunker_backend`` is appended only when it
+    differs from the default ``"char"``, so existing char-backend indexes hash
+    identically and are not forced to reindex after upgrade. Relocated here from
+    ``indexer.py`` so the lightweight CLI can import it without dragging in the
+    indexer's heavy dependencies.
     """
     data = (
         f"{config.chunk_size}:"
@@ -432,6 +439,8 @@ def _config_hash(config: "Config") -> str:
     )
     if config.embedding_provider == "openai-compatible":
         data += f":{getattr(config, 'embedding_base_url', '') or ''}"
+    if getattr(config, "chunker_backend", "char") != "char":
+        data += f":{config.chunker_backend}"
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 
