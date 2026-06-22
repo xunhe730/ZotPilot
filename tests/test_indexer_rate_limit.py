@@ -359,16 +359,13 @@ class TestD2ToolErrorBoundary:
             "not_indexed_due_to_abort": 2,
             "has_more": False,
         }
-        fake_indexer = MagicMock()
-        fake_indexer.index_all.return_value = fake_result
-
         config = MagicMock()
         config.validate.return_value = []
         config.chroma_db_path = Path("/fake/chroma/db")
         config.vision_enabled = False
 
         release_spy = MagicMock()
-        with patch("zotpilot.indexer.Indexer", return_value=fake_indexer), \
+        with patch("zotpilot.indexer.index_all_libraries", return_value=fake_result), \
              patch.object(idx_mod, "_get_config", return_value=config), \
              patch.object(idx_mod, "_get_store") as get_store, \
              patch.object(idx_mod, "IndexJournal"), \
@@ -576,13 +573,12 @@ class TestVisionDisabledByBatchNotice:
 
     def _run_tool(self, config, **kwargs):
         from zotpilot.tools import indexing as idx_mod
-        fake_indexer = MagicMock()
-        fake_indexer.index_all.return_value = {
+        fake_result = {
             "results": [], "indexed": 0, "failed": 0, "empty": 0, "skipped": 0,
             "already_indexed": 0, "rate_limited_abort": False, "systemic_abort": False,
             "not_indexed_due_to_abort": 0, "has_more": False, "skipped_no_pdf": [],
         }
-        with patch("zotpilot.indexer.Indexer", return_value=fake_indexer), \
+        with patch("zotpilot.indexer.index_all_libraries", return_value=fake_result), \
              patch.object(idx_mod, "_get_config", return_value=config), \
              patch.object(idx_mod, "_get_store") as get_store, \
              patch.object(idx_mod, "IndexJournal"), \
@@ -691,8 +687,7 @@ class TestGetIndexStatsSurfacesIncomplete:
         with patch.object(idx_mod, "_get_config", return_value=config), \
              patch.object(idx_mod, "_get_retriever"), \
              patch.object(idx_mod, "_get_store", return_value=store), \
-             patch.object(idx_mod, "_get_zotero"), \
-             patch.object(idx_mod, "current_library_pdf_doc_ids", return_value={"K1"}), \
+             patch("zotpilot.indexer.global_pdf_doc_ids", return_value={"K1"}), \
              patch.object(idx_mod, "authoritative_indexed_doc_ids", return_value={"K1"}), \
              patch.object(idx_mod, "_collect_unindexed_papers", return_value=([], 0)):
             result = idx_mod.get_index_stats()

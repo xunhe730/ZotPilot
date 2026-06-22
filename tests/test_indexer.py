@@ -370,17 +370,13 @@ class TestFormulaBackfill:
         config.max_pages = 0
         config.vision_enabled = False
 
-        class FakeIndexer:
-            def __init__(self, _config):
-                pass
-
-            def index_all(self, **_kwargs):
-                raise FormulaProviderUnavailableError("Install `zotpilot[formula]`")
+        def fake_index_all_libraries(_config, **_kwargs):
+            raise FormulaProviderUnavailableError("Install `zotpilot[formula]`")
 
         with patch.object(idx_mod, "_get_config", return_value=config), \
              patch.object(idx_mod, "acquire_lease"), \
              patch.object(idx_mod, "release_lease"), \
-             patch("zotpilot.indexer.Indexer", FakeIndexer):
+             patch("zotpilot.indexer.index_all_libraries", fake_index_all_libraries):
             with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
                 idx_mod.index_library(batch_size=0)
 

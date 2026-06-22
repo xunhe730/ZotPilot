@@ -794,9 +794,10 @@ def cmd_index(args):
         progress_sink = JsonlProgressSink(progress_path)
         print(f"Index progress JSONL: {progress_path}", file=sys.stderr)
 
-    indexer = Indexer(config)
+    from .indexer import index_all_libraries
     try:
-        result = indexer.index_all(
+        result = index_all_libraries(
+            config,
             force_reindex=args.force,
             limit=args.limit,
             item_key=args.item_key,

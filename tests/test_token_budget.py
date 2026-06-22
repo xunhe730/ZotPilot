@@ -423,17 +423,25 @@ class TestContextAndIndexingContracts:
         store.count_chunks_for_doc_ids.return_value = 120
         store.count_chunk_types.return_value = {"text": 100, "table": 5, "figure": 15, "formula": 0}
         store.collection.get.return_value = {"metadatas": []}
-        zotero = MagicMock()
-        zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(200)]
+        items = [_make_item(i) for i in range(200)]
         config = _make_config()
         config.embedding_provider = "gemini"
         config.stats_sample_limit = 100
+        all_doc_ids = {f"KEY{i}" for i in range(200)}
+
+        class _FakeZC:
+            def __init__(self, *a, **k):
+                pass
+            def get_all_items_with_pdfs(self):
+                return items
 
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_retriever"),
             patch("zotpilot.tools.indexing._get_store", return_value=store),
-            patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
+            patch("zotpilot.indexer.global_pdf_doc_ids", return_value=all_doc_ids),
+            patch("zotpilot.indexer.enumerate_indexable_libraries", return_value=[(1, "My Library")]),
+            patch("zotpilot.indexer.ZoteroClient", _FakeZC),
         ):
             result = get_index_stats(limit=5)
 
@@ -467,11 +475,10 @@ class TestContextAndIndexingContracts:
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_store") as mock_store,
-            patch("zotpilot.indexer.Indexer") as mock_indexer_cls,
+            patch("zotpilot.indexer.index_all_libraries", return_value=index_result),
             patch("dataclasses.replace", side_effect=lambda obj, **kwargs: obj),
         ):
             mock_store.return_value.clear_query_cache = MagicMock()
-            mock_indexer_cls.return_value.index_all.return_value = index_result
             compact = index_library(batch_size=0)
             full = index_library(batch_size=0, include_summary=True)
 
@@ -495,19 +502,22 @@ class TestContextAndIndexingContracts:
         config.max_pages = 40
         config.vision_enabled = True
 
+        captured = {}
+
+        def fake_index_all_libraries(cfg, **kwargs):
+            captured.update(kwargs)
+            return index_result
+
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_store") as mock_store,
-            patch("zotpilot.indexer.Indexer") as mock_indexer_cls,
+            patch("zotpilot.indexer.index_all_libraries", fake_index_all_libraries),
             patch("dataclasses.replace", side_effect=lambda obj, **kwargs: obj),
         ):
             mock_store.return_value.clear_query_cache = MagicMock()
-            mock_indexer = mock_indexer_cls.return_value
-            mock_indexer.index_all.return_value = index_result
-
             index_library(item_keys='["KBQCDWBE","54ZZF3LP"]', batch_size=0)
 
-        assert mock_indexer.index_all.call_args.kwargs["item_keys"] == ["KBQCDWBE", "54ZZF3LP"]
+        assert captured["item_keys"] == ["KBQCDWBE", "54ZZF3LP"]
 
 
     def test_index_library_exposes_vision_budget_summary_when_requested(self):
@@ -539,11 +549,10 @@ class TestContextAndIndexingContracts:
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_store") as mock_store,
-            patch("zotpilot.indexer.Indexer") as mock_indexer_cls,
+            patch("zotpilot.indexer.index_all_libraries", return_value=index_result),
             patch("dataclasses.replace", side_effect=lambda obj, **kwargs: obj),
         ):
             mock_store.return_value.clear_query_cache = MagicMock()
-            mock_indexer_cls.return_value.index_all.return_value = index_result
             result = index_library(batch_size=0, include_summary=True)
 
         assert result["vision_pending_tables"] == 12
@@ -558,16 +567,24 @@ class TestContextAndIndexingContracts:
         store.get_indexed_doc_ids.return_value = {"KEY0"}
         store.count_chunks_for_doc_ids.return_value = 10
         store.collection.get.return_value = {"metadatas": []}
-        zotero = MagicMock()
-        zotero.get_all_items_with_pdfs.return_value = [_make_item(i) for i in range(6)]
+        items = [_make_item(i) for i in range(6)]
         config = _make_config()
         config.stats_sample_limit = 10
+        all_doc_ids = {f"KEY{i}" for i in range(6)}
+
+        class _FakeZC:
+            def __init__(self, *a, **k):
+                pass
+            def get_all_items_with_pdfs(self):
+                return items
 
         with (
             patch("zotpilot.tools.indexing._get_config", return_value=config),
             patch("zotpilot.tools.indexing._get_retriever"),
             patch("zotpilot.tools.indexing._get_store", return_value=store),
-            patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
+            patch("zotpilot.indexer.global_pdf_doc_ids", return_value=all_doc_ids),
+            patch("zotpilot.indexer.enumerate_indexable_libraries", return_value=[(1, "My Library")]),
+            patch("zotpilot.indexer.ZoteroClient", _FakeZC),
         ):
             result = get_index_stats(limit=2, offset=1)
 
@@ -600,6 +617,7 @@ class TestContextAndIndexingContracts:
             patch("zotpilot.tools.indexing._get_retriever"),
             patch("zotpilot.tools.indexing._get_store", return_value=store),
             patch("zotpilot.tools.indexing._get_zotero", return_value=zotero),
+            patch("zotpilot.indexer.global_pdf_doc_ids", return_value={"KEY0"}),
         ):
             result = get_index_stats(limit=5)
 

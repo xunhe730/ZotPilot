@@ -18,16 +18,19 @@ def test_index_library_defaults_to_small_batches():
     config.max_pages = 40
     config.vision_enabled = True
 
+    captured = {}
+
+    def fake_index_all_libraries(cfg, **kwargs):
+        captured.update(kwargs)
+        return index_result
+
     with (
         patch("zotpilot.tools.indexing._get_config", return_value=config),
         patch("zotpilot.tools.indexing._get_store") as mock_store,
-        patch("zotpilot.indexer.Indexer") as mock_indexer_cls,
+        patch("zotpilot.indexer.index_all_libraries", fake_index_all_libraries),
         patch("dataclasses.replace", side_effect=lambda obj, **kwargs: obj),
     ):
         mock_store.return_value.clear_query_cache = MagicMock()
-        mock_indexer = mock_indexer_cls.return_value
-        mock_indexer.index_all.return_value = index_result
-
         index_library()
 
-    assert mock_indexer.index_all.call_args.kwargs["batch_size"] == 2
+    assert captured["batch_size"] == 2

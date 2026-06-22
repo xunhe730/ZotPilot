@@ -244,8 +244,8 @@ class TestIndexCli:
         config.max_pages = 40
         config.vision_enabled = False
 
-        indexer = MagicMock()
-        indexer.index_all.return_value = {
+        captured = {}
+        fake_result = {
             "results": [],
             "indexed": 0,
             "already_indexed": 0,
@@ -253,6 +253,10 @@ class TestIndexCli:
             "failed": 0,
             "empty": 0,
         }
+
+        def fake_index_all_libraries(cfg, **kwargs):
+            captured.update(kwargs)
+            return fake_result
 
         args = type(
             "Args",
@@ -272,12 +276,12 @@ class TestIndexCli:
 
         with (
             patch("zotpilot.cli.resolve_runtime_config", return_value=config),
-            patch("zotpilot.indexer.Indexer", return_value=indexer),
+            patch("zotpilot.indexer.index_all_libraries", fake_index_all_libraries),
         ):
             rc = cmd_index(args)
 
         assert rc == 0
-        assert indexer.index_all.call_args.kwargs["batch_size"] == 2
+        assert captured["batch_size"] == 2
 
 
 class TestRegister:
