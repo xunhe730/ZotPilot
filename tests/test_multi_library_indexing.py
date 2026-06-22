@@ -70,3 +70,36 @@ def test_index_all_skips_reconcile_when_disabled(monkeypatch, tmp_path):
 
     inst.index_all(reconcile=True)
     assert len(calls) == 1  # startup reconcile ran (empty-library no-op call)
+
+
+def test_enumerate_and_union_span_all_libraries(monkeypatch, tmp_path):
+    libs = [
+        {"library_id": "1", "library_type": "user", "name": "My Library", "item_count": 2},
+        {"library_id": "2350352", "library_type": "group", "name": "Group A", "item_count": 1},
+    ]
+
+    class _FakeZC:
+        def __init__(self, data_dir, library_id=1):
+            self.library_id = library_id
+        def get_libraries(self):
+            return libs
+        def get_all_items_with_pdfs(self):
+            return []  # union content covered via current_library_pdf_doc_ids patch
+        @staticmethod
+        def resolve_group_library_id(data_dir, gid):  # stub; replaced by monkeypatch below
+            raise NotImplementedError
+
+    monkeypatch.setattr(idx, "ZoteroClient", _FakeZC)
+    monkeypatch.setattr(idx.ZoteroClient, "resolve_group_library_id",
+                        staticmethod(lambda data_dir, gid: {2350352: 3}[gid]))
+    cfg = types.SimpleNamespace(zotero_data_dir=tmp_path)
+
+    assert idx.enumerate_indexable_libraries(cfg) == [(1, "My Library"), (3, "Group A")]
+
+    # Each library contributes a distinct doc id to the union.
+    seen = {1: {"AAA"}, 3: {"BBB"}}
+    monkeypatch.setattr(
+        "zotpilot.index_authority.current_library_pdf_doc_ids",
+        lambda zc: seen[zc.library_id],
+    )
+    assert idx.global_pdf_doc_ids(cfg) == {"AAA", "BBB"}

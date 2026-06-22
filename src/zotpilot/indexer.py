@@ -123,6 +123,37 @@ class IndexResult:
     quality_grade: str = ""  # A/B/C/D/F quality grade per document
 
 
+def enumerate_indexable_libraries(config) -> list[tuple[int, str]]:
+    """Return (sqlite_library_id, label) for the user library plus every group.
+
+    User library is always first as (1, name). Group ``library_id`` values from
+    ``get_libraries()`` are Zotero groupIDs and are resolved to SQLite libraryIDs.
+    """
+    zc = ZoteroClient(config.zotero_data_dir)
+    libs: list[tuple[int, str]] = []
+    groups: list[tuple[int, str]] = []
+    for lib in zc.get_libraries():
+        if lib["library_type"] == "user":
+            libs.append((1, lib["name"]))
+        else:
+            sqlite_id = ZoteroClient.resolve_group_library_id(
+                config.zotero_data_dir, int(lib["library_id"])
+            )
+            groups.append((sqlite_id, lib["name"]))
+    return libs + groups
+
+
+def global_pdf_doc_ids(config) -> set[str]:
+    """Union of Zotero item keys with resolved PDF files across all libraries."""
+    from .index_authority import current_library_pdf_doc_ids
+
+    ids: set[str] = set()
+    for lib_id, _label in enumerate_indexable_libraries(config):
+        zc = ZoteroClient(config.zotero_data_dir, library_id=lib_id)
+        ids |= current_library_pdf_doc_ids(zc)
+    return ids
+
+
 class Indexer:
     """
     Orchestrates the full indexing pipeline.
