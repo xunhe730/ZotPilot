@@ -14,7 +14,6 @@ from ..index_authority import (
     LeaseContentionError,
     acquire_lease,
     authoritative_indexed_doc_ids,
-    current_library_pdf_doc_ids,
     release_lease,
 )
 from ..reranker import VALID_QUARTILES, VALID_SECTIONS
@@ -38,8 +37,10 @@ def _parse_json_string_list(value: Any) -> Any:
 
 def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
     """Return unindexed Zotero papers and their total count."""
+    from ..indexer import global_pdf_doc_ids
+
     zotero = _get_zotero()
-    current_doc_ids = current_library_pdf_doc_ids(zotero)
+    current_doc_ids = global_pdf_doc_ids(_get_config())
     indexed_set = authoritative_indexed_doc_ids(_get_store(), current_doc_ids)
     papers: list[dict] = []
     total = 0
@@ -467,10 +468,11 @@ def get_index_stats(
         if include_vision_costs:
             result["vision_costs"] = _get_vision_costs_impl(last_n=last_n)
         return result
+    from ..indexer import global_pdf_doc_ids
+
     _get_retriever()  # Ensure initialized
     store = _get_store()
-    zotero = _get_zotero()
-    current_doc_ids = current_library_pdf_doc_ids(zotero)
+    current_doc_ids = global_pdf_doc_ids(_get_config())
     _config = _get_config()
     doc_ids = authoritative_indexed_doc_ids(store, current_doc_ids)
     total_chunks = store.count_chunks_for_doc_ids(doc_ids)

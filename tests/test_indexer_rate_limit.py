@@ -687,8 +687,7 @@ class TestGetIndexStatsSurfacesIncomplete:
         with patch.object(idx_mod, "_get_config", return_value=config), \
              patch.object(idx_mod, "_get_retriever"), \
              patch.object(idx_mod, "_get_store", return_value=store), \
-             patch.object(idx_mod, "_get_zotero"), \
-             patch.object(idx_mod, "current_library_pdf_doc_ids", return_value={"K1"}), \
+             patch("zotpilot.indexer.global_pdf_doc_ids", return_value={"K1"}), \
              patch.object(idx_mod, "authoritative_indexed_doc_ids", return_value={"K1"}), \
              patch.object(idx_mod, "_collect_unindexed_papers", return_value=([], 0)):
             result = idx_mod.get_index_stats()

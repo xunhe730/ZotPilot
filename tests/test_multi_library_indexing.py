@@ -387,3 +387,23 @@ def test_cli_and_mcp_call_index_all_libraries(monkeypatch):
     assert "index_all_libraries" in inspect.getsource(cli.cmd_index)
     import zotpilot.tools.indexing as ti
     assert "index_all_libraries" in inspect.getsource(ti.index_library)
+
+
+# ---------------------------------------------------------------------------
+# Task 6: cross-library stats
+# ---------------------------------------------------------------------------
+
+def test_collect_unindexed_papers_spans_all_libraries(monkeypatch):
+    import zotpilot.tools.indexing as ti
+    # Union spans two libraries; only one doc is indexed -> one unindexed remains.
+    monkeypatch.setattr("zotpilot.indexer.global_pdf_doc_ids",
+                        lambda config: {"AAA", "BBB"})
+    monkeypatch.setattr(ti, "_get_config", lambda: types.SimpleNamespace())
+
+    class _Store:
+        def get_indexed_doc_ids(self):
+            return {"AAA"}
+    monkeypatch.setattr(ti, "_get_store", lambda: _Store())
+
+    src = __import__("inspect").getsource(ti._collect_unindexed_papers)
+    assert "global_pdf_doc_ids" in src  # stats use the cross-library union
