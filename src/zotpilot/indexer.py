@@ -134,10 +134,16 @@ class Indexer:
         self.config = config
         self.zotero = ZoteroClient(config.zotero_data_dir)
 
-        self.chunker = Chunker(
-            chunk_size=config.chunk_size,
-            overlap=config.chunk_overlap,
-        )
+        backend = getattr(config, "chunker_backend", "char")
+        if backend == "llamaindex":
+            from .pdf.llamaindex_chunker import LlamaIndexChunker
+            self.chunker = LlamaIndexChunker(
+                chunk_size=config.chunk_size, overlap=config.chunk_overlap
+            )
+        else:
+            self.chunker = Chunker(
+                chunk_size=config.chunk_size, overlap=config.chunk_overlap
+            )
         # Use factory to create appropriate embedder based on config
         self.embedder = create_embedder(config)
         self.store = VectorStore(config.chroma_db_path, self.embedder)
