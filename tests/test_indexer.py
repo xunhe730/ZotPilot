@@ -3414,6 +3414,71 @@ class TestFormulaBackfill:
             with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
                 idx_mod.index_formulas()
 
+    def test_index_formulas_tool_forwards_pdf_fallback_page_limit(self, tmp_path):
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = []
+        config.formula_ocr_enabled = True
+        config.chroma_db_path = tmp_path / "chroma"
+        store = MagicMock()
+        calls = {}
+
+        class FakeIndexer:
+            def __init__(self, _config):
+                pass
+
+            def index_formulas(self, **kwargs):
+                calls.update(kwargs)
+                return {"processed": 1, "results": []}
+
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch.object(idx_mod, "_get_store", return_value=store), \
+             patch.object(idx_mod, "acquire_lease"), \
+             patch.object(idx_mod, "release_lease"), \
+             patch("zotpilot.indexer.Indexer", FakeIndexer):
+            result = idx_mod.index_formulas(
+                item_key="DOC1",
+                daily_call_budget=1800,
+                pdf_fallback_max_pages=0,
+            )
+
+        assert result["processed"] == 1
+        assert calls["item_key"] == "DOC1"
+        assert calls["daily_call_budget"] == 1800
+        assert calls["pdf_fallback_max_pages"] == 0
+        store.clear_query_cache.assert_called_once()
+
+    def test_estimate_formula_backfill_tool_forwards_pdf_fallback_page_limit(self, tmp_path):
+        from zotpilot.tools import indexing as idx_mod
+
+        config = MagicMock()
+        config.validate.return_value = []
+        indexer = MagicMock()
+        indexer.estimate_formula_backfill.return_value = {"processed": 1, "results": []}
+
+        with patch.object(idx_mod, "_get_config", return_value=config), \
+             patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer):
+            result = idx_mod.estimate_formula_backfill(
+                item_key="DOC1",
+                daily_call_budget=1800,
+                pdf_fallback_max_pages=0,
+            )
+
+        assert result["processed"] == 1
+        indexer.estimate_formula_backfill.assert_called_once_with(
+            item_key="DOC1",
+            item_keys=None,
+            limit=None,
+            resume_after=None,
+            daily_call_budget=1800,
+            sample_size=None,
+            sample_seed=0,
+            pdf_fallback_max_pages=0,
+            page_min=None,
+            page_max=None,
+        )
+
     def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):
         from zotpilot.indexer import FormulaProviderUnavailableError
         from zotpilot.state import ToolError

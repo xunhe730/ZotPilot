@@ -431,6 +431,16 @@ def index_formulas(
             )
         ),
     ] = False,
+    pdf_fallback_max_pages: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Max PDF pages to scan for fallback equation-number candidates; "
+                "0 scans the full document for reviewed theses/books"
+            ),
+            ge=0,
+        ),
+    ] = None,
     page_min: Annotated[
         int | None,
         Field(
@@ -485,6 +495,7 @@ def index_formulas(
                 low_confidence_threshold=low_confidence_threshold,
                 include_high_density=include_high_density,
                 allow_candidate_quality_warnings=allow_candidate_quality_warnings,
+                pdf_fallback_max_pages=pdf_fallback_max_pages,
                 page_min=page_min,
                 page_max=page_max,
             )
@@ -541,6 +552,16 @@ def estimate_formula_backfill(
             )
         ),
     ] = False,
+    pdf_fallback_max_pages: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Max PDF pages to scan for fallback equation-number candidates; "
+                "0 scans the full document for reviewed theses/books"
+            ),
+            ge=0,
+        ),
+    ] = None,
     page_min: Annotated[
         int | None,
         Field(
@@ -581,6 +602,7 @@ def estimate_formula_backfill(
             daily_call_budget=daily_call_budget,
             sample_size=sample_size,
             sample_seed=sample_seed,
+            pdf_fallback_max_pages=pdf_fallback_max_pages,
             page_min=page_min,
             page_max=page_max,
         )
