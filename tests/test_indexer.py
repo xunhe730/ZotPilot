@@ -1603,6 +1603,41 @@ class TestFormulaBackfill:
         with pytest.raises(ValueError, match="without item_key or item_keys"):
             indexer.estimate_formula_backfill(item_keys=["DOC1"], sample_size=1)
 
+    def test_estimate_formula_backfill_reports_unmatched_requested_item_keys(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Indexed paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text=r"E=mc^2",
+                confidence=0.95,
+                equation_number="(1)",
+                latex=r"E=mc^2",
+                source="mineru_content_list",
+            )
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(**self._hash_config().__dict__)
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.side_effect = lambda key: item if key == "DOC1" else None
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(item_keys=["DOC1", "MISSING1"])
+
+        assert result["matched"] == 1
+        assert result["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert result["summary"]["unmatched_requested_item_key_count"] == 1
+        assert "1 requested item_key(s) were not matched" in result["summary"]["warnings"][-1]
+
     def test_estimate_formula_backfill_flags_high_density_documents(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ZoteroItem

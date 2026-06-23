@@ -1647,6 +1647,11 @@ class Indexer:
         )
         if budget < 0:
             raise ValueError("daily_call_budget must be >= 0")
+        requested_keys = (
+            [item_key]
+            if item_key
+            else list(dict.fromkeys(item_keys or []))
+        )
         effective_sample_size = int(sample_size or 0)
         if effective_sample_size < 0:
             raise ValueError("sample_size must be >= 0")
@@ -1674,6 +1679,7 @@ class Indexer:
             rng = random.Random(effective_sample_seed)
             raw_items = []
             sampled_unresolved_key_count = 0
+            unmatched_requested_item_keys: list[str] = []
             while sampled_key_pool and len(raw_items) < effective_sample_size:
                 remaining_needed = effective_sample_size - len(raw_items)
                 draw_count = min(len(sampled_key_pool), remaining_needed)
@@ -1699,6 +1705,10 @@ class Indexer:
                 item_keys=item_keys,
             )
             matched_keys = {item.item_key for item in matched_items}
+            unmatched_requested_item_keys = [
+                key for key in requested_keys
+                if key and key not in matched_keys
+            ]
             resume_after_found = (
                 resume_after is None
                 or resume_after in matched_keys
@@ -1905,6 +1915,11 @@ class Indexer:
                 f"{len(skipped_items)} bilingual/translated PDF(s) skipped; "
                 "formula backfill only processes original PDFs."
             )
+        if unmatched_requested_item_keys:
+            warnings.append(
+                f"{len(unmatched_requested_item_keys)} requested item_key(s) were not matched "
+                "to already-indexed ZotPilot papers with available original PDFs."
+            )
         if high_call_papers:
             warnings.append(
                 f"{len(high_call_papers)} paper(s) individually exceed the daily call budget; "
@@ -1988,6 +2003,7 @@ class Indexer:
             "scan_limited_high_density_paper_count": len(scan_limited_high_density_papers),
             "truncated_candidate_paper_count": len(truncated_candidate_papers),
             "cached_latex_missing_number_paper_count": len(cached_latex_missing_number_papers),
+            "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
             "sample_seed": effective_sample_seed,
@@ -2031,6 +2047,7 @@ class Indexer:
             "scan_limited_high_density_papers": scan_limited_high_density_papers,
             "truncated_candidate_papers": truncated_candidate_papers,
             "cached_latex_missing_number_papers": cached_latex_missing_number_papers,
+            "unmatched_requested_item_keys": unmatched_requested_item_keys,
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
             "sample_seed": effective_sample_seed,
