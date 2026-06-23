@@ -1934,6 +1934,10 @@ class Indexer:
             low_confidence_review_count=len(low_confidence_review_queue),
             resume_cursor=resume_cursor,
         )
+        if unmatched_requested_item_keys:
+            next_action = (
+                "Resolve unmatched requested item keys before treating this formula backfill batch as complete."
+            )
         result = {
             "run_id": run_id,
             "provider": provider_name,
@@ -2409,6 +2413,10 @@ class Indexer:
             next_action = (
                 "Review candidate-stage formula quality warnings before writing formulas; do not run "
                 "index_formulas until these papers are fixed or explicitly allowed."
+            )
+        if unmatched_requested_item_keys:
+            next_action = (
+                "Resolve unmatched requested item keys before treating this formula estimate as complete."
             )
         summary = {
             "papers": processed,

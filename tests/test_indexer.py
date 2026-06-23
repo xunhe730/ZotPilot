@@ -1494,6 +1494,7 @@ class TestFormulaBackfill:
         assert result["unmatched_requested_item_key_count"] == 1
         assert "1 requested item_key(s) were not matched" in result["warnings"][-1]
         assert result["formulas_indexed"] == 1
+        assert result["next_action"].startswith("Resolve unmatched requested item keys")
 
     def test_formula_backfill_returns_low_confidence_review_queue(self, tmp_path):
         from zotpilot.indexer import Indexer
@@ -1843,6 +1844,7 @@ class TestFormulaBackfill:
         assert result["unmatched_requested_item_key_count"] == 1
         assert result["summary"]["unmatched_requested_item_key_count"] == 1
         assert "1 requested item_key(s) were not matched" in result["summary"]["warnings"][-1]
+        assert result["summary"]["next_action"].startswith("Resolve unmatched requested item keys")
 
     def test_estimate_formula_backfill_flags_high_density_documents(self, tmp_path):
         from zotpilot.indexer import Indexer
