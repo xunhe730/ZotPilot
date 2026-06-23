@@ -183,6 +183,7 @@ def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, caps
                 page_max=None,
                 sample_size=None,
                 sample_seed=0,
+                fail_on_write_blocked=False,
                 json=False,
             )
         )
@@ -211,6 +212,67 @@ def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, caps
         page_min=None,
         page_max=None,
     )
+
+
+def test_index_formulas_cli_shows_review_required_writes(tmp_path, capsys):
+    from zotpilot.cli import cmd_index_formulas
+
+    config = MagicMock()
+    config.validate.return_value = []
+    config.formula_ocr_enabled = True
+    config.chroma_db_path = tmp_path / "chroma"
+    indexer = MagicMock()
+    indexer.index_formulas.return_value = {
+        "provider": "simpletex",
+        "processed": 1,
+        "formulas_indexed": 1,
+        "provider_calls_used": 1,
+        "external_calls_used": 1,
+        "write_blocked": False,
+        "write_ready": True,
+        "write_review_required": True,
+        "write_block_reasons": [],
+        "next_action": "Review 1 low-confidence formula row(s) before scaling up.",
+        "low_confidence_review_count": 1,
+        "results": [],
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.index_authority.acquire_lease"),
+        patch("zotpilot.index_authority.release_lease"),
+        patch("zotpilot.indexer.Indexer", return_value=indexer),
+    ):
+        rc = cmd_index_formulas(
+            SimpleNamespace(
+                config="config.json",
+                item_key="DOC1",
+                item_keys=None,
+                limit=None,
+                no_refresh_existing=False,
+                daily_call_budget=2,
+                resume_after=None,
+                no_stop_on_quota=False,
+                status_jsonl=None,
+                low_confidence_threshold=0.7,
+                include_high_density=False,
+                allow_candidate_quality_warnings=False,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                fail_on_write_blocked=True,
+                json=False,
+            )
+        )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Write status:            ready" in out
+    assert "Review required:         yes" in out
+    assert "Next:                    Review 1 low-confidence formula row(s) before scaling up." in out
 
 
 def test_index_formulas_cli_can_fail_when_write_blocked(tmp_path, capsys):
