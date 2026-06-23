@@ -775,6 +775,7 @@ def _formula_write_next_action(
     write_block_reasons: list[str],
     processed: int,
     formulas_indexed: int,
+    low_confidence_review_count: int,
     resume_cursor: str,
 ) -> str:
     """Summarize the next safe action after an actual formula write attempt."""
@@ -793,6 +794,11 @@ def _formula_write_next_action(
         return f"Daily formula OCR budget was reached; rerun later{suffix}."
     if "provider_quota_or_rate_limit" in write_block_reasons:
         return "Provider quota or rate limit stopped the run; wait, then resume from the reported next item."
+    if formulas_indexed > 0 and low_confidence_review_count > 0:
+        return (
+            f"Review {low_confidence_review_count} low-confidence formula row(s) before scaling up; "
+            "the formula chunks were written but should be sampled."
+        )
     if processed == 0:
         return "No already-indexed original PDFs matched this write request; check item filters first."
     if formulas_indexed == 0:
@@ -1916,11 +1922,16 @@ class Indexer:
         if stopped_reason:
             write_block_reasons.append(stopped_reason)
         write_blocked = bool(write_block_reasons)
+        write_review_required = any(
+            row.get("status") == "indexed_with_review"
+            for row in results
+        )
         write_ready = not write_blocked and formulas_indexed > 0
         next_action = _formula_write_next_action(
             write_block_reasons=write_block_reasons,
             processed=processed_count,
             formulas_indexed=formulas_indexed,
+            low_confidence_review_count=len(low_confidence_review_queue),
             resume_cursor=resume_cursor,
         )
         result = {
@@ -1936,6 +1947,7 @@ class Indexer:
             "formulas_indexed": formulas_indexed,
             "write_ready": write_ready,
             "write_blocked": write_blocked,
+            "write_review_required": write_review_required,
             "write_block_reasons": write_block_reasons,
             "next_action": next_action,
             "provider_calls_used": provider_calls_used,
@@ -1978,6 +1990,7 @@ class Indexer:
                 "formulas_indexed": result["formulas_indexed"],
                 "write_ready": result["write_ready"],
                 "write_blocked": result["write_blocked"],
+                "write_review_required": result["write_review_required"],
                 "write_block_reasons": result["write_block_reasons"],
                 "next_action": result["next_action"],
                 "provider_calls_used": result["provider_calls_used"],

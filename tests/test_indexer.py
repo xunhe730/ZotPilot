@@ -1528,6 +1528,10 @@ class TestFormulaBackfill:
             result = indexer.index_formulas(low_confidence_threshold=0.7)
 
         assert result["low_confidence_review_count"] == 1
+        assert result["write_blocked"] is False
+        assert result["write_ready"] is True
+        assert result["write_review_required"] is True
+        assert result["next_action"].startswith("Review 1 low-confidence formula row")
         review = result["low_confidence_review_queue"][0]
         assert review["item_key"] == "DOC1"
         assert review["equation_number"] == "(1)"
