@@ -1,3 +1,5 @@
+import json
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -71,6 +73,59 @@ def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_esti
         sample_size=None,
         sample_seed=0,
     )
+
+
+def test_estimate_formula_backfill_json_redirects_third_party_stdout_to_stderr(capfd):
+    from zotpilot.cli import cmd_estimate_formula_backfill
+
+    config = MagicMock()
+    config.validate.return_value = []
+    indexer = MagicMock()
+
+    def noisy_estimate(**_kwargs):
+        print("MinerU cache warning")
+        os.write(1, b"MuPDF fd warning\n")
+        return {
+            "provider": "simpletex",
+            "candidate_provider": "mineru_cache",
+            "processed": 0,
+            "candidate_count": 0,
+            "summary": {"warnings": [], "next_action": "No matches."},
+        }
+
+    indexer.estimate_formula_backfill.side_effect = noisy_estimate
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = cmd_estimate_formula_backfill(
+            SimpleNamespace(
+                config="config.json",
+                item_key=None,
+                item_keys=None,
+                limit=None,
+                resume_after=None,
+                daily_call_budget=None,
+                preview_candidates=0,
+                preview_all_candidates=False,
+                preview_chars=160,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                json=True,
+            )
+        )
+
+    captured = capfd.readouterr()
+    assert rc == 0
+    assert json.loads(captured.out)["provider"] == "simpletex"
+    assert captured.out.lstrip().startswith("{")
+    assert "MinerU cache warning" in captured.err
+    assert "MuPDF fd warning" in captured.err
 
 
 def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, capsys):

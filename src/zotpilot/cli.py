@@ -1,5 +1,6 @@
 """CLI entry point for ZotPilot."""
 import argparse
+import contextlib
 import dataclasses
 import json
 import logging
@@ -53,6 +54,41 @@ def _with_formula_cache_pdf_number_enrichment(config, enabled: bool):
         )
     setattr(config, "formula_candidate_cache_pdf_number_enrichment", True)
     return config
+
+
+def _call_with_json_stdout_guard(callable_obj, *, json_output: bool):
+    """Keep CLI JSON stdout parseable when dependencies print progress text."""
+    if not json_output:
+        return callable_obj()
+    stdout_fd = 1
+    try:
+        saved_stdout_fd = os.dup(stdout_fd)
+    except OSError:
+        with contextlib.redirect_stdout(sys.stderr):
+            return callable_obj()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as captured_fd_stdout:
+            os.dup2(captured_fd_stdout.fileno(), stdout_fd)
+            with contextlib.redirect_stdout(sys.stderr):
+                result = callable_obj()
+            sys.stdout.flush()
+            os.dup2(saved_stdout_fd, stdout_fd)
+            captured_fd_stdout.seek(0)
+            captured_bytes = captured_fd_stdout.read()
+            if captured_bytes:
+                if hasattr(sys.stderr, "buffer"):
+                    sys.stderr.buffer.write(captured_bytes)
+                    sys.stderr.flush()
+                else:
+                    print(captured_bytes.decode(errors="replace"), file=sys.stderr, end="")
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved_stdout_fd, stdout_fd)
+        os.close(saved_stdout_fd)
+    return result
 
 
 def _import_register_secret_overrides(args, config_path: Path) -> bool:
@@ -971,19 +1007,22 @@ def cmd_index_formulas(args):
             else getattr(args, "preview_candidates", 0) or 0
         )
         try:
-            result = Indexer.for_formula_estimate(config).estimate_formula_backfill(
-                item_key=args.item_key,
-                item_keys=args.item_keys,
-                limit=args.limit,
-                resume_after=getattr(args, "resume_after", None),
-                daily_call_budget=getattr(args, "daily_call_budget", None),
-                candidate_preview_limit=preview_limit,
-                candidate_preview_chars=getattr(args, "preview_chars", 160),
-                pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
-                page_min=getattr(args, "page_min", None),
-                page_max=getattr(args, "page_max", None),
-                sample_size=getattr(args, "sample_size", None),
-                sample_seed=getattr(args, "sample_seed", 0),
+            result = _call_with_json_stdout_guard(
+                lambda: Indexer.for_formula_estimate(config).estimate_formula_backfill(
+                    item_key=args.item_key,
+                    item_keys=args.item_keys,
+                    limit=args.limit,
+                    resume_after=getattr(args, "resume_after", None),
+                    daily_call_budget=getattr(args, "daily_call_budget", None),
+                    candidate_preview_limit=preview_limit,
+                    candidate_preview_chars=getattr(args, "preview_chars", 160),
+                    pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
+                    page_min=getattr(args, "page_min", None),
+                    page_max=getattr(args, "page_max", None),
+                    sample_size=getattr(args, "sample_size", None),
+                    sample_seed=getattr(args, "sample_seed", 0),
+                ),
+                json_output=args.json,
             )
         except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -1098,19 +1137,22 @@ def cmd_estimate_formula_backfill(args):
         else getattr(args, "preview_candidates", 0) or 0
     )
     try:
-        result = Indexer.for_formula_estimate(config).estimate_formula_backfill(
-            item_key=args.item_key,
-            item_keys=args.item_keys,
-            limit=args.limit,
-            resume_after=getattr(args, "resume_after", None),
-            daily_call_budget=getattr(args, "daily_call_budget", None),
-            candidate_preview_limit=preview_limit,
-            candidate_preview_chars=getattr(args, "preview_chars", 160),
-            pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
-            page_min=getattr(args, "page_min", None),
-            page_max=getattr(args, "page_max", None),
-            sample_size=getattr(args, "sample_size", None),
-            sample_seed=getattr(args, "sample_seed", 0),
+        result = _call_with_json_stdout_guard(
+            lambda: Indexer.for_formula_estimate(config).estimate_formula_backfill(
+                item_key=args.item_key,
+                item_keys=args.item_keys,
+                limit=args.limit,
+                resume_after=getattr(args, "resume_after", None),
+                daily_call_budget=getattr(args, "daily_call_budget", None),
+                candidate_preview_limit=preview_limit,
+                candidate_preview_chars=getattr(args, "preview_chars", 160),
+                pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
+                page_min=getattr(args, "page_min", None),
+                page_max=getattr(args, "page_max", None),
+                sample_size=getattr(args, "sample_size", None),
+                sample_seed=getattr(args, "sample_seed", 0),
+            ),
+            json_output=args.json,
         )
     except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)

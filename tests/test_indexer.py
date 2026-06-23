@@ -2003,6 +2003,102 @@ class TestFormulaBackfill:
         ]
         assert result["results"][0]["candidate_preview"][7]["equation_number"] == "(9)"
 
+    def test_estimate_formula_backfill_reports_candidate_quality_blocking_papers(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Impact paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=4 + index,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                equation_number=number,
+                latex=rf"\sigma_{{{index}}}=E\epsilon",
+                source="mineru_content_list",
+            )
+            for index, number in enumerate(["(1)", "(2)", "(4)"])
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(**self._hash_config().__dict__)
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=20)
+
+        assert result["candidate_quality_blocking_paper_count"] == 1
+        assert result["summary"]["candidate_quality_blocking_paper_count"] == 1
+        assert result["candidate_quality_blocking_papers"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Impact paper",
+                "candidate_count": 3,
+                "review_reasons": ["missing_equation_number_gap"],
+                "equation_number_warnings": ["missing_equation_number_gap"],
+                "truncated_source_count": 0,
+                "cached_latex_missing_equation_number_count": 0,
+                "duplicate_equation_numbers": [],
+                "equation_number_sequence_breaks": [
+                    {
+                        "previous": "(2)",
+                        "current": "(4)",
+                        "prefix": "regular",
+                        "reason": "missing_gap",
+                        "gap": 2,
+                        "missing_count": 1,
+                    }
+                ],
+            }
+        ]
+        assert "candidate-stage formula quality" in result["summary"]["warnings"][-1]
+        assert result["summary"]["next_action"].startswith(
+            "Review candidate-stage formula quality warnings"
+        )
+
+    def test_estimate_formula_backfill_does_not_block_on_mixed_number_prefixes_only(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Appendix paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=page,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                equation_number=number,
+                latex=rf"\sigma_{{{index}}}=E\epsilon",
+                source="mineru_content_list",
+            )
+            for index, (page, number) in enumerate([(4, "(1)"), (12, "(A.1)")])
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(**self._hash_config().__dict__)
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=20)
+
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["equation_number_warnings"] == ["mixed_equation_number_prefixes"]
+        assert result["candidate_quality_blocking_paper_count"] == 0
+        assert result["candidate_quality_blocking_papers"] == []
+
     def test_estimate_formula_backfill_promotes_duplicate_equation_numbers_to_warning(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
         from zotpilot.indexer import Indexer
@@ -2493,7 +2589,13 @@ class TestFormulaBackfill:
                 "missing_equation_number_ratio": 1.0,
             }
         ]
-        assert "Review cached LaTeX equation numbering" in result["summary"]["next_action"]
+        assert result["candidate_quality_blocking_paper_count"] == 1
+        assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == [
+            "cached_latex_missing_equation_numbers"
+        ]
+        assert result["summary"]["next_action"].startswith(
+            "Review candidate-stage formula quality warnings"
+        )
         audit = result["results"][0]["candidate_audit"]
         assert audit["candidate_count"] == 2
         assert audit["cached_latex_count"] == 1

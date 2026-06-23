@@ -806,6 +806,34 @@ def _formula_candidate_blocking_review_reasons(candidate_audit: dict[str, object
     return sorted(reasons)
 
 
+def _formula_candidate_quality_blocking_row(
+    *,
+    item_key: str,
+    title: str,
+    candidate_count: int,
+    candidate_audit: dict[str, object],
+    review_reasons: list[str],
+) -> dict[str, object]:
+    """Build the read-only estimate row for papers that should not be written yet."""
+    return {
+        "item_key": item_key,
+        "title": title,
+        "candidate_count": candidate_count,
+        "review_reasons": review_reasons,
+        "equation_number_warnings": candidate_audit.get("equation_number_warnings", []),
+        "truncated_source_count": candidate_audit.get("truncated_source_count", 0),
+        "cached_latex_missing_equation_number_count": candidate_audit.get(
+            "cached_latex_missing_equation_number_count",
+            0,
+        ),
+        "duplicate_equation_numbers": candidate_audit.get("duplicate_equation_numbers", []),
+        "equation_number_sequence_breaks": candidate_audit.get(
+            "equation_number_sequence_breaks",
+            [],
+        ),
+    }
+
+
 def _structural_formula_review_reasons(review_rows: list[dict[str, object]]) -> list[str]:
     """Return structural review reasons that should block formula index writes."""
     reasons: set[str] = set()
@@ -1822,6 +1850,7 @@ class Indexer:
         scan_limited_high_density_papers: list[dict[str, object]] = []
         truncated_candidate_papers: list[dict[str, object]] = []
         cached_latex_missing_number_papers: list[dict[str, object]] = []
+        candidate_quality_blocking_papers: list[dict[str, object]] = []
         batch_candidate_scan_limit = (
             high_density_candidate_threshold + 1
             if (
@@ -1891,6 +1920,19 @@ class Indexer:
             if candidates:
                 candidate_audit = _formula_candidate_audit(candidates)
                 row["candidate_audit"] = candidate_audit
+                candidate_quality_review_reasons = _formula_candidate_blocking_review_reasons(
+                    candidate_audit
+                )
+                if candidate_quality_review_reasons:
+                    candidate_quality_blocking_papers.append(
+                        _formula_candidate_quality_blocking_row(
+                            item_key=item.item_key,
+                            title=item.title,
+                            candidate_count=candidate_count,
+                            candidate_audit=candidate_audit,
+                            review_reasons=candidate_quality_review_reasons,
+                        )
+                    )
                 if candidate_audit["has_truncated_source"]:
                     truncated_candidate_papers.append({
                         "item_key": item.item_key,
@@ -2028,6 +2070,11 @@ class Indexer:
                 f"{len(cached_latex_missing_number_papers)} paper(s) have cached LaTeX formulas with missing "
                 "equation numbers; review numbering before writing or enable PDF number enrichment explicitly."
             )
+        if candidate_quality_blocking_papers:
+            warnings.append(
+                f"{len(candidate_quality_blocking_papers)} paper(s) have candidate-stage formula quality "
+                "warnings that should be reviewed before writing formulas."
+            )
         next_action = _formula_backfill_next_action(
             processed=processed,
             failed_papers=failed_papers,
@@ -2051,6 +2098,11 @@ class Indexer:
             next_action = (
                 "Review cached LaTeX equation numbering before writing formulas, or rerun the affected "
                 "paper(s) with formula_candidate_cache_pdf_number_enrichment=true intentionally."
+            )
+        if candidate_quality_blocking_papers:
+            next_action = (
+                "Review candidate-stage formula quality warnings before writing formulas; do not run "
+                "index_formulas until these papers are fixed or explicitly allowed."
             )
         summary = {
             "papers": processed,
@@ -2085,6 +2137,7 @@ class Indexer:
             "scan_limited_high_density_paper_count": len(scan_limited_high_density_papers),
             "truncated_candidate_paper_count": len(truncated_candidate_papers),
             "cached_latex_missing_number_paper_count": len(cached_latex_missing_number_papers),
+            "candidate_quality_blocking_paper_count": len(candidate_quality_blocking_papers),
             "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
@@ -2129,6 +2182,8 @@ class Indexer:
             "scan_limited_high_density_papers": scan_limited_high_density_papers,
             "truncated_candidate_papers": truncated_candidate_papers,
             "cached_latex_missing_number_papers": cached_latex_missing_number_papers,
+            "candidate_quality_blocking_papers": candidate_quality_blocking_papers,
+            "candidate_quality_blocking_paper_count": len(candidate_quality_blocking_papers),
             "unmatched_requested_item_keys": unmatched_requested_item_keys,
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
