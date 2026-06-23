@@ -897,6 +897,59 @@ def _formula_single_item_readonly_review(
     }
 
 
+def _formula_cached_latex_quality_review(
+    *,
+    item_key: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build a read-only hint for cached LaTeX rows that need manual quality review."""
+    return {
+        "mode": "cached_latex_quality_review",
+        "reason": reason,
+        "item_key": item_key,
+        "cli_args": [
+            "estimate-formula-backfill",
+            "--item-key",
+            item_key,
+            "--cache-pdf-number-enrichment",
+            "--preview-all-candidates",
+            "--json",
+        ],
+        "opens_pdf": False,
+        "writes_index": False,
+        "uses_external_ocr": False,
+    }
+
+
+def _formula_structured_cache_required_review(
+    *,
+    item_key: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build a read-only hint for text-layer batches that need structured cache first."""
+    return {
+        "mode": "structured_cache_required",
+        "reason": reason,
+        "item_key": item_key,
+        "preferred_sources": [
+            "llm-for-zotero/MinerU cache",
+            "MinerU JSON",
+            "PDF-Extract-Kit JSON",
+        ],
+        "cli_args": [
+            "estimate-formula-backfill",
+            "--item-key",
+            item_key,
+            "--cache-pdf-number-enrichment",
+            "--preview-all-candidates",
+            "--json",
+        ],
+        "opens_pdf": False,
+        "writes_index": False,
+        "uses_external_ocr": False,
+    }
+
+
 def _formula_candidate_quality_blocking_row(
     *,
     item_key: str,
@@ -930,7 +983,17 @@ def _formula_candidate_quality_blocking_row(
             [],
         ),
     }
-    if "fallback_truncated" in review_reasons:
+    if "text_layer_high_density_requires_structured_cache" in review_reasons:
+        row["recommended_review"] = _formula_structured_cache_required_review(
+            item_key=item_key,
+            reason="text_layer_high_density_requires_structured_cache",
+        )
+    elif "cached_latex_low_quality" in review_reasons:
+        row["recommended_review"] = _formula_cached_latex_quality_review(
+            item_key=item_key,
+            reason="cached_latex_low_quality",
+        )
+    elif "fallback_truncated" in review_reasons:
         row["recommended_review"] = _formula_single_item_readonly_review(
             item_key=item_key,
             reason="fallback_truncated",

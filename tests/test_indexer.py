@@ -2205,6 +2205,22 @@ class TestFormulaBackfill:
         assert result["candidate_quality_blocking_paper_count"] == 1
         assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == ["cached_latex_low_quality"]
         assert result["candidate_quality_blocking_papers"][0]["cached_latex_low_quality_count"] == 1
+        assert result["candidate_quality_blocking_papers"][0]["recommended_review"] == {
+            "mode": "cached_latex_quality_review",
+            "reason": "cached_latex_low_quality",
+            "item_key": "DOC1",
+            "cli_args": [
+                "estimate-formula-backfill",
+                "--item-key",
+                "DOC1",
+                "--cache-pdf-number-enrichment",
+                "--preview-all-candidates",
+                "--json",
+            ],
+            "opens_pdf": False,
+            "writes_index": False,
+            "uses_external_ocr": False,
+        }
 
     def test_estimate_formula_backfill_blocks_high_density_text_layer_only_candidates(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
@@ -2245,6 +2261,27 @@ class TestFormulaBackfill:
             "text_layer_high_density_requires_structured_cache"
         ]
         assert result["candidate_quality_blocking_papers"][0]["text_layer_candidate_count"] == 90
+        assert result["candidate_quality_blocking_papers"][0]["recommended_review"] == {
+            "mode": "structured_cache_required",
+            "reason": "text_layer_high_density_requires_structured_cache",
+            "item_key": "DOC1",
+            "preferred_sources": [
+                "llm-for-zotero/MinerU cache",
+                "MinerU JSON",
+                "PDF-Extract-Kit JSON",
+            ],
+            "cli_args": [
+                "estimate-formula-backfill",
+                "--item-key",
+                "DOC1",
+                "--cache-pdf-number-enrichment",
+                "--preview-all-candidates",
+                "--json",
+            ],
+            "opens_pdf": False,
+            "writes_index": False,
+            "uses_external_ocr": False,
+        }
 
     def test_estimate_formula_backfill_does_not_block_on_mixed_number_prefixes_only(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
