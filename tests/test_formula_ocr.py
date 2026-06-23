@@ -7,6 +7,7 @@ import pytest
 from zotpilot.feature_extraction.formula_ocr import (
     FormulaCandidate,
     SimpleTexFormulaOCRProvider,
+    _attach_standalone_equation_numbers,
     _candidate_confidence,
     _coerce_provider_result,
     _coerce_simpletex_response,
@@ -367,6 +368,25 @@ def test_extract_block_signals_collects_text_fonts_and_flags():
     assert bbox == (1.0, 2.0, 3.0, 4.0)
     assert fonts == {"Times-Italic", "CMMI10"}
     assert flags == {0, 2}
+
+
+def test_attach_standalone_equation_number_keeps_formula_crop_bbox():
+    candidates = [
+        FormulaCandidate(
+            page_num=1,
+            bbox=(100.0, 96.0, 300.0, 116.0),
+            raw_text=r"E = mc^2",
+            confidence=0.9,
+            equation_number_status="missing",
+        )
+    ]
+    number_blocks = [((500.0, 98.0, 520.0, 114.0), "(1)")]
+
+    attached = _attach_standalone_equation_numbers(candidates, number_blocks)
+
+    assert attached[0].equation_number == "(1)"
+    assert attached[0].equation_number_status == "provided"
+    assert attached[0].bbox == candidates[0].bbox
 
 
 def test_dedupe_candidates_keeps_best_overlapping_candidate():

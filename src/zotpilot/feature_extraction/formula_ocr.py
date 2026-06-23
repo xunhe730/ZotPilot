@@ -14,7 +14,7 @@ import re
 import secrets
 import string
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -320,6 +320,7 @@ def extract_formula_candidates(
             page_num = page_index + 1
             page_text = _normalize_space(page.get_text("text") or "")
             page_candidates: list[FormulaCandidate] = []
+            standalone_numbers: list[tuple[tuple[float, float, float, float], str]] = []
             text_dict = page.get_text("dict") or {}
             for block in text_dict.get("blocks", []):
                 if block.get("type") != 0:
@@ -328,6 +329,10 @@ def extract_formula_candidates(
                 if extracted is None:
                     continue
                 raw_text, bbox, font_names, span_flags = extracted
+                standalone_number = _extract_standalone_equation_number(raw_text)
+                if standalone_number:
+                    standalone_numbers.append((bbox, standalone_number))
+                    continue
                 confidence = _candidate_confidence(raw_text, bbox, font_names, span_flags)
                 if confidence < min_confidence:
                     continue
@@ -346,6 +351,7 @@ def extract_formula_candidates(
                         equation_number_status="provided" if equation_number else "missing",
                     )
                 )
+            page_candidates = _attach_standalone_equation_numbers(page_candidates, standalone_numbers)
             page_candidates.sort(key=lambda c: c.confidence, reverse=True)
             page_candidates = _dedupe_candidates(page_candidates)
             if max_formulas_per_page > 0:
@@ -611,6 +617,71 @@ def _dedupe_candidates(candidates: list[FormulaCandidate]) -> list[FormulaCandid
     return kept
 
 
+def _attach_standalone_equation_numbers(
+    candidates: list[FormulaCandidate],
+    number_blocks: list[tuple[tuple[float, float, float, float], str]],
+) -> list[FormulaCandidate]:
+    """Attach right/left margin equation-number blocks to same-line formulas."""
+    if not candidates or not number_blocks:
+        return candidates
+    used_number_indexes: set[int] = set()
+    attached: list[FormulaCandidate] = []
+    for candidate in candidates:
+        if candidate.equation_number:
+            attached.append(candidate)
+            continue
+        best_index: int | None = None
+        best_score: float | None = None
+        for index, (number_bbox, _number) in enumerate(number_blocks):
+            if index in used_number_indexes:
+                continue
+            score = _standalone_equation_number_match_score(candidate.bbox, number_bbox)
+            if score is None:
+                continue
+            if best_score is None or score < best_score:
+                best_index = index
+                best_score = score
+        if best_index is None:
+            attached.append(candidate)
+            continue
+        used_number_indexes.add(best_index)
+        _bbox, number = number_blocks[best_index]
+        attached.append(
+            replace(
+                candidate,
+                equation_number=number,
+                equation_number_status="provided",
+            )
+        )
+    return attached
+
+
+def _standalone_equation_number_match_score(
+    candidate_bbox: tuple[float, float, float, float],
+    number_bbox: tuple[float, float, float, float],
+) -> float | None:
+    cx0, cy0, cx1, cy1 = candidate_bbox
+    nx0, ny0, nx1, ny1 = number_bbox
+    candidate_height = max(cy1 - cy0, 1.0)
+    number_height = max(ny1 - ny0, 1.0)
+    candidate_mid_y = (cy0 + cy1) / 2
+    number_mid_y = (ny0 + ny1) / 2
+    vertical_gap = abs(candidate_mid_y - number_mid_y)
+    if vertical_gap > max(10.0, min(32.0, max(candidate_height, number_height) * 1.25)):
+        return None
+    if nx0 >= cx1:
+        horizontal_gap = nx0 - cx1
+        side_penalty = 0.0
+    elif nx1 <= cx0:
+        horizontal_gap = cx0 - nx1
+        side_penalty = 24.0
+    else:
+        return None
+    if horizontal_gap > 300:
+        return None
+    return vertical_gap * 4 + horizontal_gap + side_penalty
+
+
 def _bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     ax0, ay0, ax1, ay1 = a
     bx0, by0, bx1, by1 = b
@@ -672,6 +743,16 @@ def _extract_equation_number(raw_text: str) -> str:
     else:
         number = match.group("eq") or match.group("tail")
     return f"({number})" if number else ""
+
+
+def _extract_standalone_equation_number(raw_text: str) -> str:
+    normalized = _normalize_space(raw_text)
+    match = re.fullmatch(
+        rf"[\(（]\s*(?P<number>{EQUATION_NUMBER_PATTERN})\s*[\)）]",
+        normalized,
+        re.IGNORECASE,
+    )
+    return f"({match.group('number')})" if match else ""
 
 
 def _normalize_space(text: str) -> str:
