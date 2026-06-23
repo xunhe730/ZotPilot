@@ -1121,6 +1121,8 @@ def cmd_index_formulas(args):
         print("\nWarnings:")
         for warning in warnings:
             print(f"  - {warning}")
+    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
+        return 2
     return 0
 
 
@@ -2301,6 +2303,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=160,
         help="Max characters per raw_text/latex preview; 0 keeps the full text",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-write-blocked",
+        action="store_true",
+        help="Return exit code 2 when formula write guards block this run",
     )
     sub_index_formulas.add_argument("--json", action="store_true", help="Output the full result as JSON")
     sub_index_formulas.add_argument("--config", type=str, default=None, help="Config file path")
