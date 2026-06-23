@@ -2148,6 +2148,9 @@ class TestFormulaBackfill:
                 "truncated_source_count": 0,
                 "cached_latex_missing_equation_number_count": 0,
                 "cached_latex_low_quality_count": 0,
+                "text_layer_candidate_count": 0,
+                "structured_cache_candidate_count": 3,
+                "ocr_needed_count": 0,
                 "duplicate_equation_numbers": [],
                 "equation_number_sequence_breaks": [
                     {
@@ -2202,6 +2205,46 @@ class TestFormulaBackfill:
         assert result["candidate_quality_blocking_paper_count"] == 1
         assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == ["cached_latex_low_quality"]
         assert result["candidate_quality_blocking_papers"][0]["cached_latex_low_quality_count"] == 1
+
+    def test_estimate_formula_backfill_blocks_high_density_text_layer_only_candidates(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Book chapter", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=20 + index,
+                bbox=(20, index * 10, 480, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.72,
+                source="text_layer",
+            )
+            for index in range(90)
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(**self._hash_config().__dict__)
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=20)
+
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["source_counts"] == {"text_layer": 90}
+        assert audit["ocr_needed_count"] == 90
+        assert audit["structured_cache_candidate_count"] == 0
+        assert audit["equation_number_warnings"] == ["text_layer_high_density_requires_structured_cache"]
+        assert result["candidate_quality_blocking_paper_count"] == 1
+        assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == [
+            "text_layer_high_density_requires_structured_cache"
+        ]
+        assert result["candidate_quality_blocking_papers"][0]["text_layer_candidate_count"] == 90
 
     def test_estimate_formula_backfill_does_not_block_on_mixed_number_prefixes_only(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate

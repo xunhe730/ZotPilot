@@ -409,6 +409,9 @@ def _formula_candidate_is_structured_cache(candidate: object) -> bool:
     return _formula_candidate_source(candidate).startswith(("mineru_", "pdf_extract_kit_"))
 
 
+TEXT_LAYER_HIGH_DENSITY_REVIEW_THRESHOLD = 80
+
+
 def _formula_candidate_has_low_quality_cached_latex(candidate: object) -> bool:
     return (
         _formula_candidate_has_cached_latex(candidate)
@@ -632,7 +635,16 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
         for number, count in number_counts.items()
         if count > 1
     ]
+    text_layer_candidate_count = sum(
+        1 for candidate in candidates
+        if _formula_candidate_source(candidate) == "text_layer"
+    )
+    structured_cache_candidate_count = sum(
+        1 for candidate in candidates
+        if _formula_candidate_is_structured_cache(candidate)
+    )
     cached_latex_count = sum(1 for candidate in candidates if _formula_candidate_has_cached_latex(candidate))
+    ocr_needed_count = len(candidates) - cached_latex_count
     cached_latex_low_quality_count = sum(
         1 for candidate in candidates
         if _formula_candidate_has_low_quality_cached_latex(candidate)
@@ -660,8 +672,17 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
         equation_number_warnings.add("cached_latex_missing_equation_numbers")
     if cached_latex_low_quality_count:
         equation_number_warnings.add("cached_latex_low_quality")
+    if (
+        structured_cache_candidate_count == 0
+        and cached_latex_count == 0
+        and text_layer_candidate_count >= TEXT_LAYER_HIGH_DENSITY_REVIEW_THRESHOLD
+        and text_layer_candidate_count == len(candidates)
+    ):
+        equation_number_warnings.add("text_layer_high_density_requires_structured_cache")
     return {
         "candidate_count": len(candidates),
+        "text_layer_candidate_count": text_layer_candidate_count,
+        "structured_cache_candidate_count": structured_cache_candidate_count,
         "cached_latex_count": cached_latex_count,
         "cached_latex_low_quality_count": cached_latex_low_quality_count,
         "cached_latex_missing_equation_number_count": cached_latex_missing_number_count,
@@ -670,7 +691,7 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
             if cached_latex_count
             else 0.0
         ),
-        "ocr_needed_count": len(candidates) - cached_latex_count,
+        "ocr_needed_count": ocr_needed_count,
         "numbered_count": len(equation_numbers),
         "unnumbered_count": unnumbered_count,
         "duplicate_equation_numbers": duplicate_numbers[:20],
@@ -834,6 +855,7 @@ _BLOCKING_CANDIDATE_REVIEW_WARNINGS = frozenset({
     "equation_number_regression",
     "large_equation_number_gap",
     "missing_equation_number_gap",
+    "text_layer_high_density_requires_structured_cache",
 })
 
 
@@ -899,6 +921,9 @@ def _formula_candidate_quality_blocking_row(
             "cached_latex_low_quality_count",
             0,
         ),
+        "text_layer_candidate_count": candidate_audit.get("text_layer_candidate_count", 0),
+        "structured_cache_candidate_count": candidate_audit.get("structured_cache_candidate_count", 0),
+        "ocr_needed_count": candidate_audit.get("ocr_needed_count", 0),
         "duplicate_equation_numbers": candidate_audit.get("duplicate_equation_numbers", []),
         "equation_number_sequence_breaks": candidate_audit.get(
             "equation_number_sequence_breaks",
