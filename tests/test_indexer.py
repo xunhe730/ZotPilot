@@ -3158,6 +3158,9 @@ class TestFormulaBackfill:
         assert {event["run_id"] for event in events} == {result["run_id"]}
         assert all(event["schema_version"] == 1 for event in events)
         assert events[1]["status"] == "indexed"
+        assert events[2]["write_ready"] is True
+        assert events[2]["write_blocked"] is False
+        assert events[2]["low_confidence_review_count"] == 0
 
     def test_formula_backfill_jsonl_records_unmatched_requested_item_keys(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate

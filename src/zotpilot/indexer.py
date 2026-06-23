@@ -1983,6 +1983,7 @@ class Indexer:
                 "provider_calls_used": result["provider_calls_used"],
                 "external_calls_used": result["external_calls_used"],
                 "candidate_quality_review_count": result["candidate_quality_review_count"],
+                "low_confidence_review_count": result["low_confidence_review_count"],
                 "high_density_deferred_count": high_density_deferred_count,
                 "high_density_call_threshold": high_density_threshold,
                 "high_density_candidate_threshold": high_density_candidate_threshold,
