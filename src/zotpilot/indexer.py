@@ -475,16 +475,11 @@ def _formula_candidate_segment_summary(
     }
 
 
-def _formula_candidate_page_sort_key(indexed_candidate: tuple[int, object]) -> tuple[int, float, float, int]:
+def _formula_candidate_page_sort_key(indexed_candidate: tuple[int, object]) -> tuple[int, int]:
     index, candidate = indexed_candidate
     page_num = getattr(candidate, "page_num", 0)
-    bbox = tuple(getattr(candidate, "bbox", ()) or ())
-    y0 = float(bbox[1]) if len(bbox) >= 2 else 0.0
-    x0 = float(bbox[0]) if bbox else 0.0
     return (
         page_num if isinstance(page_num, int) and page_num > 0 else 0,
-        y0,
-        x0,
         index,
     )
 
