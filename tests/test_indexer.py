@@ -2045,6 +2045,7 @@ class TestFormulaBackfill:
                 "equation_number_warnings": ["missing_equation_number_gap"],
                 "truncated_source_count": 0,
                 "cached_latex_missing_equation_number_count": 0,
+                "cached_latex_low_quality_count": 0,
                 "duplicate_equation_numbers": [],
                 "equation_number_sequence_breaks": [
                     {
@@ -2098,6 +2099,7 @@ class TestFormulaBackfill:
         assert audit["equation_number_warnings"] == ["cached_latex_low_quality"]
         assert result["candidate_quality_blocking_paper_count"] == 1
         assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == ["cached_latex_low_quality"]
+        assert result["candidate_quality_blocking_papers"][0]["cached_latex_low_quality_count"] == 1
 
     def test_estimate_formula_backfill_does_not_block_on_mixed_number_prefixes_only(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate

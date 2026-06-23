@@ -842,6 +842,10 @@ def _formula_candidate_quality_blocking_row(
             "cached_latex_missing_equation_number_count",
             0,
         ),
+        "cached_latex_low_quality_count": candidate_audit.get(
+            "cached_latex_low_quality_count",
+            0,
+        ),
         "duplicate_equation_numbers": candidate_audit.get("duplicate_equation_numbers", []),
         "equation_number_sequence_breaks": candidate_audit.get(
             "equation_number_sequence_breaks",
