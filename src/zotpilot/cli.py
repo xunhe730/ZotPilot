@@ -1081,6 +1081,17 @@ def cmd_index_formulas(args):
     print(f"  Provider:                {result.get('provider', '')}")
     print(f"  Processed:               {result.get('processed', 0)}")
     print(f"  Formulas indexed:        {result.get('formulas_indexed', 0)}")
+    if "write_blocked" in result or "write_ready" in result:
+        write_status = (
+            "blocked"
+            if result.get("write_blocked")
+            else "ready"
+            if result.get("write_ready")
+            else "not ready"
+        )
+        print(f"  Write status:            {write_status}")
+    if result.get("next_action"):
+        print(f"  Next:                    {result.get('next_action')}")
     print(f"  Provider calls used:     {result.get('provider_calls_used', 0)}")
     print(f"  External calls used:     {result.get('external_calls_used', 0)}")
     if "pdf_fallback_max_pages" in result:

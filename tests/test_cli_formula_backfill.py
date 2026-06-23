@@ -144,6 +144,10 @@ def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, caps
         "external_calls_used": 2,
         "daily_call_budget": 2,
         "daily_call_budget_remaining": 0,
+        "write_blocked": True,
+        "write_ready": False,
+        "write_block_reasons": ["candidate_quality_review_required"],
+        "next_action": "Review candidate-stage formula quality warnings before rerunning.",
         "stopped_reason": "daily_call_budget",
         "resume_cursor": "DOC1",
         "next_item_key": "DOC2",
@@ -185,6 +189,8 @@ def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, caps
     out = capsys.readouterr().out
     assert rc == 0
     assert "Formula backfill complete:" in out
+    assert "Write status:            blocked" in out
+    assert "Next:                    Review candidate-stage formula quality warnings before rerunning." in out
     assert "Resume after:            DOC1" in out
     assert "Next item:               DOC2" in out
     assert config.formula_candidate_cache_pdf_number_enrichment is True

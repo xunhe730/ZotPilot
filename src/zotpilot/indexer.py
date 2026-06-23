@@ -770,6 +770,36 @@ def _formula_backfill_next_action(
     return "Local formula OCR is configured; run index_formulas when ready."
 
 
+def _formula_write_next_action(
+    *,
+    write_block_reasons: list[str],
+    processed: int,
+    formulas_indexed: int,
+    resume_cursor: str,
+) -> str:
+    """Summarize the next safe action after an actual formula write attempt."""
+    if "candidate_quality_review_required" in write_block_reasons:
+        return (
+            "Review candidate-stage formula quality warnings before rerunning index_formulas; "
+            "do not force writes unless the affected papers have been checked."
+        )
+    if "high_density_deferred" in write_block_reasons:
+        return (
+            "Review high-density formula documents separately, preferably with a single-item "
+            "read-only estimate or page-window plan."
+        )
+    if "daily_call_budget" in write_block_reasons:
+        suffix = f" with resume_after={resume_cursor}" if resume_cursor else ""
+        return f"Daily formula OCR budget was reached; rerun later{suffix}."
+    if "provider_quota_or_rate_limit" in write_block_reasons:
+        return "Provider quota or rate limit stopped the run; wait, then resume from the reported next item."
+    if processed == 0:
+        return "No already-indexed original PDFs matched this write request; check item filters first."
+    if formulas_indexed == 0:
+        return "No formula chunks were written; inspect per-paper results before retrying."
+    return "Formula chunks were written; verify sampled formula search results before scaling up."
+
+
 def _formula_backfill_warnings(
     *,
     processed: int,
@@ -1878,6 +1908,21 @@ class Indexer:
             1 for row in results
             if row.get("status") == "deferred_high_density"
         )
+        write_block_reasons: list[str] = []
+        if candidate_quality_review_queue:
+            write_block_reasons.append("candidate_quality_review_required")
+        if high_density_deferred_count:
+            write_block_reasons.append("high_density_deferred")
+        if stopped_reason:
+            write_block_reasons.append(stopped_reason)
+        write_blocked = bool(write_block_reasons)
+        write_ready = not write_blocked and formulas_indexed > 0
+        next_action = _formula_write_next_action(
+            write_block_reasons=write_block_reasons,
+            processed=processed_count,
+            formulas_indexed=formulas_indexed,
+            resume_cursor=resume_cursor,
+        )
         result = {
             "run_id": run_id,
             "provider": provider_name,
@@ -1889,6 +1934,10 @@ class Indexer:
             "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "unmatched_requested_item_keys": unmatched_requested_item_keys,
             "formulas_indexed": formulas_indexed,
+            "write_ready": write_ready,
+            "write_blocked": write_blocked,
+            "write_block_reasons": write_block_reasons,
+            "next_action": next_action,
             "provider_calls_used": provider_calls_used,
             "external_calls_used": external_calls_used,
             "daily_call_budget": budget,
@@ -1927,6 +1976,10 @@ class Indexer:
                 "unmatched_requested_item_key_count": result["unmatched_requested_item_key_count"],
                 "unmatched_requested_item_keys": result["unmatched_requested_item_keys"],
                 "formulas_indexed": result["formulas_indexed"],
+                "write_ready": result["write_ready"],
+                "write_blocked": result["write_blocked"],
+                "write_block_reasons": result["write_block_reasons"],
+                "next_action": result["next_action"],
                 "provider_calls_used": result["provider_calls_used"],
                 "external_calls_used": result["external_calls_used"],
                 "candidate_quality_review_count": result["candidate_quality_review_count"],

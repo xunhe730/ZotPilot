@@ -271,6 +271,10 @@ class TestFormulaBackfill:
 
         assert result["processed"] == 1
         assert result["formulas_indexed"] == 0
+        assert result["write_blocked"] is True
+        assert result["write_ready"] is False
+        assert result["write_block_reasons"] == ["candidate_quality_review_required"]
+        assert result["next_action"].startswith("Review candidate-stage formula quality warnings")
         assert result["candidate_quality_review_count"] == 1
         assert result["results"][0]["status"] == "needs_review"
         assert result["results"][0]["reason"] == "formula_candidate_review_required"
