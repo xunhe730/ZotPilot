@@ -822,6 +822,32 @@ def _formula_candidate_blocking_review_reasons(candidate_audit: dict[str, object
     return sorted(reasons)
 
 
+def _formula_single_item_readonly_review(
+    *,
+    item_key: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build a machine-readable rerun hint for manual formula candidate review."""
+    return {
+        "mode": "single_item_readonly_estimate",
+        "reason": reason,
+        "item_key": item_key,
+        "cli_args": [
+            "estimate-formula-backfill",
+            "--item-key",
+            item_key,
+            "--pdf-fallback-max-pages",
+            "0",
+            "--cache-pdf-number-enrichment",
+            "--preview-all-candidates",
+            "--json",
+        ],
+        "opens_pdf": True,
+        "writes_index": False,
+        "uses_external_ocr": False,
+    }
+
+
 def _formula_candidate_quality_blocking_row(
     *,
     item_key: str,
@@ -831,7 +857,7 @@ def _formula_candidate_quality_blocking_row(
     review_reasons: list[str],
 ) -> dict[str, object]:
     """Build the read-only estimate row for papers that should not be written yet."""
-    return {
+    row = {
         "item_key": item_key,
         "title": title,
         "candidate_count": candidate_count,
@@ -852,6 +878,12 @@ def _formula_candidate_quality_blocking_row(
             [],
         ),
     }
+    if "fallback_truncated" in review_reasons:
+        row["recommended_review"] = _formula_single_item_readonly_review(
+            item_key=item_key,
+            reason="fallback_truncated",
+        )
+    return row
 
 
 def _structural_formula_review_reasons(review_rows: list[dict[str, object]]) -> list[str]:
@@ -1959,6 +1991,10 @@ class Indexer:
                         "title": item.title,
                         "candidate_count": candidate_count,
                         "truncated_source_count": candidate_audit["truncated_source_count"],
+                        "recommended_review": _formula_single_item_readonly_review(
+                            item_key=item.item_key,
+                            reason="fallback_truncated",
+                        ),
                     })
                 missing_cached_numbers = int(
                     candidate_audit.get("cached_latex_missing_equation_number_count", 0)
@@ -2001,12 +2037,17 @@ class Indexer:
                 }
                 dense_formula_papers.append(dense_formula_row)
                 if high_density_scan_limited or high_density_truncated:
+                    scan_limited_reason = "truncated_candidate_source" if high_density_truncated else "scan_limit"
                     scan_limited_high_density_papers.append({
                         "item_key": item.item_key,
                         "title": item.title,
                         "scanned_candidate_count": candidate_count,
                         "scan_limit": batch_candidate_scan_limit,
-                        "reason": "truncated_candidate_source" if high_density_truncated else "scan_limit",
+                        "reason": scan_limited_reason,
+                        "recommended_review": _formula_single_item_readonly_review(
+                            item_key=item.item_key,
+                            reason=scan_limited_reason,
+                        ),
                     })
                 else:
                     high_density_plan = _formula_high_density_backfill_plan(

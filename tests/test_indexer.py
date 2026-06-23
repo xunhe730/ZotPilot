@@ -2325,6 +2325,33 @@ class TestFormulaBackfill:
         assert result["results"][0]["default_batch_status"] == "deferred_high_density"
         assert result["deferred_high_density_candidate_count"] == 3
         assert result["deferred_high_density_provider_calls"] == 0
+        assert result["scan_limited_high_density_papers"] == [
+            {
+                "item_key": "THESIS1",
+                "title": "Damage mechanics thesis",
+                "scanned_candidate_count": 3,
+                "scan_limit": 3,
+                "reason": "scan_limit",
+                "recommended_review": {
+                    "mode": "single_item_readonly_estimate",
+                    "reason": "scan_limit",
+                    "item_key": "THESIS1",
+                    "cli_args": [
+                        "estimate-formula-backfill",
+                        "--item-key",
+                        "THESIS1",
+                        "--pdf-fallback-max-pages",
+                        "0",
+                        "--cache-pdf-number-enrichment",
+                        "--preview-all-candidates",
+                        "--json",
+                    ],
+                    "opens_pdf": True,
+                    "writes_index": False,
+                    "uses_external_ocr": False,
+                },
+            }
+        ]
         assert extract.call_args.kwargs["max_candidates_per_doc"] == 3
 
     def test_formula_backfill_defers_high_density_external_documents_in_batch(self, tmp_path):
@@ -2790,8 +2817,27 @@ class TestFormulaBackfill:
                 "title": "Paper",
                 "candidate_count": 1,
                 "truncated_source_count": 1,
+                "recommended_review": {
+                    "mode": "single_item_readonly_estimate",
+                    "reason": "fallback_truncated",
+                    "item_key": "DOC1",
+                    "cli_args": [
+                        "estimate-formula-backfill",
+                        "--item-key",
+                        "DOC1",
+                        "--pdf-fallback-max-pages",
+                        "0",
+                        "--cache-pdf-number-enrichment",
+                        "--preview-all-candidates",
+                        "--json",
+                    ],
+                    "opens_pdf": True,
+                    "writes_index": False,
+                    "uses_external_ocr": False,
+                },
             }
         ]
+        assert result["candidate_quality_blocking_papers"][0]["recommended_review"]["reason"] == "fallback_truncated"
         assert result["summary"]["truncated_candidate_paper_count"] == 1
         assert any("truncated PDF fallback" in warning for warning in result["summary"]["warnings"])
 
