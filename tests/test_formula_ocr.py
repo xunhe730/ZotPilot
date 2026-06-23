@@ -4539,6 +4539,46 @@ def test_split_multirow_independent_formula_candidates_splits_displaystyle_rows(
     assert split[2].latex.startswith(r"\displaystyle \bar")
 
 
+def test_split_multirow_independent_formula_candidates_ignores_style_only_rows():
+    candidates = [
+        FormulaCandidate(
+            page_num=13,
+            bbox=(58.0, 427.0, 174.0, 520.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(13)",
+            latex=(
+                r"\begin{array} { l } "
+                r"{ { \displaystyle \bar{\eta}_D = \frac{1}{D_f}\int \eta(D)dD } } \\ "
+                r"{ { \displaystyle } } \\ "
+                r"{ { \displaystyle \bar{\theta}_D = \frac{1}{D_f}\int \bar{\theta}(D)dD } } "
+                r"\end{array}"
+            ),
+        ),
+        FormulaCandidate(
+            page_num=14,
+            bbox=(60.0, 723.0, 425.0, 741.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(15)",
+            latex=r"\Delta W = W_E + W_P",
+        ),
+    ]
+
+    split = _split_multirow_independent_formula_candidates(candidates)
+    inferred = _infer_missing_equation_numbers_between_numbered(split)
+
+    assert len(split) == 3
+    assert split[0].equation_number == "(13)"
+    assert split[1].equation_number == ""
+    assert split[1].latex.startswith(r"\displaystyle \bar{\theta}")
+    assert inferred[1].equation_number == "(14)"
+
+
 def test_split_multirow_independent_formula_candidates_keeps_continuation_rows_together():
     candidates = [
         FormulaCandidate(
@@ -4560,6 +4600,48 @@ def test_split_multirow_independent_formula_candidates_keeps_continuation_rows_t
 
     assert len(split) == 1
     assert split[0].latex == candidates[0].latex
+
+
+def test_split_multirow_independent_formula_candidates_splits_aligned_top_level_rows():
+    candidates = [
+        FormulaCandidate(
+            page_num=13,
+            bbox=(60.0, 641.0, 477.0, 766.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(7)",
+            latex=(
+                r"\begin{array} { r l r } "
+                r"{ \varepsilon_f = A + B } & \\ { + C } & { \mathcal { O } } \\ "
+                r"{ \alpha = \left\{ \begin{array} { l l } { 1 } & { \bar{\theta} \ge 0 } \\ "
+                r"{ c_\theta } & { \bar{\theta} < 0 } \end{array} \right. } & { \mathfrak { C } } & { \alpha } "
+                r"\end{array}"
+            ),
+        ),
+        FormulaCandidate(
+            page_num=13,
+            bbox=(58.0, 809.0, 339.0, 844.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(9)",
+            latex=r"\bar{\theta}=1-\frac{2}{\pi}\cos^{-1}(x)",
+        ),
+    ]
+
+    split = _split_multirow_independent_formula_candidates(candidates)
+    inferred = _infer_missing_equation_numbers_between_numbered(split)
+
+    assert len(split) == 3
+    assert split[0].equation_number == "(7)"
+    assert split[0].latex == r"\varepsilon_f = A + B + C"
+    assert split[1].equation_number == ""
+    assert r"\begin{array}" in split[1].latex
+    assert inferred[1].equation_number == "(8)"
+    assert inferred[1].equation_number_status == "inferred"
 
 
 def test_extract_block_signals_collects_text_fonts_and_flags():

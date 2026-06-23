@@ -4818,12 +4818,18 @@ def _split_multirow_independent_formula_candidates(candidates: list[FormulaCandi
         x0, y0, x1, y1 = candidate.bbox
         row_height = max((y1 - y0) / len(rows), 1.0)
         for row_index, row in enumerate(rows):
+            row_equation_number = _extract_equation_number(row) or (
+                candidate.equation_number if row_index == 0 else ""
+            )
             split.append(
                 replace(
                     candidate,
                     bbox=(x0, y0 + row_height * row_index, x1, min(y1, y0 + row_height * (row_index + 1))),
                     raw_text=row,
-                    equation_number="",
+                    equation_number=row_equation_number,
+                    equation_number_status=(
+                        candidate.equation_number_status if row_equation_number == candidate.equation_number else ""
+                    ),
                     latex=row,
                     source=f"{candidate.source}_row",
                 )
@@ -4833,15 +4839,25 @@ def _split_multirow_independent_formula_candidates(candidates: list[FormulaCandi
 
 def _independent_formula_rows_from_latex(latex: str) -> list[str]:
     cleaned = (latex or "").strip()
-    if not cleaned or "&" in cleaned:
+    if not cleaned:
         return []
-    array_count = len(re.findall(r"\\begin\s*\{\s*array\s*\}", cleaned))
-    if array_count != 1 or not re.search(r"\\end\s*\{\s*array\s*\}", cleaned):
+    if not re.match(r"\\begin\s*\{\s*array\s*\}", cleaned) or not re.search(r"\\end\s*\{\s*array\s*\}", cleaned):
         return []
-    inner = re.sub(r"\\begin\s*\{\s*array\s*\}\s*\{[^{}]*\}", "", cleaned, count=1)
-    inner = re.sub(r"\\end\s*\{\s*array\s*\}", "", inner, count=1)
-    rows = [_strip_formula_row_wrappers(part) for part in re.split(r"\\\\", inner)]
-    rows = [row for row in rows if row]
+    inner = _outer_latex_array_body(cleaned)
+    if not inner:
+        return []
+    raw_rows = [
+        _normalize_independent_formula_row(part)
+        for part in _split_top_level_latex_rows(inner)
+    ]
+    rows: list[str] = []
+    for row in raw_rows:
+        if not row:
+            continue
+        if rows and _formula_row_likely_continuation(row):
+            rows[-1] = _normalize_space(f"{rows[-1]} {row}")
+            continue
+        rows.append(row)
     if len(rows) <= 1:
         return []
     if any(_formula_row_likely_continuation(row) for row in rows):
@@ -4851,6 +4867,99 @@ def _independent_formula_rows_from_latex(latex: str) -> list[str]:
     return rows
 
 
+def _outer_latex_array_body(latex: str) -> str:
+    begin_re = re.compile(r"\\begin\s*\{\s*array\s*\}\s*\{[^{}]*\}")
+    end_re = re.compile(r"\\end\s*\{\s*array\s*\}")
+    begin_match = begin_re.match(latex.strip())
+    if begin_match is None:
+        return ""
+    depth = 0
+    index = begin_match.end()
+    body_start = index
+    while index < len(latex):
+        nested_begin = begin_re.match(latex, index)
+        if nested_begin is not None:
+            depth += 1
+            index = nested_begin.end()
+            continue
+        end_match = end_re.match(latex, index)
+        if end_match is not None:
+            if depth == 0:
+                return latex[body_start:index]
+            depth -= 1
+            index = end_match.end()
+            continue
+        index += 1
+    return ""
+
+
+def _split_top_level_latex_rows(latex: str) -> list[str]:
+    return _split_top_level_latex_delimiter(latex, delimiter=r"\\")
+
+
+def _split_top_level_alignment_cells(latex: str) -> list[str]:
+    return _split_top_level_latex_delimiter(latex, delimiter="&")
+
+
+def _split_top_level_latex_delimiter(latex: str, *, delimiter: str) -> list[str]:
+    begin_re = re.compile(r"\\begin\s*\{\s*array\s*\}\s*\{[^{}]*\}")
+    end_re = re.compile(r"\\end\s*\{\s*array\s*\}")
+    parts: list[str] = []
+    start = 0
+    index = 0
+    depth = 0
+    while index < len(latex):
+        nested_begin = begin_re.match(latex, index)
+        if nested_begin is not None:
+            depth += 1
+            index = nested_begin.end()
+            continue
+        end_match = end_re.match(latex, index)
+        if end_match is not None:
+            depth = max(depth - 1, 0)
+            index = end_match.end()
+            continue
+        if depth == 0 and latex.startswith(delimiter, index):
+            parts.append(latex[start:index])
+            index += len(delimiter)
+            start = index
+            continue
+        index += 1
+    parts.append(latex[start:])
+    return parts
+
+
+def _normalize_independent_formula_row(row: str) -> str:
+    cells = [
+        _strip_formula_row_wrappers(cell)
+        for cell in _split_top_level_alignment_cells(row)
+    ]
+    cells = [_drop_style_only_formula_row(cell) for cell in cells]
+    cells = [cell for cell in cells if cell]
+    while cells and _formula_alignment_cell_likely_label(cells[-1]):
+        cells.pop()
+    if not cells:
+        return ""
+    return _normalize_space(" ".join(cells))
+
+
+def _drop_style_only_formula_row(row: str) -> str:
+    cleaned = _normalize_space(row)
+    return "" if re.fullmatch(r"\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle)", cleaned) else row
+
+
+def _formula_alignment_cell_likely_label(cell: str) -> bool:
+    if _extract_equation_number(cell):
+        return True
+    if _formula_row_has_relation(cell):
+        return False
+    visible_text = _normalize_space(_latex_visible_text(cell))
+    if re.match(r"^(?:\+|-|−|=)", visible_text):
+        return False
+    compact = re.sub(r"[^0-9A-Za-zΑ-Ωα-ω]", "", visible_text)
+    return 0 < len(compact) <= 8
+
+
 def _formula_row_likely_continuation(latex: str) -> bool:
     visible_text = _normalize_space(_latex_visible_text(latex))
     visible_text = re.sub(
@@ -4858,6 +4967,12 @@ def _formula_row_likely_continuation(latex: str) -> bool:
         "",
         visible_text,
     )
+    for _ in range(3):
+        updated = re.sub(r"^(?:[{}]\s*)+", "", visible_text)
+        updated = re.sub(r"^(?:\\(?:left|right)\s*\.\s*)+", "", updated)
+        if updated == visible_text:
+            break
+        visible_text = updated
     return bool(re.match(r"^(?:=|\+|-|−|\\(?:left|right)\b)", visible_text))
 
 
