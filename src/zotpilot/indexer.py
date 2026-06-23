@@ -1496,6 +1496,7 @@ class Indexer:
             key for key in requested_keys
             if key and key not in matched_keys
         ]
+        request_complete = not unmatched_requested_item_keys
         resume_after_found = (
             resume_after is None
             or resume_after in matched_keys
@@ -1559,6 +1560,7 @@ class Indexer:
                 "skipped": len(skipped_items),
                 "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
                 "unmatched_requested_item_keys": unmatched_requested_item_keys,
+                "request_complete": request_complete,
                 "daily_call_budget": budget,
                 "high_density_call_threshold": high_density_threshold,
                 "high_density_candidate_threshold": high_density_candidate_threshold,
@@ -1948,6 +1950,7 @@ class Indexer:
             "skipped": len(skipped_items),
             "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "unmatched_requested_item_keys": unmatched_requested_item_keys,
+            "request_complete": request_complete,
             "formulas_indexed": formulas_indexed,
             "write_ready": write_ready,
             "write_blocked": write_blocked,
@@ -1991,6 +1994,7 @@ class Indexer:
                 "skipped": result["skipped"],
                 "unmatched_requested_item_key_count": result["unmatched_requested_item_key_count"],
                 "unmatched_requested_item_keys": result["unmatched_requested_item_keys"],
+                "request_complete": result["request_complete"],
                 "formulas_indexed": result["formulas_indexed"],
                 "write_ready": result["write_ready"],
                 "write_blocked": result["write_blocked"],
@@ -2132,6 +2136,7 @@ class Indexer:
             )
             sampled_from = len(raw_items)
             matched_count = len(matched_items)
+        request_complete = not unmatched_requested_item_keys
         items, skipped_items = self._filter_formula_backfill_original_items(raw_items)
 
         results: list[dict[str, object]] = [
@@ -2453,6 +2458,7 @@ class Indexer:
             "cached_latex_missing_number_paper_count": len(cached_latex_missing_number_papers),
             "candidate_quality_blocking_paper_count": len(candidate_quality_blocking_papers),
             "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
+            "request_complete": request_complete,
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
             "sample_seed": effective_sample_seed,
@@ -2500,6 +2506,7 @@ class Indexer:
             "candidate_quality_blocking_paper_count": len(candidate_quality_blocking_papers),
             "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "unmatched_requested_item_keys": unmatched_requested_item_keys,
+            "request_complete": request_complete,
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,
             "sample_seed": effective_sample_seed,

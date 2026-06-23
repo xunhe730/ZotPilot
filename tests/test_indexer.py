@@ -1492,6 +1492,7 @@ class TestFormulaBackfill:
         assert result["matched"] == 1
         assert result["unmatched_requested_item_keys"] == ["MISSING1"]
         assert result["unmatched_requested_item_key_count"] == 1
+        assert result["request_complete"] is False
         assert "1 requested item_key(s) were not matched" in result["warnings"][-1]
         assert result["formulas_indexed"] == 1
         assert result["next_action"].startswith("Resolve unmatched requested item keys")
@@ -1842,7 +1843,9 @@ class TestFormulaBackfill:
         assert result["matched"] == 1
         assert result["unmatched_requested_item_keys"] == ["MISSING1"]
         assert result["unmatched_requested_item_key_count"] == 1
+        assert result["request_complete"] is False
         assert result["summary"]["unmatched_requested_item_key_count"] == 1
+        assert result["summary"]["request_complete"] is False
         assert "1 requested item_key(s) were not matched" in result["summary"]["warnings"][-1]
         assert result["summary"]["next_action"].startswith("Resolve unmatched requested item keys")
 
@@ -3213,9 +3216,12 @@ class TestFormulaBackfill:
 
         events = [json.loads(line) for line in state_path.read_text(encoding="utf-8").splitlines()]
         assert result["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert result["request_complete"] is False
         assert events[0]["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert events[0]["request_complete"] is False
         assert events[-1]["unmatched_requested_item_keys"] == ["MISSING1"]
         assert events[-1]["unmatched_requested_item_key_count"] == 1
+        assert events[-1]["request_complete"] is False
 
     def test_formula_backfill_writes_jsonl_high_density_deferred_events(self, tmp_path):
         from zotpilot.indexer import Indexer
