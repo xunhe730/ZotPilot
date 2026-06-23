@@ -615,6 +615,8 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
     )
     equation_number_audit = _formula_equation_number_audit(equation_numbers)
     equation_number_warnings = set(equation_number_audit["equation_number_warnings"])
+    if duplicate_numbers:
+        equation_number_warnings.add("duplicate_equation_numbers")
     if cached_latex_missing_number_count:
         equation_number_warnings.add("cached_latex_missing_equation_numbers")
     return {
