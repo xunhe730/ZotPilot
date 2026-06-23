@@ -2490,6 +2490,7 @@ class Indexer:
             "cached_latex_missing_number_papers": cached_latex_missing_number_papers,
             "candidate_quality_blocking_papers": candidate_quality_blocking_papers,
             "candidate_quality_blocking_paper_count": len(candidate_quality_blocking_papers),
+            "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
             "unmatched_requested_item_keys": unmatched_requested_item_keys,
             "resume_after_found": resume_after_found,
             "sample_size": effective_sample_size,

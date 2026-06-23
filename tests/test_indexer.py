@@ -1840,6 +1840,7 @@ class TestFormulaBackfill:
 
         assert result["matched"] == 1
         assert result["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert result["unmatched_requested_item_key_count"] == 1
         assert result["summary"]["unmatched_requested_item_key_count"] == 1
         assert "1 requested item_key(s) were not matched" in result["summary"]["warnings"][-1]
 
