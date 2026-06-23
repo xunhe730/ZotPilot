@@ -2526,12 +2526,17 @@ def _enrich_candidate_equation_numbers_from_pdf(
     *,
     records_by_page: dict[int, list[_PdfEquationNumberRecord]] | None = None,
 ) -> list[FormulaCandidate]:
-    if not candidates or all(candidate.equation_number for candidate in candidates):
+    if not candidates:
         return candidates
     if records_by_page is None:
+        if all(candidate.equation_number for candidate in candidates):
+            return candidates
         scan = _scan_pdf_equation_numbers_from_path(pdf_path)
         records_by_page = scan.records_by_page if scan is not None else None
     if not records_by_page:
+        return candidates
+    candidates = _release_candidate_numbers_mismatched_to_pdf_page(candidates, records_by_page)
+    if all(candidate.equation_number for candidate in candidates):
         return candidates
 
     enriched = _enrich_candidate_equation_numbers_from_pdf_page_order(candidates, records_by_page)
@@ -2603,6 +2608,27 @@ def _enrich_candidate_equation_numbers_from_pdf(
             used_numbers.add(match_index)
             enriched[candidate_index] = replace(candidate, equation_number=ordered_numbers[match_index][0])
     return enriched
+
+
+def _release_candidate_numbers_mismatched_to_pdf_page(
+    candidates: list[FormulaCandidate],
+    records_by_page: dict[int, list[_PdfEquationNumberRecord]],
+) -> list[FormulaCandidate]:
+    released: list[FormulaCandidate] = []
+    for candidate in candidates:
+        if not candidate.equation_number or not _is_structured_cache_candidate(candidate):
+            released.append(candidate)
+            continue
+        page_records = records_by_page.get(candidate.page_num, [])
+        if not page_records:
+            released.append(candidate)
+            continue
+        page_numbers = {record.number for record in page_records}
+        if candidate.equation_number in page_numbers:
+            released.append(candidate)
+            continue
+        released.append(replace(candidate, equation_number="", equation_number_status=""))
+    return released
 
 
 def _enrich_candidate_equation_numbers_from_pdf_page_order(
@@ -2700,6 +2726,8 @@ def _enrich_candidate_equation_numbers_from_pdf_text(
         scored_records.sort(reverse=True, key=lambda row: row[0])
         best_score, best_record_index, best_record = scored_records[0]
         second_score = scored_records[1][0] if len(scored_records) > 1 else 0.0
+        if best_score < 0.72 and _candidate_pdf_record_y_distance(candidate, best_record) > 85.0:
+            continue
         if (candidate.page_num, best_record.number) in existing_numbers_by_page:
             continue
         if best_record.number in existing_numbers:
@@ -2754,6 +2782,17 @@ def _enrich_candidate_equation_numbers_from_pdf_text(
         assigned_numbers.add(number)
 
     return enriched
+
+
+def _candidate_pdf_record_y_distance(
+    candidate: FormulaCandidate,
+    record: _PdfEquationNumberRecord,
+) -> float:
+    if not _is_valid_bbox(candidate.bbox):
+        return float("inf")
+    y_center = (candidate.bbox[1] + candidate.bbox[3]) / 2.0
+    y_values = _candidate_coordinate_values_to_pdf_space(candidate, y_center)
+    return min(abs(candidate_y - record.y_center) for candidate_y in y_values)
 
 
 def _formula_text_match_score(latex: str, pdf_text: str) -> float:
@@ -2996,67 +3035,70 @@ def _infer_missing_equation_numbers_between_numbered(candidates: list[FormulaCan
 def _repair_shifted_equation_numbers_between_anchors(
     candidates: list[FormulaCandidate],
 ) -> list[FormulaCandidate]:
-    ordered = _candidate_items_in_reading_order(candidates)
-    if len(ordered) < 4:
-        return candidates
     repaired = list(candidates)
-    for start_pos, (start_index, start_candidate) in enumerate(ordered[:-2]):
-        start_sequence = _equation_number_sequence_value(start_candidate.equation_number)
-        if start_sequence is None:
-            continue
-        for end_pos in range(start_pos + 2, min(len(ordered), start_pos + 7)):
-            end_index, end_candidate = ordered[end_pos]
-            end_sequence = _equation_number_sequence_value(end_candidate.equation_number)
-            if end_sequence is None:
-                continue
-            expected_numbers = _missing_sequence_numbers_between(start_sequence, end_sequence)
-            between = ordered[start_pos + 1:end_pos]
-            if not expected_numbers or len(expected_numbers) != len(between):
-                continue
-            between_indices = {candidate_index for candidate_index, _candidate in between}
-            outside_numbers = {
-                candidate.equation_number
-                for candidate_index, candidate in ordered
-                if candidate_index not in between_indices and candidate.equation_number
-            }
-            if any(equation_number in outside_numbers for equation_number in expected_numbers):
-                continue
-            if not _can_repair_equation_number_segment(between, expected_numbers):
-                continue
-            for (candidate_index, candidate), equation_number in zip(between, expected_numbers):
-                if repaired[candidate_index].equation_number != equation_number:
-                    repaired[candidate_index] = replace(
-                        candidate,
-                        equation_number=equation_number,
-                        equation_number_status="inferred",
-                    )
+    while True:
+        ordered = _candidate_items_in_reading_order(repaired)
+        if len(ordered) < 4:
             return repaired
-    return repaired
+        changed = False
+        for start_pos, (_start_index, start_candidate) in enumerate(ordered[:-2]):
+            start_sequence = _equation_number_sequence_value(start_candidate.equation_number)
+            if start_sequence is None:
+                continue
+            for end_pos in range(start_pos + 2, min(len(ordered), start_pos + 7)):
+                _end_index, end_candidate = ordered[end_pos]
+                end_sequence = _equation_number_sequence_value(end_candidate.equation_number)
+                if end_sequence is None:
+                    continue
+                expected_numbers = _missing_sequence_numbers_between(start_sequence, end_sequence)
+                between = ordered[start_pos + 1:end_pos]
+                if not expected_numbers or len(expected_numbers) != len(between):
+                    continue
+                between_indices = {candidate_index for candidate_index, _candidate in between}
+                outside_numbers = {
+                    candidate.equation_number
+                    for candidate_index, candidate in ordered
+                    if candidate_index not in between_indices and candidate.equation_number
+                }
+                if any(equation_number in outside_numbers for equation_number in expected_numbers):
+                    continue
+                if not _can_repair_equation_number_segment(between, expected_numbers):
+                    continue
+                for (candidate_index, candidate), equation_number in zip(between, expected_numbers):
+                    if repaired[candidate_index].equation_number != equation_number:
+                        repaired[candidate_index] = replace(
+                            candidate,
+                            equation_number=equation_number,
+                            equation_number_status="inferred",
+                        )
+                        changed = True
+                if changed:
+                    break
+            if changed:
+                break
+        if not changed:
+            return repaired
 
 
 def _can_repair_equation_number_segment(
     segment: list[tuple[int, FormulaCandidate]],
     expected_numbers: list[str],
 ) -> bool:
-    if not segment or not any(not candidate.equation_number for _index, candidate in segment):
+    if not segment:
         return False
     expected = set(expected_numbers)
+    has_number_mismatch = any(
+        candidate.equation_number != expected_numbers[position]
+        for position, (_index, candidate) in enumerate(segment)
+    )
+    if not has_number_mismatch:
+        return False
     for _index, candidate in segment:
         if not _candidate_can_receive_inferred_equation_number(candidate):
             return False
         if candidate.equation_number and candidate.equation_number not in expected:
             return False
-    existing_positions = [
-        position
-        for position, (_index, candidate) in enumerate(segment)
-        if candidate.equation_number
-    ]
-    if not existing_positions:
-        return False
-    return any(
-        segment[position][1].equation_number != expected_numbers[position]
-        for position in existing_positions
-    )
+    return True
 
 
 def _candidate_items_in_reading_order(candidates: list[FormulaCandidate]) -> list[tuple[int, FormulaCandidate]]:

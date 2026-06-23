@@ -3636,6 +3636,54 @@ def test_infer_missing_equation_numbers_does_not_reuse_existing_number_outside_s
     assert inferred[2].equation_number == "(2.4)"
 
 
+def test_infer_missing_equation_numbers_repairs_fully_numbered_shifted_segment():
+    candidates = [
+        FormulaCandidate(63, (425, 752, 576, 771), r"a=b", 0.9, equation_number="(2.80)", latex=r"a=b"),
+        FormulaCandidate(64, (398, 611, 601, 643), r"b=c", 0.9, equation_number="(2.82)", latex=r"b=c"),
+        FormulaCandidate(64, (448, 673, 551, 705), r"c=d", 0.9, equation_number="(2.83)", latex=r"c=d"),
+        FormulaCandidate(64, (445, 709, 552, 745), r"d=e", 0.9, equation_number="(2.84)", latex=r"d=e"),
+        FormulaCandidate(64, (312, 809, 685, 891), r"e=f", 0.9, equation_number="(2.84)", latex=r"e=f"),
+        FormulaCandidate(65, (356, 385, 685, 422), r"f=g", 0.9, equation_number="(2.85)", latex=r"f=g"),
+    ]
+
+    inferred = _infer_missing_equation_numbers_between_numbered(candidates)
+
+    assert [candidate.equation_number for candidate in inferred] == [
+        "(2.80)",
+        "(2.81)",
+        "(2.82)",
+        "(2.83)",
+        "(2.84)",
+        "(2.85)",
+    ]
+
+
+def test_infer_missing_equation_numbers_repairs_multiple_shifted_segments():
+    candidates = [
+        FormulaCandidate(1, (10, 100, 40, 120), r"a=b", 0.9, equation_number="(1)", latex=r"a=b"),
+        FormulaCandidate(1, (10, 140, 40, 160), r"b=c", 0.9, equation_number="(3)", latex=r"b=c"),
+        FormulaCandidate(1, (10, 180, 40, 200), r"c=d", 0.9, equation_number="(3)", latex=r"c=d"),
+        FormulaCandidate(1, (10, 220, 40, 240), r"d=e", 0.9, equation_number="(4)", latex=r"d=e"),
+        FormulaCandidate(2, (10, 100, 40, 120), r"u=v", 0.9, equation_number="(10)", latex=r"u=v"),
+        FormulaCandidate(2, (10, 140, 40, 160), r"v=w", 0.9, equation_number="(12)", latex=r"v=w"),
+        FormulaCandidate(2, (10, 180, 40, 200), r"w=x", 0.9, equation_number="(12)", latex=r"w=x"),
+        FormulaCandidate(2, (10, 220, 40, 240), r"x=y", 0.9, equation_number="(13)", latex=r"x=y"),
+    ]
+
+    inferred = _infer_missing_equation_numbers_between_numbered(candidates)
+
+    assert [candidate.equation_number for candidate in inferred] == [
+        "(1)",
+        "(2)",
+        "(3)",
+        "(4)",
+        "(10)",
+        "(11)",
+        "(12)",
+        "(13)",
+    ]
+
+
 def test_infer_missing_equation_numbers_does_not_number_explicit_unnumbered_candidate():
     candidates = [
         FormulaCandidate(1, (10, 100, 40, 120), r"a=b", 0.9, equation_number="(2.85)", latex=r"a=b"),
@@ -3999,6 +4047,203 @@ def test_mineru_cache_provider_pairs_unnumbered_latex_with_pdf_number_records(tm
     assert numbers_by_latex[q_latex] == "(6)"
     assert numbers_by_latex[r"\eta = \frac { - p } { q }"] == "(7)"
     assert [candidate.equation_number for candidate in candidates].count("(6)") == 1
+
+
+def test_pdf_enrichment_releases_cache_number_mismatched_to_pdf_page(tmp_path):
+    candidates = [
+        FormulaCandidate(
+            page_num=50,
+            bbox=(457, 196, 546, 215),
+            raw_text="",
+            confidence=0.95,
+            latex=r"\dot { \sigma } = \mathbb { M } : D",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=51,
+            bbox=(406, 191, 593, 216),
+            raw_text="",
+            confidence=0.95,
+            latex=r"\nabla ^ { J } \sigma = \dot { \sigma } - W \sigma - \sigma W ^ T",
+            equation_number="(2.14)",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+    ]
+    records_by_page = {
+        50: [
+            _PdfEquationNumberRecord(
+                number="(2.14)",
+                y_center=174.5,
+                x_right=518.2,
+                standalone=False,
+                bbox=(274.4, 167.8, 518.2, 181.2),
+                text="sigma = M : D (2.14)",
+                page_width=595.0,
+                page_height=842.0,
+            )
+        ],
+        51: [
+            _PdfEquationNumberRecord(
+                number="(2.15)",
+                y_center=177.0,
+                x_right=518.2,
+                standalone=False,
+                bbox=(244.4, 164.3, 518.2, 189.7),
+                text="nabla J sigma = dot sigma - W sigma - sigma W T (2.15)",
+                page_width=595.0,
+                page_height=842.0,
+            )
+        ],
+    }
+
+    enriched = _enrich_candidate_equation_numbers_from_pdf(
+        tmp_path / "paper.pdf",
+        candidates,
+        records_by_page=records_by_page,
+    )
+
+    assert [candidate.equation_number for candidate in enriched] == ["(2.14)", "(2.15)"]
+
+
+def test_pdf_enrichment_does_not_steal_far_record_before_sequence_gap(tmp_path):
+    candidates = [
+        FormulaCandidate(
+            page_num=63,
+            bbox=(425, 752, 576, 771),
+            raw_text="",
+            confidence=0.95,
+            latex=r"\mid x _ { i + 1 } - x _ { i } \mid \leqslant \varepsilon _ { N R }",
+            equation_number="(2.80)",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=64,
+            bbox=(398, 611, 601, 643),
+            raw_text="",
+            confidence=0.95,
+            latex=r"f ^ { \prime } ( \Gamma ) = - \sqrt { 6 } G - \frac { d \sigma ^ { y } ( \Gamma ) } { d \Gamma }",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=64,
+            bbox=(448, 673, 551, 705),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\dot { \overline { \varepsilon } } ^ { p } = "
+                r"\frac { 1 } { \Delta t } \Delta \overline { \varepsilon } ^ { p }"
+            ),
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=64,
+            bbox=(445, 709, 552, 745),
+            raw_text="",
+            confidence=0.95,
+            latex=r"T = \frac { \eta \sigma ^ { y } } { \rho C _ { p } } \Delta \bar { \varepsilon } ^ { p }",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=64,
+            bbox=(312, 809, 685, 891),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\begin{array} { r c l } { \displaystyle \frac { d \sigma ^ { y } ( \Gamma ) } "
+                r"{ d \Gamma } } & { = } & { \displaystyle \frac { \partial \sigma ^ { y } } "
+                r"{ \partial \overline { { { \varepsilon } ^ { p } } } } "
+                r"\frac { d \overline { { { \varepsilon } ^ { p } } } } { d \Gamma } "
+                r"+ \frac { \partial \sigma ^ { y } } { \partial T } \frac { d T } { d \Gamma } } \\ "
+                r"& { = } & { \displaystyle \sqrt { \frac { 2 } { 3 } } \left( "
+                r"\frac { \partial \sigma ^ { y } } { \partial \overline { { { \varepsilon } ^ { p } } } } "
+                r"+ \frac { 1 } { \Delta t } \frac { \partial \sigma ^ { y } } "
+                r"{ \partial \overline { { { \varepsilon } ^ { p } } } } "
+                r"+ \frac { \eta \sigma ^ { y } } { \rho C _ { p } } "
+                r"\frac { \partial \sigma ^ { y } } { \partial T } \right) } \end{array}"
+            ),
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=65,
+            bbox=(356, 385, 685, 422),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\frac { \partial \sigma ^ { y } } { \partial \bar { \varepsilon } ^ { p } } = "
+                r"\frac { \sigma ^ { y } ( \bar { \varepsilon } ^ { p } "
+                r"+ \Delta \bar { \varepsilon } ^ { p } ) } { \Delta \bar { \varepsilon } ^ { p } }"
+            ),
+            equation_number="(2.85)",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+    ]
+    records_by_page = {
+        64: [
+            _PdfEquationNumberRecord(
+                number="(2.82)",
+                y_center=592.9,
+                x_right=518.2,
+                standalone=False,
+                bbox=(267.5, 568.2, 518.2, 617.6),
+                text="epsilon p = 1 / delta t delta epsilon p (2.82)",
+                page_width=595.0,
+                page_height=842.0,
+            ),
+            _PdfEquationNumberRecord(
+                number="(2.83)",
+                y_center=613.7,
+                x_right=518.2,
+                standalone=False,
+                bbox=(77.1, 568.2, 518.2, 659.2),
+                text="T = eta sigma y / rho Cp delta epsilon p (2.83)",
+                page_width=595.0,
+                page_height=842.0,
+            ),
+            _PdfEquationNumberRecord(
+                number="(2.84)",
+                y_center=717.9,
+                x_right=518.2,
+                standalone=False,
+                bbox=(189.9, 686.2, 518.2, 749.6),
+                text=(
+                    "partial eps p depsp depsp partial eps p d eps p d eps p dGamma = "
+                    "partial sigma y partial sigma y dGamma + partial sigma y dGamma + "
+                    "partial sigma y dGamma + partial sigma y dGamma + partial sigma y "
+                    "d sigma y(Gamma) d sigma y(Gamma) partial T dT = partial eps p dGamma "
+                    "partial T dGamma dGamma partial eps p partial sigma y partial sigma y "
+                    "(2.84) Delta t partial sigma y partial eps p + eta sigma y partial eps p "
+                    "+ eta sigma y partial sigma y partial sigma y partial sigma y partial eps p "
+                    "+ 1 partial eps p + 1 (2.84) = = Delta t rho Cp rho Cp partial T partial T"
+                ),
+                page_width=595.0,
+                page_height=842.0,
+            ),
+        ]
+    }
+
+    enriched = _enrich_candidate_equation_numbers_from_pdf(
+        tmp_path / "paper.pdf",
+        candidates,
+        records_by_page=records_by_page,
+    )
+    inferred = _infer_missing_equation_numbers_between_numbered(enriched)
+
+    assert [candidate.equation_number for candidate in inferred] == [
+        "(2.80)",
+        "(2.81)",
+        "(2.82)",
+        "(2.83)",
+        "(2.84)",
+        "(2.85)",
+    ]
 
 
 def test_mineru_cache_provider_merges_definition_continuation_after_pdf_number_enrichment(tmp_path):
