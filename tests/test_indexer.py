@@ -278,6 +278,25 @@ class TestFormulaBackfill:
         assert result["results"][0]["candidate_audit"]["equation_number_warnings"] == [
             "missing_equation_number_gap"
         ]
+        assert result["results"][0]["recommended_review"] == {
+            "mode": "candidate_numbering_review",
+            "reason": "missing_equation_number_gap",
+            "item_key": "DOC1",
+            "cli_args": [
+                "estimate-formula-backfill",
+                "--item-key",
+                "DOC1",
+                "--cache-pdf-number-enrichment",
+                "--preview-all-candidates",
+                "--json",
+            ],
+            "opens_pdf": False,
+            "writes_index": False,
+            "uses_external_ocr": False,
+        }
+        assert result["candidate_quality_review_queue"][0]["recommended_review"] == result["results"][0][
+            "recommended_review"
+        ]
         indexer._recognize_formulas_for_item.assert_not_called()
         indexer.store.replace_formulas.assert_not_called()
         indexer.store.add_new_formulas.assert_not_called()
@@ -851,6 +870,24 @@ class TestFormulaBackfill:
         review = result["candidate_quality_review_queue"][0]
         assert review["review_reasons"] == ["fallback_truncated"]
         assert review["candidate_audit"]["has_truncated_source"] is True
+        assert review["recommended_review"] == {
+            "mode": "single_item_readonly_estimate",
+            "reason": "fallback_truncated",
+            "item_key": "DOC1",
+            "cli_args": [
+                "estimate-formula-backfill",
+                "--item-key",
+                "DOC1",
+                "--pdf-fallback-max-pages",
+                "0",
+                "--cache-pdf-number-enrichment",
+                "--preview-all-candidates",
+                "--json",
+            ],
+            "opens_pdf": True,
+            "writes_index": False,
+            "uses_external_ocr": False,
+        }
         indexer._recognize_formulas_for_item.assert_not_called()
         indexer.store.delete_chunks_by_type.assert_not_called()
         indexer.store.add_formulas.assert_not_called()
@@ -2162,6 +2199,22 @@ class TestFormulaBackfill:
                         "missing_count": 1,
                     }
                 ],
+                "recommended_review": {
+                    "mode": "candidate_numbering_review",
+                    "reason": "missing_equation_number_gap",
+                    "item_key": "DOC1",
+                    "cli_args": [
+                        "estimate-formula-backfill",
+                        "--item-key",
+                        "DOC1",
+                        "--cache-pdf-number-enrichment",
+                        "--preview-all-candidates",
+                        "--json",
+                    ],
+                    "opens_pdf": False,
+                    "writes_index": False,
+                    "uses_external_ocr": False,
+                },
             }
         ]
         assert "candidate-stage formula quality" in result["summary"]["warnings"][-1]

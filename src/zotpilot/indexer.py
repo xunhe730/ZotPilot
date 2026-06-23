@@ -859,6 +859,15 @@ _BLOCKING_CANDIDATE_REVIEW_WARNINGS = frozenset({
 })
 
 
+_NUMBERING_CANDIDATE_REVIEW_WARNINGS = frozenset({
+    "cached_latex_missing_equation_numbers",
+    "duplicate_equation_numbers",
+    "equation_number_regression",
+    "large_equation_number_gap",
+    "missing_equation_number_gap",
+})
+
+
 def _formula_candidate_blocking_review_reasons(candidate_audit: dict[str, object]) -> list[str]:
     """Return candidate-stage warnings that should block OCR/index writes by default."""
     warnings = candidate_audit.get("equation_number_warnings", [])
@@ -950,6 +959,63 @@ def _formula_structured_cache_required_review(
     }
 
 
+def _formula_candidate_numbering_review(
+    *,
+    item_key: str,
+    reason: str,
+) -> dict[str, object]:
+    """Build a read-only hint for candidate-stage equation numbering review."""
+    return {
+        "mode": "candidate_numbering_review",
+        "reason": reason,
+        "item_key": item_key,
+        "cli_args": [
+            "estimate-formula-backfill",
+            "--item-key",
+            item_key,
+            "--cache-pdf-number-enrichment",
+            "--preview-all-candidates",
+            "--json",
+        ],
+        "opens_pdf": False,
+        "writes_index": False,
+        "uses_external_ocr": False,
+    }
+
+
+def _formula_candidate_quality_recommended_review(
+    *,
+    item_key: str,
+    review_reasons: list[str],
+) -> dict[str, object] | None:
+    """Return the safest read-only review action for candidate-stage blockers."""
+    if "text_layer_high_density_requires_structured_cache" in review_reasons:
+        return _formula_structured_cache_required_review(
+            item_key=item_key,
+            reason="text_layer_high_density_requires_structured_cache",
+        )
+    if "fallback_truncated" in review_reasons:
+        return _formula_single_item_readonly_review(
+            item_key=item_key,
+            reason="fallback_truncated",
+        )
+    if "cached_latex_low_quality" in review_reasons:
+        return _formula_cached_latex_quality_review(
+            item_key=item_key,
+            reason="cached_latex_low_quality",
+        )
+    numbering_reasons = [
+        reason for reason in review_reasons
+        if reason in _NUMBERING_CANDIDATE_REVIEW_WARNINGS
+    ]
+    if numbering_reasons:
+        return _formula_candidate_numbering_review(
+            item_key=item_key,
+            reason=numbering_reasons[0],
+        )
+    return None
+
+
 def _formula_candidate_quality_blocking_row(
     *,
     item_key: str,
@@ -983,21 +1049,12 @@ def _formula_candidate_quality_blocking_row(
             [],
         ),
     }
-    if "text_layer_high_density_requires_structured_cache" in review_reasons:
-        row["recommended_review"] = _formula_structured_cache_required_review(
-            item_key=item_key,
-            reason="text_layer_high_density_requires_structured_cache",
-        )
-    elif "cached_latex_low_quality" in review_reasons:
-        row["recommended_review"] = _formula_cached_latex_quality_review(
-            item_key=item_key,
-            reason="cached_latex_low_quality",
-        )
-    elif "fallback_truncated" in review_reasons:
-        row["recommended_review"] = _formula_single_item_readonly_review(
-            item_key=item_key,
-            reason="fallback_truncated",
-        )
+    recommended_review = _formula_candidate_quality_recommended_review(
+        item_key=item_key,
+        review_reasons=review_reasons,
+    )
+    if recommended_review is not None:
+        row["recommended_review"] = recommended_review
     return row
 
 
@@ -1581,6 +1638,12 @@ class Indexer:
                     review_reasons=candidate_review_reasons,
                 )
                 row["candidate_audit"] = candidate_audit
+                recommended_review = _formula_candidate_quality_recommended_review(
+                    item_key=item.item_key,
+                    review_reasons=candidate_review_reasons,
+                )
+                if recommended_review is not None:
+                    row["recommended_review"] = recommended_review
                 candidate_quality_review_queue.append(row)
                 results.append(row)
                 resume_cursor = item.item_key
