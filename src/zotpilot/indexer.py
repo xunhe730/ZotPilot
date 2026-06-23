@@ -1199,6 +1199,15 @@ class Indexer:
         )
         matched_keys = {item.item_key for item in matched_items}
         matched_keys.update(item.item_key for item, _reason in matched_skipped)
+        requested_keys = (
+            [item_key]
+            if item_key
+            else list(dict.fromkeys(item_keys or []))
+        )
+        unmatched_requested_item_keys = [
+            key for key in requested_keys
+            if key and key not in matched_keys
+        ]
         resume_after_found = (
             resume_after is None
             or resume_after in matched_keys
@@ -1240,6 +1249,11 @@ class Indexer:
                 f"{len(skipped_items)} bilingual/translated PDF(s) skipped; "
                 "formula backfill only processes original PDFs."
             )
+        if unmatched_requested_item_keys:
+            run_warnings.append(
+                f"{len(unmatched_requested_item_keys)} requested item_key(s) were not matched "
+                "to already-indexed ZotPilot papers with available original PDFs."
+            )
         if partial_page_backfill:
             run_warnings.append(
                 "Page-window formula backfill is append-only; existing formula chunks outside the page range "
@@ -1255,6 +1269,8 @@ class Indexer:
                 "selected": len(items) + len(skipped_items),
                 "matched": len(matched_items) + len(matched_skipped),
                 "skipped": len(skipped_items),
+                "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
+                "unmatched_requested_item_keys": unmatched_requested_item_keys,
                 "daily_call_budget": budget,
                 "high_density_call_threshold": high_density_threshold,
                 "high_density_candidate_threshold": high_density_candidate_threshold,
@@ -1612,6 +1628,8 @@ class Indexer:
             "selected": len(items) + len(skipped_items),
             "matched": len(matched_items) + len(matched_skipped),
             "skipped": len(skipped_items),
+            "unmatched_requested_item_key_count": len(unmatched_requested_item_keys),
+            "unmatched_requested_item_keys": unmatched_requested_item_keys,
             "formulas_indexed": formulas_indexed,
             "provider_calls_used": provider_calls_used,
             "external_calls_used": external_calls_used,
@@ -1648,6 +1666,8 @@ class Indexer:
                 "processed": result["processed"],
                 "selected": result["selected"],
                 "skipped": result["skipped"],
+                "unmatched_requested_item_key_count": result["unmatched_requested_item_key_count"],
+                "unmatched_requested_item_keys": result["unmatched_requested_item_keys"],
                 "formulas_indexed": result["formulas_indexed"],
                 "provider_calls_used": result["provider_calls_used"],
                 "external_calls_used": result["external_calls_used"],

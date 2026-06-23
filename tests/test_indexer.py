@@ -1407,6 +1407,53 @@ class TestFormulaBackfill:
         indexer.zotero.get_item.assert_called_with("DOC1")
         indexer.zotero.get_all_items_with_pdfs.assert_not_called()
 
+    def test_index_formulas_reports_unmatched_requested_item_keys(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Indexed paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E=mc^2",
+            equation_number="(1)",
+        )
+        candidate = FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 10, 10),
+            raw_text=r"E=mc^2",
+            confidence=0.95,
+            equation_number="(1)",
+            latex=r"E=mc^2",
+            source="mineru_content_list",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.replace_formulas.return_value = 1
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.side_effect = lambda key: item if key == "DOC1" else None
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[candidate]):
+            result = indexer.index_formulas(item_keys=["DOC1", "MISSING1"])
+
+        assert result["matched"] == 1
+        assert result["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert result["unmatched_requested_item_key_count"] == 1
+        assert "1 requested item_key(s) were not matched" in result["warnings"][-1]
+        assert result["formulas_indexed"] == 1
+
     def test_formula_backfill_returns_low_confidence_review_queue(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ExtractedFormula, ZoteroItem
@@ -2309,6 +2356,7 @@ class TestFormulaBackfill:
         indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
         indexer.store.add_new_formulas.return_value = 2
         indexer.zotero = MagicMock()
+        indexer.zotero.get_item.return_value = item
         indexer.zotero.get_all_items_with_pdfs.return_value = [item]
         indexer.journal_ranker = MagicMock()
         indexer.journal_ranker.lookup.return_value = ""
@@ -2638,6 +2686,54 @@ class TestFormulaBackfill:
         assert {event["run_id"] for event in events} == {result["run_id"]}
         assert all(event["schema_version"] == 1 for event in events)
         assert events[1]["status"] == "indexed"
+
+    def test_formula_backfill_jsonl_records_unmatched_requested_item_keys(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        state_path = tmp_path / "formula_state.jsonl"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Indexed paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E=mc^2",
+            equation_number="(1)",
+        )
+        candidate = FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 10, 10),
+            raw_text=r"E=mc^2",
+            confidence=0.95,
+            equation_number="(1)",
+            latex=r"E=mc^2",
+            source="mineru_content_list",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.replace_formulas.return_value = 1
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.side_effect = lambda key: item if key == "DOC1" else None
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[candidate]):
+            result = indexer.index_formulas(item_keys=["DOC1", "MISSING1"], status_jsonl=state_path)
+
+        events = [json.loads(line) for line in state_path.read_text(encoding="utf-8").splitlines()]
+        assert result["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert events[0]["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert events[-1]["unmatched_requested_item_keys"] == ["MISSING1"]
+        assert events[-1]["unmatched_requested_item_key_count"] == 1
 
     def test_formula_backfill_writes_jsonl_high_density_deferred_events(self, tmp_path):
         from zotpilot.indexer import Indexer
