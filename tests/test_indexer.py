@@ -2011,6 +2011,55 @@ class TestFormulaBackfill:
         assert segment["last_equation_number"] == "(2.13)"
         assert "equation_number_regression" not in segment["equation_number_warnings"]
 
+    def test_high_density_page_window_segment_audit_uses_equation_review_order(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import _equation_number_audit_value, _formula_candidate_segment_summary
+
+        page_ordered_candidates = [
+            FormulaCandidate(
+                page_num=128,
+                bbox=(40, 140, 130, 158),
+                raw_text=r"\sigma_{28}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.28)",
+            ),
+            FormulaCandidate(
+                page_num=128,
+                bbox=(40, 180, 130, 198),
+                raw_text=r"\sigma_{30}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.30)",
+            ),
+            FormulaCandidate(
+                page_num=129,
+                bbox=(40, 120, 130, 138),
+                raw_text=r"\sigma_{27}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.27)",
+            ),
+            FormulaCandidate(
+                page_num=132,
+                bbox=(40, 160, 130, 178),
+                raw_text=r"\sigma_{29}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.29)",
+            ),
+        ]
+
+        assert _equation_number_audit_value("(4.30)") == ("4", 30)
+        segment = _formula_candidate_segment_summary(
+            segment_index=1,
+            candidates=page_ordered_candidates,
+            formula_indices=[1, 2, 3, 4],
+            candidate_start=0,
+            candidate_end=4,
+            data_egress=False,
+        )
+        assert segment["first_equation_number"] == "(4.27)"
+        assert segment["last_equation_number"] == "(4.30)"
+        assert segment["equation_number_sequence_breaks"] == []
+        assert "equation_number_regression" not in segment["equation_number_warnings"]
+
     def test_estimate_formula_backfill_flags_missing_equation_number_gap(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
         from zotpilot.indexer import Indexer

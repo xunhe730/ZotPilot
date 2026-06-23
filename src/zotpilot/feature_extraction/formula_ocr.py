@@ -4063,6 +4063,16 @@ def _extract_standalone_pdf_equation_number(
         if page_width > 0 and x1 < page_width * 0.82:
             return ""
         return _format_pdf_equation_number(dangling_right_match.group("number"))
+    dangling_left_match = re.fullmatch(
+        rf"\s*[\(（ð]\s*(?P<number>{PDF_EQUATION_NUMBER_PATTERN})\s*",
+        text,
+    )
+    if dangling_left_match is not None:
+        if block_width > max(46.0, page_width * 0.12):
+            return ""
+        if page_width > 0 and x1 < page_width * 0.70:
+            return ""
+        return _format_pdf_equation_number(dangling_left_match.group("number"))
     if not re.fullmatch(r"\s*[\(（ð].*[\)）Þ]\s*", text):
         return ""
     match = re.fullmatch(rf"[\s（(ð]*(?P<number>{PDF_EQUATION_NUMBER_PATTERN})[\s）)Þ]*", text)

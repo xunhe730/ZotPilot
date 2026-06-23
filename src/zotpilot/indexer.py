@@ -258,12 +258,11 @@ def _equation_number_audit_value(equation_number: str) -> tuple[str, int] | None
     simple_match = re.fullmatch(r"(?P<value>\d+)(?:[A-Za-z])?", token)
     if simple_match:
         return ("", int(simple_match.group("value")))
-    compound_match = re.fullmatch(
-        r"(?P<prefix>[A-Za-z]|\d+(?:[.-]\d+)*)[.-](?P<value>\d+)(?:[A-Za-z])?",
-        token,
-    )
-    if compound_match:
-        return (compound_match.group("prefix"), int(compound_match.group("value")))
+    if re.fullmatch(r"(?:[A-Za-z]|\d+)(?:[.-]\d+)+(?:[A-Za-z])?", token):
+        stripped_token = re.sub(r"[A-Za-z]$", "", token)
+        parts = re.split(r"[.-]", stripped_token)
+        if len(parts) >= 2 and parts[-1].isdigit():
+            return (".".join(parts[:-1]), int(parts[-1]))
     return None
 
 
@@ -434,6 +433,39 @@ def _format_index_ranges(indices: list[int]) -> str:
     return ",".join(ranges)
 
 
+def _formula_candidate_audit_order(candidates: list) -> list:
+    return [
+        candidate
+        for _index, candidate in sorted(
+            enumerate(candidates),
+            key=_formula_candidate_audit_sort_key,
+        )
+    ]
+
+
+def _formula_candidate_audit_sort_key(indexed_candidate: tuple[int, object]) -> tuple:
+    index, candidate = indexed_candidate
+    equation_number = _formula_candidate_effective_equation_number(candidate)
+    audit_value = _equation_number_audit_value(equation_number)
+    if audit_value is not None:
+        prefix, value = audit_value
+        return (0, _equation_number_prefix_sort_key(prefix), value, index)
+    page_num = getattr(candidate, "page_num", 0)
+    bbox = tuple(getattr(candidate, "bbox", ()) or ())
+    y0 = float(bbox[1]) if len(bbox) >= 2 else 0.0
+    x0 = float(bbox[0]) if bbox else 0.0
+    return (1, (), page_num if isinstance(page_num, int) else 0, y0, x0, index)
+
+
+def _equation_number_prefix_sort_key(prefix: str) -> tuple[tuple[int, object], ...]:
+    parts = re.split(r"[.-]", prefix or "")
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part.lower())
+        for part in parts
+        if part
+    )
+
+
 def _formula_candidate_segment_summary(
     *,
     segment_index: int,
@@ -443,7 +475,7 @@ def _formula_candidate_segment_summary(
     candidate_end: int,
     data_egress: bool,
 ) -> dict[str, object]:
-    audit = _formula_candidate_audit(candidates)
+    audit = _formula_candidate_audit(_formula_candidate_audit_order(candidates))
     provider_calls = sum(1 for candidate in candidates if _formula_candidate_needs_ocr(candidate))
     formula_index_min = min(formula_indices) if formula_indices else 0
     formula_index_max = max(formula_indices) if formula_indices else 0

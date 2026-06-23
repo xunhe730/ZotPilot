@@ -3540,6 +3540,32 @@ def test_pdf_number_scan_repairs_split_chapter_number_spans():
     assert [record.number for record in scan.records_by_page[1]] == ["(2-17)"]
 
 
+def test_pdf_number_scan_recovers_right_edge_number_missing_closing_parenthesis():
+    class FakePage:
+        rect = SimpleNamespace(width=595.0, height=842.0)
+
+        def get_text(self, mode="text"):
+            if mode == "blocks":
+                return [
+                    (497.26, 573.69, 522.26, 586.97, "(2.14"),
+                    (375.43, 620.01, 522.14, 636.81, r"\sigma = E\epsilon (2.15)"),
+                ]
+            if mode == "dict":
+                return {"blocks": []}
+            return ""
+
+    class FakeDoc:
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, index):
+            return FakePage()
+
+    scan = _scan_pdf_equation_number_records_by_page(FakeDoc())
+
+    assert {record.number for record in scan.records_by_page[1]} == {"(2.14)", "(2.15)"}
+
+
 def test_pdf_number_scan_skips_code_listing_props_calls():
     class FakePage:
         rect = SimpleNamespace(width=600.0, height=800.0)
