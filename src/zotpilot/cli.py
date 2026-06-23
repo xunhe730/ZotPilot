@@ -972,6 +972,15 @@ def _print_formula_backfill_estimate(result: dict, *, preview_limit: int = 0) ->
                 )
 
 
+def _formula_backfill_exit_code(args: object, result: dict[str, object]) -> int:
+    """Return the CLI exit code for formula backfill write guard outcomes."""
+    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
+        return 2
+    if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
+        return 3
+    return 0
+
+
 def cmd_index_formulas(args):
     """Backfill formula chunks for already-indexed documents."""
     from .indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
@@ -1075,7 +1084,7 @@ def cmd_index_formulas(args):
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 2 if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked") else 0
+        return _formula_backfill_exit_code(args, result)
 
     print("Formula backfill complete:")
     print(f"  Provider:                {result.get('provider', '')}")
@@ -1123,9 +1132,7 @@ def cmd_index_formulas(args):
         print("\nWarnings:")
         for warning in warnings:
             print(f"  - {warning}")
-    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
-        return 2
-    return 0
+    return _formula_backfill_exit_code(args, result)
 
 
 def cmd_estimate_formula_backfill(args):
@@ -2310,6 +2317,11 @@ def main(argv: list[str] | None = None) -> int:
         "--fail-on-write-blocked",
         action="store_true",
         help="Return exit code 2 when formula write guards block this run",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-review-required",
+        action="store_true",
+        help="Return exit code 3 when formula writes succeed but still require review",
     )
     sub_index_formulas.add_argument("--json", action="store_true", help="Output the full result as JSON")
     sub_index_formulas.add_argument("--config", type=str, default=None, help="Config file path")
