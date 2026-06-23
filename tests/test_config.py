@@ -46,16 +46,15 @@ class TestConfigLoadDefaults:
         assert cfg.zotero_api_key is None
         assert cfg.zotero_user_id is None
         assert cfg.formula_ocr_enabled is False
-        assert cfg.formula_ocr_provider == "local"
-        assert cfg.formula_candidate_provider == "text_layer"
+        assert cfg.formula_candidate_provider == "auto"
         assert cfg.formula_candidate_cache_dirs == ""
+        assert cfg.formula_candidate_cache_pdf_number_enrichment is False
+        assert cfg.formula_candidate_pdf_number_append_missing_candidates is False
+        assert cfg.formula_candidate_pdf_fallback_max_pages == 80
+        assert cfg.formula_ocr_provider == "local"
         assert cfg.formula_ocr_max_formulas_per_doc == 40
         assert cfg.formula_ocr_max_formulas_per_page == 6
         assert cfg.formula_ocr_min_confidence == 0.6
-        assert cfg.formula_ocr_daily_call_budget is None
-        assert cfg.formula_ocr_low_confidence_threshold is None
-        assert cfg.formula_ocr_high_density_call_threshold == 80
-        assert cfg.formula_ocr_high_density_candidate_threshold == 160
         assert cfg.formula_ocr_simpletex_token is None
         assert cfg.formula_ocr_simpletex_app_id is None
         assert cfg.formula_ocr_simpletex_app_secret is None
@@ -63,6 +62,10 @@ class TestConfigLoadDefaults:
         assert cfg.formula_ocr_simpletex_timeout == 30.0
         assert cfg.formula_ocr_simpletex_min_interval == 0.55
         assert cfg.formula_ocr_simpletex_max_retries == 2
+        assert cfg.formula_ocr_daily_call_budget == 0
+        assert cfg.formula_ocr_low_confidence_threshold == 0.0
+        assert cfg.formula_ocr_high_density_call_threshold == 80
+        assert cfg.formula_ocr_high_density_candidate_threshold == 160
 
 
 class TestConfigLoadFromFile:
@@ -88,27 +91,6 @@ class TestConfigLoadFromFile:
         assert cfg.zotero_user_id == "12345"
         assert cfg.openalex_email == "user@example.com"
         assert cfg.gemini_api_key is None
-
-    def test_load_formula_backfill_scheduler_fields(self, tmp_path, monkeypatch):
-        _use_local_secrets(monkeypatch, tmp_path)
-        config_file = tmp_path / "config.json"
-        config_file.write_text(
-            json.dumps(
-                {
-                    "formula_ocr_daily_call_budget": 1800,
-                    "formula_ocr_low_confidence_threshold": 0.5,
-                    "formula_ocr_high_density_call_threshold": 120,
-                    "formula_ocr_high_density_candidate_threshold": 240,
-                }
-            )
-        )
-
-        cfg = Config.load(path=config_file)
-
-        assert cfg.formula_ocr_daily_call_budget == 1800
-        assert cfg.formula_ocr_low_confidence_threshold == 0.5
-        assert cfg.formula_ocr_high_density_call_threshold == 120
-        assert cfg.formula_ocr_high_density_candidate_threshold == 240
 
     def test_dashscope_vision_provider_gets_qwen_default_model(self, tmp_path, monkeypatch):
         _use_local_secrets(monkeypatch, tmp_path)
@@ -468,19 +450,19 @@ class TestOpenAICompatConfigSchema:
 
         assert any("Invalid formula_candidate_provider" in e and "'mineru_cache'" in e for e in errors)
 
-    def test_validate_accepts_mineru_json_formula_candidate_provider(self, tmp_path, monkeypatch):
-        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="mineru_json")
+    def test_validate_formula_candidate_cache_provider_requires_cache_dirs(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="mineru_cache")
 
         errors = cfg.validate()
 
-        assert not any("formula_candidate_provider" in e for e in errors)
+        assert any("formula_candidate_cache_dirs" in e for e in errors)
 
-    def test_validate_accepts_pdf_extract_kit_formula_candidate_provider(self, tmp_path, monkeypatch):
-        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="pdf_extract_kit_json")
+    def test_validate_auto_formula_candidate_provider_does_not_require_cache_dirs(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="auto")
 
         errors = cfg.validate()
 
-        assert not any("formula_candidate_provider" in e for e in errors)
+        assert not any("formula_candidate_cache_dirs" in e for e in errors)
 
     def test_validate_formula_limits(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(
@@ -489,10 +471,13 @@ class TestOpenAICompatConfigSchema:
             formula_ocr_max_formulas_per_doc=-1,
             formula_ocr_max_formulas_per_page=-1,
             formula_ocr_min_confidence=1.5,
-            formula_ocr_high_density_call_threshold=-1,
-            formula_ocr_high_density_candidate_threshold=-1,
             formula_ocr_simpletex_min_interval=-0.1,
             formula_ocr_simpletex_max_retries=-1,
+            formula_ocr_daily_call_budget=-1,
+            formula_ocr_low_confidence_threshold=1.5,
+            formula_ocr_high_density_call_threshold=-1,
+            formula_ocr_high_density_candidate_threshold=-1,
+            formula_candidate_pdf_fallback_max_pages=-1,
         )
 
         errors = cfg.validate()
@@ -500,10 +485,13 @@ class TestOpenAICompatConfigSchema:
         assert any("formula_ocr_max_formulas_per_doc" in e for e in errors)
         assert any("formula_ocr_max_formulas_per_page" in e for e in errors)
         assert any("formula_ocr_min_confidence" in e for e in errors)
-        assert any("formula_ocr_high_density_call_threshold" in e for e in errors)
-        assert any("formula_ocr_high_density_candidate_threshold" in e for e in errors)
         assert any("formula_ocr_simpletex_min_interval" in e for e in errors)
         assert any("formula_ocr_simpletex_max_retries" in e for e in errors)
+        assert any("formula_ocr_daily_call_budget" in e for e in errors)
+        assert any("formula_ocr_low_confidence_threshold" in e for e in errors)
+        assert any("formula_ocr_high_density_call_threshold" in e for e in errors)
+        assert any("formula_ocr_high_density_candidate_threshold" in e for e in errors)
+        assert any("formula_candidate_pdf_fallback_max_pages" in e for e in errors)
 
     def test_validate_simpletex_requires_auth(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(tmp_path, monkeypatch, formula_ocr_provider="simpletex")
@@ -603,9 +591,17 @@ class TestConfigHashOpenAICompat:
         changed = dataclasses.replace(
             cfg,
             formula_ocr_enabled=True,
+            formula_candidate_provider="mineru_cache",
+            formula_candidate_cache_dirs=str(tmp_path / "mineru-cache"),
+            formula_candidate_cache_pdf_number_enrichment=True,
+            formula_candidate_pdf_fallback_max_pages=0,
             formula_ocr_max_formulas_per_doc=12,
             formula_ocr_max_formulas_per_page=3,
             formula_ocr_min_confidence=0.8,
+            formula_ocr_daily_call_budget=1800,
+            formula_ocr_low_confidence_threshold=0.7,
+            formula_ocr_high_density_call_threshold=120,
+            formula_ocr_high_density_candidate_threshold=240,
         )
 
         assert _config_hash(cfg) == _config_hash(changed)

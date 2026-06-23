@@ -1,6 +1,5 @@
 """Tests for the Indexer pipeline — specifically P0-3 ReDoS protection."""
 import json
-import random
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,70 +117,44 @@ class TestFormulaBackfill:
             vision_model="",
             formula_ocr_enabled=True,
             formula_ocr_provider="local",
+            formula_candidate_pdf_fallback_max_pages=80,
             formula_ocr_max_formulas_per_doc=40,
             formula_ocr_max_formulas_per_page=6,
             formula_ocr_min_confidence=0.6,
-            formula_candidate_provider="text_layer",
         )
 
-    def _make_formula_item(self, tmp_path, key: str, title: str = "Paper"):
-        from zotpilot.models import ZoteroItem
+    def test_formula_estimate_factory_reads_doc_ids_without_vector_store_init(self, tmp_path):
+        import sqlite3
 
-        pdf_path = tmp_path / f"{key}.pdf"
-        pdf_path.write_bytes(b"%PDF-1.4")
-        return ZoteroItem(
-            item_key=key,
-            title=title,
-            authors="Auth",
-            year=2024,
-            pdf_path=pdf_path,
-            citation_key=f"{key.lower()}2024",
-            publication="Nature",
-        )
-
-    def _make_indexer_for_formula_backfill(self, items):
         from zotpilot.indexer import Indexer
 
-        indexer = Indexer.__new__(Indexer)
-        indexer.config = self._hash_config()
-        indexer.store = MagicMock()
-        indexer.store.get_indexed_doc_ids.return_value = {item.item_key for item in items}
-        indexer.zotero = MagicMock()
-        indexer.zotero.get_all_items_with_pdfs.return_value = list(items)
-        indexer.journal_ranker = MagicMock()
-        indexer.journal_ranker.lookup.return_value = "Q1"
-        indexer._ensure_formula_provider_available = MagicMock()
-        indexer._assert_config_hash_current = MagicMock()
-        indexer._pdf_hash = MagicMock(return_value="hash")
-        indexer._count_existing_formulas = MagicMock(return_value=0)
-        return indexer
-
-    def _formula_candidate(self, *, latex: str = "", confidence: float = 0.9):
-        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
-
-        return FormulaCandidate(
-            page_num=1,
-            bbox=(0, 0, 10, 10),
-            raw_text="E = mc^2",
-            confidence=confidence,
-            equation_number="1",
-            equation_number_status="provided",
-            latex=latex,
+        chroma_path = tmp_path / "chroma"
+        chroma_path.mkdir()
+        with sqlite3.connect(chroma_path / "chroma.sqlite3") as conn:
+            conn.execute("CREATE TABLE embeddings (embedding_id TEXT NOT NULL)")
+            conn.executemany(
+                "INSERT INTO embeddings (embedding_id) VALUES (?)",
+                [
+                    ("DOC1_chunk_0000",),
+                    ("DOC1_table_0001_00",),
+                    ("DOC2_fig_001_00",),
+                    ("DOC3_formula_0001",),
+                ],
+            )
+        config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "zotero_data_dir": tmp_path,
+                "chroma_db_path": chroma_path,
+            }
         )
 
-    def _extracted_formula(self, *, confidence: float | None = 0.9, provider: str = "local"):
-        from zotpilot.models import ExtractedFormula
-
-        return ExtractedFormula(
-            page_num=1,
-            formula_index=0,
-            bbox=(0, 0, 10, 10),
-            latex=r"E = mc^2",
-            confidence=confidence,
-            equation_number="1",
-            equation_number_status="provided",
-            provider=provider,
-        )
+        with (
+            patch("zotpilot.indexer.ZoteroClient"),
+            patch("zotpilot.indexer.VectorStore.__init__", side_effect=AssertionError("writable init")),
+        ):
+            indexer = Indexer.for_formula_estimate(config)
+            assert indexer.store.get_indexed_doc_ids() == {"DOC1", "DOC2", "DOC3"}
 
     def test_backfill_requires_existing_matching_config_hash(self, tmp_path):
         from zotpilot.indexer import ConfigDriftError, Indexer, _config_hash
@@ -221,6 +194,7 @@ class TestFormulaBackfill:
             formula_index=0,
             bbox=(0, 0, 10, 10),
             latex=r"E = mc^2",
+            equation_number="(1)",
         )
         indexer = Indexer.__new__(Indexer)
         indexer.config = self._hash_config()
@@ -235,291 +209,53 @@ class TestFormulaBackfill:
         indexer._pdf_hash = MagicMock(return_value="hash")
         indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
 
-        result = indexer.index_formulas()
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas()
 
         assert result["processed"] == 1
         assert result["formulas_indexed"] == 1
         indexer._ensure_formula_provider_available.assert_called_once()
         indexer._assert_config_hash_current.assert_called_once()
-        indexer.store.delete_chunks_by_type.assert_called_once_with("DOC1", "formula")
-        indexer.store.add_formulas.assert_called_once()
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.replace_formulas.assert_called_once()
+        indexer.store.add_formulas.assert_not_called()
 
-    def test_formula_backfill_daily_budget_stops_before_next_ocr_call(self, tmp_path):
-        item1 = self._make_formula_item(tmp_path, "DOC1", "Paper 1")
-        item2 = self._make_formula_item(tmp_path, "DOC2", "Paper 2")
-        indexer = self._make_indexer_for_formula_backfill([item1, item2])
-        candidate1 = self._formula_candidate()
-        candidate2 = self._formula_candidate()
-        formula1 = self._extracted_formula()
-        indexer._extract_formula_candidates_for_item = MagicMock(side_effect=[[candidate1], [candidate2]])
-        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula1])
+    def test_index_formulas_no_refresh_adds_only_new_formula_chunks(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
 
-        result = indexer.index_formulas(daily_call_budget=1)
-
-        assert result["processed"] == 1
-        assert result["provider_calls_used"] == 1
-        assert result["daily_call_budget_remaining"] == 0
-        assert result["budget_exhausted"] is True
-        assert result["stopped_reason"] == "daily_call_budget_exhausted"
-        assert result["next_item_key"] == "DOC2"
-        indexer._recognize_formulas_for_item.assert_called_once_with(item1, candidates=[candidate1])
-        indexer.store.add_formulas.assert_called_once()
-
-    def test_formula_backfill_cached_latex_does_not_spend_daily_budget(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        cached_candidate = self._formula_candidate(latex=r"E = mc^2")
-        cached_formula = self._extracted_formula(provider="cache")
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[cached_candidate])
-        indexer._recognize_formulas_for_item = MagicMock(return_value=[cached_formula])
-
-        result = indexer.index_formulas(daily_call_budget=0)
-
-        assert result["processed"] == 1
-        assert result["provider_calls_used"] == 0
-        assert result["daily_call_budget_remaining"] == 0
-        assert result["budget_exhausted"] is False
-        indexer._ensure_formula_provider_available.assert_not_called()
-        indexer._recognize_formulas_for_item.assert_called_once_with(item, candidates=[cached_candidate])
-        indexer.store.add_formulas.assert_called_once()
-
-    def test_formula_backfill_resume_after_skips_processed_prefix(self, tmp_path):
-        item1 = self._make_formula_item(tmp_path, "DOC1", "Paper 1")
-        item2 = self._make_formula_item(tmp_path, "DOC2", "Paper 2")
-        indexer = self._make_indexer_for_formula_backfill([item1, item2])
-        candidate = self._formula_candidate()
-        formula = self._extracted_formula()
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.add_new_formulas.return_value = 1
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._get_formula_provider = MagicMock(return_value=SimpleNamespace())
         indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
 
-        result = indexer.index_formulas(resume_after="DOC1")
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(refresh_existing=False)
 
-        assert result["processed"] == 1
-        assert result["resume_after_found"] is True
-        assert result["skipped_before_resume"] == 1
-        assert result["results"][0]["item_key"] == "DOC2"
-        indexer._recognize_formulas_for_item.assert_called_once_with(item2, candidates=[candidate])
-
-    def test_formula_backfill_quota_error_stops_without_writing_current_item(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        candidate = self._formula_candidate()
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
-        indexer._recognize_formulas_for_item = MagicMock(side_effect=RuntimeError("HTTP 429 quota exceeded"))
-
-        result = indexer.index_formulas(daily_call_budget=10, stop_on_quota=True)
-
-        assert result["processed"] == 0
-        assert result["stopped_reason"] == "formula_provider_quota_or_rate_limit"
-        assert result["next_item_key"] == "DOC1"
-        assert result["budget_exhausted"] is False
-        indexer.store.add_formulas.assert_not_called()
-        indexer.store.delete_chunks_by_type.assert_not_called()
-
-    def test_formula_backfill_low_confidence_results_are_queued_for_review(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        candidate = self._formula_candidate()
-        formula = self._extracted_formula(confidence=0.35)
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
-        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
-
-        result = indexer.index_formulas(low_confidence_threshold=0.5)
-
-        assert result["processed"] == 1
-        assert result["low_confidence_review_count"] == 1
-        assert result["low_confidence_review_queue"] == [
-            {
-                "item_key": "DOC1",
-                "title": "Paper",
-                "page_num": 1,
-                "formula_index": 0,
-                "equation_number": "1",
-                "confidence": 0.35,
-                "provider": "local",
-            }
-        ]
-        indexer.store.add_formulas.assert_called_once()
-
-    def test_formula_backfill_writes_status_jsonl(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        candidate = self._formula_candidate()
-        formula = self._extracted_formula()
-        status_path = tmp_path / "formula_backfill_status.jsonl"
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=[candidate])
-        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
-
-        result = indexer.index_formulas(status_jsonl=status_path)
-
-        assert result["processed"] == 1
-        rows = [json.loads(line) for line in status_path.read_text(encoding="utf-8").splitlines()]
-        assert rows == [
-            {
-                "item_key": "DOC1",
-                "status": "indexed",
-                "n_formulas": 1,
-                "provider_calls": 1,
-                "low_confidence_review": 0,
-            }
-        ]
-
-    def test_estimate_formula_backfill_counts_candidates_without_ocr_or_writes(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        cached_candidate = self._formula_candidate(latex=r"E = mc^2")
-        ocr_candidate = self._formula_candidate(latex="")
-        indexer._extract_formula_candidates_for_item = MagicMock(
-            return_value=[cached_candidate, ocr_candidate]
-        )
-        indexer._recognize_formulas_for_item = MagicMock(side_effect=AssertionError("OCR must not run"))
-        indexer._ensure_formula_provider_available = MagicMock(
-            side_effect=AssertionError("provider preflight must not run")
-        )
-
-        result = indexer.estimate_formula_backfill(
-            item_key="DOC1",
-            daily_call_budget=10,
-            candidate_preview_limit=2,
-        )
-
-        assert result["processed"] == 1
-        assert result["candidate_count"] == 2
-        assert result["estimated_provider_calls"] == 1
-        assert result["daily_call_budget"] == 10
-        assert result["estimated_runs"] == 1
-        assert result["results"][0]["candidate_preview"][0]["needs_ocr"] is False
-        assert result["results"][0]["candidate_preview"][1]["needs_ocr"] is True
-        indexer._recognize_formulas_for_item.assert_not_called()
-        indexer.store.add_formulas.assert_not_called()
-        indexer.store.delete_chunks_by_type.assert_not_called()
-
-    def test_estimate_formula_backfill_samples_matched_items_reproducibly(self, tmp_path):
-        from zotpilot.models import ZoteroItem
-
-        items = []
-        for index in range(5):
-            pdf_path = tmp_path / f"paper-{index}.pdf"
-            pdf_path.write_bytes(b"%PDF-1.4")
-            items.append(ZoteroItem(f"DOC{index}", f"Paper {index}", "Auth", 2024, pdf_path))
-        indexer = self._make_indexer_for_formula_backfill(items)
-        items_by_key = {item.item_key: item for item in items}
-        indexer.zotero.get_item.side_effect = lambda item_key: items_by_key.get(item_key)
-        indexer.zotero.get_all_items_with_pdfs = MagicMock(side_effect=AssertionError("full scan must not run"))
-        indexer._extract_formula_candidates_for_item = MagicMock(
-            return_value=[self._formula_candidate(latex="")]
-        )
-        expected_keys = random.Random(7).sample(sorted(items_by_key), 2)
-
-        result = indexer.estimate_formula_backfill(
-            daily_call_budget=1800,
-            sample_size=2,
-            sample_seed=7,
-        )
-
-        assert [row["item_key"] for row in result["results"]] == expected_keys
-        assert indexer.zotero.get_item.call_count == 2
-        assert result["processed"] == 2
-        assert result["sample_size"] == 2
-        assert result["sample_seed"] == 7
-        assert result["sampled_from"] == 5
-        assert result["summary"]["sample_size"] == 2
-        assert result["summary"]["sample_seed"] == 7
-        assert result["summary"]["sampled_from"] == 5
-
-    def test_estimate_formula_backfill_rejects_sample_with_explicit_item_keys(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-
-        with pytest.raises(ValueError, match="without item_key or item_keys"):
-            indexer.estimate_formula_backfill(item_keys=["DOC1"], sample_size=1)
-
-    def test_estimate_formula_backfill_flags_high_density_documents(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        indexer.config.formula_ocr_provider = "simpletex"
-        indexer.config.formula_ocr_high_density_call_threshold = 2
-        indexer.config.formula_ocr_high_density_candidate_threshold = 160
-        candidates = [self._formula_candidate(latex="") for _ in range(3)]
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
-
-        result = indexer.estimate_formula_backfill(daily_call_budget=10)
-
-        assert result["dense_formula_papers"] == [
-            {
-                "item_key": "DOC1",
-                "title": "Paper",
-                "candidate_count": 3,
-                "estimated_provider_calls": 3,
-                "estimated_external_calls": 3,
-                "high_density_trigger": "provider_calls",
-                "high_density_call_threshold": 2,
-                "high_density_candidate_threshold": 160,
-            }
-        ]
-        assert result["deferred_high_density_provider_calls"] == 3
-        assert result["results"][0]["default_batch_status"] == "deferred_high_density"
-        assert result["summary"]["dense_formula_paper_count"] == 1
-
-    def test_formula_backfill_defers_high_density_external_documents_in_batch(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        indexer.config.formula_ocr_provider = "simpletex"
-        indexer.config.formula_ocr_high_density_call_threshold = 2
-        indexer.config.formula_ocr_high_density_candidate_threshold = 160
-        candidates = [self._formula_candidate(latex="") for _ in range(3)]
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
-        indexer._recognize_formulas_for_item = MagicMock(
-            side_effect=AssertionError("high-density document must be deferred before OCR")
-        )
-
-        result = indexer.index_formulas(daily_call_budget=10)
-
-        assert result["high_density_deferred_count"] == 1
-        assert result["provider_calls_used"] == 0
-        assert result["results"][0]["status"] == "deferred_high_density"
-        assert result["results"][0]["high_density_trigger"] == "provider_calls"
-        indexer.store.add_formulas.assert_not_called()
-        indexer.store.delete_chunks_by_type.assert_not_called()
-
-    def test_formula_backfill_defers_cached_formula_dense_documents_in_batch(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        indexer.config.formula_ocr_high_density_call_threshold = 80
-        indexer.config.formula_ocr_high_density_candidate_threshold = 2
-        candidates = [self._formula_candidate(latex=rf"x_{idx}=y") for idx in range(3)]
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
-        indexer._recognize_formulas_for_item = MagicMock(
-            side_effect=AssertionError("cached high-density document must be deferred before writes")
-        )
-
-        result = indexer.index_formulas(daily_call_budget=10)
-
-        assert result["high_density_deferred_count"] == 1
-        assert result["results"][0]["status"] == "deferred_high_density"
-        assert result["results"][0]["high_density_trigger"] == "candidate_count"
-        assert result["results"][0]["provider_calls"] == 0
-        indexer.store.add_formulas.assert_not_called()
-        indexer.store.delete_chunks_by_type.assert_not_called()
-
-    def test_formula_backfill_allows_high_density_documents_when_explicitly_included(self, tmp_path):
-        item = self._make_formula_item(tmp_path, "DOC1")
-        indexer = self._make_indexer_for_formula_backfill([item])
-        indexer.config.formula_ocr_provider = "simpletex"
-        indexer.config.formula_ocr_high_density_call_threshold = 2
-        indexer.config.formula_ocr_high_density_candidate_threshold = 160
-        candidates = [self._formula_candidate(latex="") for _ in range(3)]
-        formula = self._extracted_formula(provider="simpletex")
-        indexer._extract_formula_candidates_for_item = MagicMock(return_value=candidates)
-        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
-
-        result = indexer.index_formulas(daily_call_budget=10, include_high_density=True)
-
-        assert result["high_density_deferred_count"] == 0
-        assert result["include_high_density"] is True
-        assert result["provider_calls_used"] == 3
         assert result["formulas_indexed"] == 1
-        indexer.store.add_formulas.assert_called_once()
+        indexer.store.add_new_formulas.assert_called_once()
+        indexer.store.replace_formulas.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
 
     def test_formula_provider_preflight_has_actionable_install_hint(self):
         from zotpilot.indexer import FormulaProviderUnavailableError, Indexer
@@ -566,63 +302,6 @@ class TestFormulaBackfill:
 
         indexer._get_formula_provider.assert_not_called()
 
-    def test_formula_provider_preflight_skips_for_mineru_cache_only(self):
-        from zotpilot.indexer import Indexer
-
-        indexer = Indexer.__new__(Indexer)
-        indexer.config = SimpleNamespace(
-            formula_ocr_enabled=True,
-            formula_ocr_provider="local",
-            formula_candidate_provider="mineru_cache",
-        )
-        indexer._get_formula_provider = MagicMock()
-
-        with patch("zotpilot.feature_extraction.formula_ocr.importlib.util.find_spec", return_value=None):
-            indexer._ensure_formula_provider_available()
-
-        indexer._get_formula_provider.assert_not_called()
-
-    def test_recognize_formulas_for_item_passes_mineru_cache_paths_without_ocr_provider(self, tmp_path):
-        from zotpilot.indexer import Indexer
-        from zotpilot.models import ZoteroItem
-
-        pdf_path = tmp_path / "storage" / "ATT001" / "paper.pdf"
-        pdf_path.parent.mkdir(parents=True)
-        pdf_path.write_bytes(b"%PDF-1.4")
-        cache_path = tmp_path / "storage" / "CACHE001" / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
-        cache_path.parent.mkdir(parents=True)
-        cache_path.write_bytes(b"zip")
-        item = ZoteroItem(
-            item_key="DOC1",
-            title="Paper",
-            authors="Auth",
-            year=2024,
-            pdf_path=pdf_path,
-        )
-        candidate_provider = MagicMock()
-        indexer = Indexer.__new__(Indexer)
-        indexer.config = SimpleNamespace(
-            formula_candidate_provider="mineru_cache",
-            formula_ocr_max_formulas_per_doc=40,
-            formula_ocr_max_formulas_per_page=6,
-            formula_ocr_min_confidence=0.6,
-        )
-        indexer.zotero = MagicMock()
-        indexer.zotero.mineru_cache_paths_for_item.return_value = [cache_path]
-        indexer._get_formula_candidate_provider = MagicMock(return_value=candidate_provider)
-        indexer._get_formula_provider = MagicMock(side_effect=AssertionError("OCR provider should not be created"))
-
-        with patch("zotpilot.feature_extraction.formula_ocr.recognize_formulas", return_value=[]) as recognize:
-            indexer._recognize_formulas_for_item(item)
-
-        args, kwargs = recognize.call_args
-        assert args[0] == pdf_path
-        assert args[1] is None
-        assert kwargs["candidate_provider"] is candidate_provider
-        assert kwargs["item_key"] == "DOC1"
-        assert kwargs["cache_paths"] == (cache_path,)
-        indexer.zotero.mineru_cache_paths_for_item.assert_called_once_with("DOC1", pdf_path=pdf_path)
-
     def test_formula_backfill_keeps_existing_chunks_when_refresh_finds_none(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ZoteroItem
@@ -652,13 +331,2130 @@ class TestFormulaBackfill:
         indexer._pdf_hash = MagicMock(return_value="hash")
         indexer._recognize_formulas_for_item = MagicMock(return_value=[])
 
-        result = indexer.index_formulas(refresh_existing=True)
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[]):
+            result = indexer.index_formulas(refresh_existing=True)
 
         assert result["processed"] == 1
         assert result["formulas_indexed"] == 0
         assert result["results"][0]["existing_formulas_kept"] == 2
         indexer.store.delete_chunks_by_type.assert_not_called()
         indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_blocks_structural_review_before_writing(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem(
+            item_key="DOC1",
+            title="Paper",
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+            citation_key="auth2024",
+            publication="Nature",
+        )
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 2}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._get_formula_provider = MagicMock(return_value=SimpleNamespace())
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(refresh_existing=True)
+
+        row = result["results"][0]
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 0
+        assert result["low_confidence_review_count"] == 1
+        assert row["status"] == "needs_review"
+        assert row["reason"] == "formula_structural_review_required"
+        assert row["existing_formulas_kept"] == 2
+        assert row["review_reasons"] == ["missing_equation_number"]
+        assert result["low_confidence_review_queue"][0]["review_reasons"] == ["missing_equation_number"]
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_review_allows_source_unnumbered_formulas(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem(
+            "DOC1",
+            "Unnumbered formula paper",
+            "Author",
+            2025,
+            tmp_path / "paper.pdf",
+            publication="Journal",
+        )
+        formulas = [
+            ExtractedFormula(
+                page_num=2,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"\eta = -p / q",
+                equation_number_status="unnumbered",
+            )
+        ]
+
+        rows = Indexer._formula_review_rows(item=item, formulas=formulas, threshold=0.0)
+
+        assert rows == []
+
+    def test_formula_backfill_blocks_gapped_numbering_before_writing(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=1,
+                bbox=(0, 20, 10, 30),
+                latex=r"c = d",
+                equation_number="(3)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=2,
+                bbox=(0, 40, 10, 50),
+                latex=r"e = f",
+                equation_number="(3)",
+            ),
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 1}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=formulas)
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(refresh_existing=True)
+
+        row = result["results"][0]
+        assert row["status"] == "needs_review"
+        assert row["review_reasons"] == ["duplicate_equation_number", "numbering_sequence_gap"]
+        assert row["existing_formulas_kept"] == 1
+        assert result["formulas_indexed"] == 0
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_reports_candidate_ocr_failures_before_writing(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text="a = b (1)",
+                confidence=0.95,
+                equation_number="(1)",
+                latex=r"a = b",
+                source="mineru_cache",
+            ),
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 20, 10, 30),
+                raw_text="c = d (2)",
+                confidence=0.72,
+                equation_number="(2)",
+                source="pdf_text_equation_number",
+            ),
+        ]
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            )
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 1}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=formulas)
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.index_formulas(refresh_existing=True)
+
+        row = result["results"][0]
+        assert row["status"] == "needs_review"
+        assert row["review_reasons"] == ["ocr_failed"]
+        assert row["existing_formulas_kept"] == 1
+        assert result["formulas_indexed"] == 0
+        review = result["low_confidence_review_queue"][0]
+        assert review["equation_number"] == "(2)"
+        assert review["review_reasons"] == ["ocr_failed"]
+        assert review["bbox"] == (0, 20, 10, 30)
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+
+    def test_formula_backfill_writes_cached_formulas_with_ocr_miss_when_no_existing_formulas(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text="a = b (1)",
+                confidence=0.95,
+                equation_number="(1)",
+                latex=r"a = b",
+                source="mineru_cache",
+            ),
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 20, 10, 30),
+                raw_text="c = d (2)",
+                confidence=0.72,
+                equation_number="(2)",
+                source="pdf_text_equation_number",
+            ),
+        ]
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            )
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 0}
+        indexer.store.replace_formulas.return_value = 1
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=formulas)
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.index_formulas(refresh_existing=True)
+
+        row = result["results"][0]
+        assert row["status"] == "indexed_with_review"
+        assert row["reason"] == "formula_review_required"
+        assert row["review_reasons"] == ["ocr_failed"]
+        assert row["n_formulas"] == 1
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 1
+        review = result["low_confidence_review_queue"][0]
+        assert review["equation_number"] == "(2)"
+        assert review["review_reasons"] == ["ocr_failed"]
+        indexer.store.replace_formulas.assert_called_once()
+
+    def test_formula_review_rows_distinguish_rejected_cached_latex_from_ocr_failure(self):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, None)
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text="a = b (1)",
+                confidence=0.95,
+                equation_number="(1)",
+                latex=r"a = b",
+                source="mineru_cache",
+            ),
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 20, 10, 30),
+                raw_text="not a formula (2)",
+                confidence=0.95,
+                equation_number="(2)",
+                latex=r"\text{not a formula}",
+                source="mineru_cache",
+            ),
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 40, 10, 50),
+                raw_text="c = d (3)",
+                confidence=0.72,
+                equation_number="(3)",
+                source="pdf_text_equation_number",
+            ),
+        ]
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            )
+        ]
+
+        rows = Indexer._formula_ocr_failure_review_rows(item=item, candidates=candidates, formulas=formulas)
+
+        assert [row["equation_number"] for row in rows] == ["(2)", "(3)"]
+        assert [row["review_reasons"] for row in rows] == [["cached_latex_rejected"], ["ocr_failed"]]
+
+    def test_formula_ocr_failure_review_rows_keep_stable_page_window_indices(self):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, None)
+        candidates = [
+            FormulaCandidate(
+                page_num=10,
+                bbox=(0, 0, 10, 10),
+                raw_text="stale unnumbered (6)",
+                confidence=0.72,
+                equation_number="(6)",
+                equation_number_status="unnumbered",
+                source="mineru_cache",
+            ),
+            FormulaCandidate(
+                page_num=11,
+                bbox=(0, 20, 10, 30),
+                raw_text="c = d (7)",
+                confidence=0.72,
+                equation_number="(7)",
+                source="pdf_text_equation_number",
+            ),
+        ]
+
+        rows = Indexer._formula_ocr_failure_review_rows(
+            item=item,
+            candidates=candidates,
+            formulas=[],
+            formula_indices=[25, 26],
+        )
+
+        assert len(rows) == 1
+        assert rows[0]["formula_index"] == 26
+        assert rows[0]["equation_number"] == "(7)"
+
+    def test_formula_backfill_blocks_truncated_pdf_fallback_before_writing(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidate = FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 10, 10),
+            raw_text="a = b (1)",
+            confidence=0.72,
+            equation_number="(1)",
+            source="pdf_text_equation_number_truncated",
+        )
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"a = b",
+            confidence=0.95,
+            equation_number="(1)",
+            source="pdf_text_equation_number_truncated",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.count_chunk_types.return_value = {"text": 3, "table": 0, "figure": 0, "formula": 1}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[candidate]):
+            result = indexer.index_formulas(refresh_existing=True)
+
+        row = result["results"][0]
+        assert row["status"] == "needs_review"
+        assert row["review_reasons"] == ["fallback_truncated"]
+        assert row["existing_formulas_kept"] == 1
+        assert result["formulas_indexed"] == 0
+        review = result["low_confidence_review_queue"][0]
+        assert review["review_reasons"] == ["fallback_truncated"]
+        assert review["source"] == "pdf_text_equation_number_truncated"
+        indexer.store.delete_chunks_by_type.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_stops_before_exceeding_daily_budget(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf1 = tmp_path / "paper1.pdf"
+        pdf2 = tmp_path / "paper2.pdf"
+        pdf1.write_bytes(b"%PDF-1.4")
+        pdf2.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC1", "Paper 1", "Auth", 2024, pdf1, publication="Nature"),
+            ZoteroItem("DOC2", "Paper 2", "Auth", 2024, pdf2, publication="Nature"),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._get_formula_provider = MagicMock(return_value=SimpleNamespace())
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            side_effect=[[object(), object()], [object(), object()]],
+        ):
+            result = indexer.index_formulas(daily_call_budget=2)
+
+        assert result["processed"] == 1
+        assert result["provider_calls_used"] == 2
+        assert result["budget_exhausted"] is True
+        assert result["resume_cursor"] == "DOC1"
+        assert result["next_item_key"] == "DOC2"
+        assert result["next_item_candidate_count"] == 2
+        assert result["results"][-1]["status"] == "deferred_budget"
+        assert result["results"][-1]["reason"] == "provider_calls_exceed_remaining_budget"
+        indexer._recognize_formulas_for_item.assert_called_once()
+
+    def test_formula_backfill_does_not_meter_candidates_with_latex(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 0, 0),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        candidate = FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 0, 0),
+            raw_text=r"E = mc^2",
+            confidence=0.95,
+            source="mineru_content_list",
+            latex=r"E = mc^2",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[candidate]):
+            result = indexer.index_formulas(daily_call_budget=1)
+
+        assert result["provider_calls_used"] == 0
+        assert result["external_calls_used"] == 0
+        assert result["results"][0]["candidate_count"] == 1
+        assert result["results"][0]["provider_calls"] == 0
+        indexer._ensure_formula_provider_available.assert_not_called()
+        indexer.store.replace_formulas.assert_called_once()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_skips_translated_pdf_and_records_reason(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        original_pdf = tmp_path / "original.pdf"
+        translated_pdf = tmp_path / "双语对照-Paper.pdf"
+        original_pdf.write_bytes(b"%PDF-1.4")
+        translated_pdf.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC1", "Original paper", "Auth", 2024, original_pdf, publication="Nature"),
+            ZoteroItem("DOC2", "Translated paper", "Auth", 2024, translated_pdf, publication="Nature"),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object()],
+        ) as extract:
+            result = indexer.index_formulas()
+
+        assert result["processed"] == 1
+        assert result["selected"] == 2
+        assert result["skipped"] == 1
+        assert result["matched"] == 2
+        assert result["provider_calls_used"] == 1
+        assert extract.call_count == 1
+        assert [row["item_key"] for row in result["results"] if row["status"] == "skipped"] == ["DOC2"]
+        assert result["results"][0]["reason"] == "bilingual_or_translated_pdf"
+
+    def test_formula_backfill_does_not_skip_weak_translation_filename_shape(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        weak_pdf = tmp_path / "Gao 等 - 2026 - Paper-164877.pdf"
+        weak_pdf.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Original paper", "Auth", 2024, weak_pdf, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object()],
+        ):
+            result = indexer.index_formulas()
+
+        assert result["processed"] == 1
+        assert result["skipped"] == 0
+        assert result["provider_calls_used"] == 1
+
+    def test_estimate_formula_backfill_skips_translated_pdf_without_budget_cost(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        original_pdf = tmp_path / "original.pdf"
+        translated_pdf = tmp_path / "双语对照-paper.pdf"
+        original_pdf.write_bytes(b"%PDF-1.4")
+        translated_pdf.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC1", "Original paper", "Auth", 2024, original_pdf),
+            ZoteroItem("DOC2", "Translated paper", "Auth", 2024, translated_pdf),
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object()],
+        ) as extract:
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        assert result["processed"] == 1
+        assert result["selected"] == 2
+        assert result["skipped"] == 1
+        assert result["matched"] == 2
+        assert result["candidate_count"] == 1
+        assert result["estimated_external_calls"] == 1
+        assert result["estimated_runs"] == 1
+        assert extract.call_count == 1
+        skipped = [row for row in result["results"] if row.get("status") == "skipped"]
+        assert skipped[0]["item_key"] == "DOC2"
+        assert skipped[0]["reason"] == "bilingual_or_translated_pdf"
+
+    def test_formula_backfill_reports_single_paper_over_daily_budget(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(daily_call_budget=2)
+
+        assert result["processed"] == 0
+        assert result["formulas_indexed"] == 0
+        assert result["next_item_key"] == "DOC1"
+        assert result["next_item_candidate_count"] == 3
+        assert result["results"][0]["reason"] == "single_paper_exceeds_daily_budget"
+        assert "more than the daily budget" in result["warnings"][0]
+        indexer._recognize_formulas_for_item.assert_not_called()
+
+    def test_formula_backfill_stops_on_quota_without_marking_current_item_processed(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf1 = tmp_path / "paper1.pdf"
+        pdf2 = tmp_path / "paper2.pdf"
+        pdf1.write_bytes(b"%PDF-1.4")
+        pdf2.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC1", "Paper 1", "Auth", 2024, pdf1, publication="Nature"),
+            ZoteroItem("DOC2", "Paper 2", "Auth", 2024, pdf2, publication="Nature"),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._get_formula_provider = MagicMock(return_value=object())
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(
+            side_effect=[[formula], RuntimeError("429 quota exceeded")]
+        )
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            side_effect=[[object()], [object()]],
+        ):
+            result = indexer.index_formulas(daily_call_budget=10, stop_on_quota=True)
+
+        assert result["processed"] == 1
+        assert result["provider_calls_used"] == 1
+        assert result["external_calls_used"] == 1
+        assert result["stopped_reason"] == "provider_quota_or_rate_limit"
+        assert result["resume_cursor"] == "DOC1"
+        assert result["next_item_key"] == "DOC2"
+        assert result["results"][-1]["status"] == "stopped_quota"
+        assert result["results"][-1]["provider_calls"] == 1
+        assert indexer._recognize_formulas_for_item.call_count == 2
+        indexer.store.replace_formulas.assert_called_once()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_requires_positive_config_budget_for_default_simpletex_run(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_daily_call_budget": 0,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with pytest.raises(ValueError, match="daily_call_budget > 0"):
+            indexer.index_formulas()
+
+        indexer.store.add_formulas.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+
+    def test_formula_backfill_stops_when_simpletex_attempt_budget_is_exhausted(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        class FakeAttemptBudgetProvider:
+            attempts_used = 0
+
+            def set_attempt_budget(self, budget):
+                self.budget = budget
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        provider = FakeAttemptBudgetProvider()
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._get_formula_provider = MagicMock(return_value=provider)
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+
+        def exhaust_budget(*_args, **_kwargs):
+            provider.attempts_used += 1
+            raise RuntimeError("SimpleTex formula OCR daily call budget exhausted before request")
+
+        indexer._recognize_formulas_for_item = MagicMock(side_effect=exhaust_budget)
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(daily_call_budget=1)
+
+        assert provider.budget == 1
+        assert result["processed"] == 0
+        assert result["formulas_indexed"] == 0
+        assert result["provider_calls_used"] == 1
+        assert result["external_calls_used"] == 1
+        assert result["budget_exhausted"] is True
+        assert result["stopped_reason"] == "daily_call_budget"
+        assert result["next_item_key"] == "DOC1"
+        assert result["results"][0]["reason"] == "provider_attempts_exhausted_daily_budget"
+        indexer.store.replace_formulas.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_uses_original_pdf_when_translated_attachment_is_fallback(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        translated_pdf = tmp_path / "双语对照-Paper.pdf"
+        original_pdf = tmp_path / "Original Paper.pdf"
+        translated_pdf.write_bytes(b"%PDF-1.4")
+        original_pdf.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, translated_pdf, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.zotero.resolve_original_pdf_path.return_value = original_pdf
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object()],
+        ) as extract:
+            result = indexer.index_formulas()
+
+        assert result["processed"] == 1
+        assert result["skipped"] == 0
+        assert item.pdf_path == original_pdf
+        assert extract.call_count == 1
+        indexer.zotero.resolve_original_pdf_path.assert_any_call(
+            "DOC1",
+            title="Paper",
+            fallback_path=translated_pdf,
+        )
+        indexer.store.replace_formulas.assert_called_once()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_extract_formula_candidates_passes_mineru_cache_paths_from_zotero(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        cache_path = tmp_path / "LLM-for-Zotero-MinerU-cache-PDFKEY12.zip"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        cache_path.write_bytes(b"PK")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidate_provider = object()
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.zotero = MagicMock()
+        indexer.zotero.mineru_cache_paths_for_item.return_value = [cache_path]
+        indexer._get_formula_candidate_provider = MagicMock(return_value=candidate_provider)
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[],
+        ) as extract:
+            result = indexer._extract_formula_candidates_for_item(item)
+
+        assert result == []
+        indexer.zotero.mineru_cache_paths_for_item.assert_called_once_with(
+            "DOC1",
+            pdf_path=pdf_path,
+        )
+        extract.assert_called_once()
+        assert extract.call_args.kwargs["cache_paths"] == (cache_path,)
+        assert extract.call_args.kwargs["candidate_provider"] is candidate_provider
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 0
+        assert extract.call_args.kwargs["pdf_fallback_max_pages"] == 80
+
+    def test_formula_backfill_resume_after_skips_processed_items(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf1 = tmp_path / "paper1.pdf"
+        pdf2 = tmp_path / "paper2.pdf"
+        pdf1.write_bytes(b"%PDF-1.4")
+        pdf2.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC2", "Paper 2", "Auth", 2024, pdf2, publication="Nature"),
+            ZoteroItem("DOC1", "Paper 1", "Auth", 2024, pdf1, publication="Nature"),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(resume_after="DOC1")
+
+        assert result["processed"] == 1
+        assert result["results"][0]["item_key"] == "DOC2"
+        assert result["resume_cursor"] == "DOC2"
+        assert result["resume_after_found"] is True
+
+    def test_formula_backfill_item_key_selection_does_not_scan_full_library(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"a = b",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.return_value = item
+        indexer.zotero.get_all_items_with_pdfs.side_effect = AssertionError("full library scan should not run")
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(item_key="DOC1")
+
+        assert result["processed"] == 1
+        assert result["results"][0]["item_key"] == "DOC1"
+        assert indexer.zotero.get_item.call_count == 2
+        indexer.zotero.get_item.assert_called_with("DOC1")
+        indexer.zotero.get_all_items_with_pdfs.assert_not_called()
+
+    def test_formula_backfill_returns_low_confidence_review_queue(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=2,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"\sigma = E\epsilon",
+            confidence=0.42,
+            equation_number="(1)",
+            provider="simpletex",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(low_confidence_threshold=0.7)
+
+        assert result["low_confidence_review_count"] == 1
+        review = result["low_confidence_review_queue"][0]
+        assert review["item_key"] == "DOC1"
+        assert review["equation_number"] == "(1)"
+        assert review["confidence"] == 0.42
+        assert review["review_reasons"] == ["low_confidence"]
+
+    def test_formula_review_queue_flags_missing_numbers_and_split_formulas(self):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, None)
+        formulas = [
+            ExtractedFormula(
+                page_num=2,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"\sigma = E\epsilon",
+                confidence=0.95,
+                equation_number="",
+                provider="mineru_cache",
+            ),
+            ExtractedFormula(
+                page_num=2,
+                formula_index=1,
+                bbox=(0, 0, 10, 10),
+                latex=r"\left[ \sqrt{\frac{1+c_1^2}{3}} + c_1 \eta \right]",
+                confidence=0.95,
+                equation_number="(8)",
+                provider="mineru_cache",
+            ),
+        ]
+
+        rows = Indexer._formula_review_rows(item=item, formulas=formulas, threshold=0.0)
+
+        assert len(rows) == 2
+        assert rows[0]["review_reasons"] == ["missing_equation_number"]
+        assert rows[1]["review_reasons"] == ["possible_split_formula"]
+
+    def test_formula_review_queue_flags_duplicate_and_gapped_numbering(self):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, None)
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=1,
+                bbox=(0, 20, 10, 30),
+                latex=r"c = d",
+                equation_number="(3)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=2,
+                bbox=(0, 40, 10, 50),
+                latex=r"e = f",
+                equation_number="(3)",
+            ),
+        ]
+
+        rows = Indexer._formula_review_rows(item=item, formulas=formulas, threshold=0.0)
+
+        assert len(rows) == 3
+        assert rows[0]["review_reasons"] == ["numbering_sequence_gap"]
+        assert rows[1]["review_reasons"] == ["duplicate_equation_number", "numbering_sequence_gap"]
+        assert rows[2]["review_reasons"] == ["duplicate_equation_number", "numbering_sequence_gap"]
+
+    def test_formula_review_queue_treats_letter_suffix_numbers_as_sequence_members(self):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, None)
+        formulas = [
+            ExtractedFormula(
+                page_num=1,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"a = b",
+                equation_number="(1)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=1,
+                bbox=(0, 20, 10, 30),
+                latex=r"c = d",
+                equation_number="(2)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=2,
+                bbox=(0, 40, 10, 50),
+                latex=r"e = f",
+                equation_number="(3a)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=3,
+                bbox=(0, 60, 10, 70),
+                latex=r"g = h",
+                equation_number="(3b)",
+            ),
+            ExtractedFormula(
+                page_num=1,
+                formula_index=4,
+                bbox=(0, 80, 10, 90),
+                latex=r"i = j",
+                equation_number="(4)",
+            ),
+        ]
+
+        rows = Indexer._formula_review_rows(item=item, formulas=formulas, threshold=0.0)
+
+        assert rows == []
+
+    def test_formula_review_queue_allows_distant_duplicate_numbers_for_long_documents(self):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        item = ZoteroItem("DOC1", "Thesis", "Auth", 2024, None)
+        formulas = [
+            ExtractedFormula(
+                page_num=30,
+                formula_index=0,
+                bbox=(0, 0, 10, 10),
+                latex=r"E = mc^2",
+                equation_number="(2)",
+            ),
+            ExtractedFormula(
+                page_num=76,
+                formula_index=1,
+                bbox=(0, 20, 10, 30),
+                latex=r"\sigma = E\epsilon",
+                equation_number="(2)",
+            ),
+            ExtractedFormula(
+                page_num=77,
+                formula_index=2,
+                bbox=(0, 40, 10, 50),
+                latex=r"\tau = G\gamma",
+                equation_number="(3)",
+            ),
+        ]
+
+        rows = Indexer._formula_review_rows(item=item, formulas=formulas, threshold=0.0)
+
+        assert rows == []
+
+    def test_estimate_formula_backfill_counts_candidates_without_ocr(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf1 = tmp_path / "paper1.pdf"
+        pdf2 = tmp_path / "paper2.pdf"
+        pdf1.write_bytes(b"%PDF-1.4")
+        pdf2.write_bytes(b"%PDF-1.4")
+        items = [
+            ZoteroItem("DOC1", "Paper 1", "Auth", 2024, pdf1),
+            ZoteroItem("DOC2", "Paper 2", "Auth", 2024, pdf2),
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1", "DOC2"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = items
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            side_effect=[[object(), object(), object()], [object()]],
+        ):
+            result = indexer.estimate_formula_backfill(daily_call_budget=2)
+
+        assert result["candidate_count"] == 4
+        assert result["estimated_external_calls"] == 4
+        assert result["normal_batch_estimated_provider_calls"] == 4
+        assert result["deferred_high_density_provider_calls"] == 0
+        assert result["estimated_min_duration_seconds"] == 2.0
+        assert result["estimated_runs"] == 2
+        assert result["summary"]["daily_call_budget"] == 2
+        assert result["high_call_papers"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Paper 1",
+                "candidate_count": 3,
+                "estimated_provider_calls": 3,
+                "estimated_external_calls": 3,
+            }
+        ]
+        assert result["summary"]["high_call_paper_count"] == 1
+        assert "individually exceed the daily call budget" in result["summary"]["warnings"][-1]
+
+    def test_estimate_formula_backfill_samples_matched_items_reproducibly(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        items = []
+        for index in range(5):
+            pdf_path = tmp_path / f"paper-{index}.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4")
+            items.append(ZoteroItem(f"DOC{index}", f"Paper {index}", "Auth", 2024, pdf_path))
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {
+            item.item_key for item in items
+        } | {"ATTACHMENTKEY", "ORPHANKEY"}
+        indexer.zotero = MagicMock()
+        items_by_key = {item.item_key: item for item in items}
+        indexer.zotero.get_item.side_effect = lambda item_key: items_by_key.get(item_key)
+        indexer.zotero.get_all_items_with_pdfs = MagicMock()
+        indexer.zotero.resolve_original_pdf_path = MagicMock(return_value=None)
+        indexer._assert_config_hash_current = MagicMock()
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object()],
+        ), patch("zotpilot.indexer.pdf_content_translation_risk_score", return_value=0.0) as risk_score:
+            result = indexer.estimate_formula_backfill(
+                daily_call_budget=1800,
+                sample_size=2,
+                sample_seed=0,
+            )
+
+        result_keys = [row["item_key"] for row in result["results"]]
+        assert len(result_keys) == 2
+        assert set(result_keys).issubset(items_by_key)
+        assert "ATTACHMENTKEY" not in result_keys
+        assert "ORPHANKEY" not in result_keys
+        indexer.zotero.get_all_items_with_pdfs.assert_not_called()
+        assert indexer.zotero.get_item.call_count == 3
+        assert indexer.zotero.resolve_original_pdf_path.call_count == 2
+        assert risk_score.call_count == 2
+        assert result["processed"] == 2
+        assert result["sampled_from"] == 7
+        assert result["sampled_unresolved_key_count"] == 1
+        assert result["matched"] == 7
+        assert result["summary"]["sample_size"] == 2
+        assert result["summary"]["sample_seed"] == 0
+
+    def test_estimate_formula_backfill_rejects_sample_with_explicit_item_keys(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path)
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.return_value = item
+        indexer._assert_config_hash_current = MagicMock()
+
+        with pytest.raises(ValueError, match="without item_key or item_keys"):
+            indexer.estimate_formula_backfill(item_keys=["DOC1"], sample_size=1)
+
+    def test_estimate_formula_backfill_flags_high_density_documents(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path)
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        assert result["dense_formula_papers"] == [
+            {
+                "item_key": "BOOK1",
+                "title": "Damage mechanics",
+                "candidate_count": 3,
+                "estimated_provider_calls": 3,
+                "estimated_external_calls": 3,
+                "high_density_call_threshold": 2,
+                "high_density_candidate_threshold": 160,
+                "high_density_trigger": "provider_calls",
+            }
+        ]
+        assert result["summary"]["dense_formula_paper_count"] == 1
+        assert result["normal_batch_estimated_provider_calls"] == 0
+        assert result["deferred_high_density_provider_calls"] == 3
+        assert result["results"][0]["default_batch_status"] == "deferred_high_density"
+        assert "high-density formula document" in result["summary"]["warnings"][-1]
+        assert "Do not run a normal formula batch yet" in result["summary"]["next_action"]
+
+    def test_estimate_formula_backfill_builds_high_density_page_window_plan(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=10 + index,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                equation_number=f"(3.{index + 1})",
+            )
+            for index in range(5)
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        assert result["high_density_backfill_plans"][0]["item_key"] == "THESIS1"
+        assert result["high_density_backfill_plans"][0]["segment_count"] == 3
+        assert [
+            (segment["page_min"], segment["page_max"], segment["candidate_start"], segment["candidate_end"])
+            for segment in result["high_density_backfill_plans"][0]["segments"]
+        ] == [
+            (10, 11, 0, 2),
+            (12, 13, 2, 4),
+            (14, 14, 4, 5),
+        ]
+        assert result["high_density_backfill_plans"][0]["segments"][1]["formula_index_offset"] == 2
+        assert result["summary"]["high_density_backfill_plan_count"] == 1
+
+    def test_high_density_page_window_plan_flags_suspicious_equation_number_ordering(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=10 + index,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                equation_number=number,
+            )
+            for index, number in enumerate(["(1)", "(8)", "(3)"])
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["equation_number_prefixes"] == ["regular"]
+        assert audit["equation_number_warnings"] == [
+            "equation_number_regression",
+            "large_equation_number_gap",
+        ]
+        assert audit["equation_number_sequence_breaks"] == [
+            {
+                "previous": "(1)",
+                "current": "(8)",
+                "prefix": "regular",
+                "reason": "large_gap",
+                "gap": 7,
+            },
+            {
+                "previous": "(8)",
+                "current": "(3)",
+                "prefix": "regular",
+                "reason": "regression",
+            },
+        ]
+        plan = result["high_density_backfill_plans"][0]
+        assert plan["equation_number_warnings"] == [
+            "equation_number_regression",
+            "large_equation_number_gap",
+        ]
+        assert plan["segments"][0]["equation_number_warnings"] == ["large_equation_number_gap"]
+
+    def test_estimate_formula_backfill_page_window_uses_unlimited_candidate_extraction(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=page,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                equation_number=f"(3.{index + 1})",
+            )
+            for index, page in enumerate([9, 10, 11])
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+                "formula_ocr_high_density_candidate_threshold": 1,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_item.return_value = item
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=candidates,
+        ) as extract:
+            result = indexer.estimate_formula_backfill(
+                item_key="THESIS1",
+                daily_call_budget=1800,
+                page_min=10,
+                page_max=11,
+            )
+
+        assert result["candidate_count"] == 2
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 0
+        assert extract.call_args.kwargs["max_formulas_per_doc"] == 0
+        assert extract.call_args.kwargs["max_formulas_per_page"] == 0
+
+    def test_estimate_formula_backfill_defers_cached_formula_dense_documents(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=index + 1,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=r"\sigma=E\epsilon",
+                confidence=0.95,
+                latex=rf"\sigma_{{{index}}}=E\epsilon",
+                equation_number=f"({index + 1})",
+            )
+            for index in range(3)
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 80,
+                "formula_ocr_high_density_candidate_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=candidates,
+        ) as extract:
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        assert result["estimated_provider_calls"] == 0
+        assert result["dense_formula_papers"] == [
+            {
+                "item_key": "THESIS1",
+                "title": "Damage mechanics thesis",
+                "candidate_count": 3,
+                "estimated_provider_calls": 0,
+                "estimated_external_calls": 0,
+                "high_density_call_threshold": 80,
+                "high_density_candidate_threshold": 2,
+                "high_density_trigger": "candidate_count",
+            }
+        ]
+        assert result["results"][0]["default_batch_status"] == "deferred_high_density"
+        assert result["deferred_high_density_candidate_count"] == 3
+        assert result["deferred_high_density_provider_calls"] == 0
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 3
+
+    def test_formula_backfill_defers_high_density_external_documents_in_batch(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path)
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(daily_call_budget=1800)
+
+        assert result["processed"] == 0
+        assert result["formulas_indexed"] == 0
+        assert result["results"][0]["status"] == "deferred_high_density"
+        assert result["results"][0]["reason"] == "high_density_formula_document"
+        assert result["results"][0]["provider_calls"] == 3
+        assert "high-density formula document" in result["warnings"][0]
+        indexer._recognize_formulas_for_item.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+        indexer.store.add_formulas.assert_not_called()
+
+    def test_formula_backfill_defers_cached_formula_dense_documents_in_batch(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=index + 1,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=r"\sigma=E\epsilon",
+                confidence=0.95,
+                latex=rf"\sigma_{{{index}}}=E\epsilon",
+                equation_number=f"({index + 1})",
+            )
+            for index in range(3)
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 80,
+                "formula_ocr_high_density_candidate_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=candidates,
+        ) as extract:
+            result = indexer.index_formulas(daily_call_budget=1800)
+
+        assert result["processed"] == 0
+        assert result["formulas_indexed"] == 0
+        assert result["results"][0]["status"] == "deferred_high_density"
+        assert result["results"][0]["provider_calls"] == 0
+        assert result["results"][0]["high_density_candidate_threshold"] == 2
+        assert "formula candidate" in result["warnings"][0]
+        indexer._ensure_formula_provider_available.assert_not_called()
+        indexer._recognize_formulas_for_item.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 3
+
+    def test_formula_backfill_defers_single_item_keys_high_density_by_default(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path)
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(item_keys=["BOOK1"], daily_call_budget=1800)
+
+        assert result["processed"] == 0
+        assert result["high_density_deferred_count"] == 1
+        assert result["results"][0]["status"] == "deferred_high_density"
+        indexer._recognize_formulas_for_item.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+
+    def test_formula_backfill_allows_single_item_key_high_density_without_include_flag(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path, publication="Book")
+        formula = ExtractedFormula(
+            page_num=12,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"\sigma = E\epsilon",
+            equation_number="(1)",
+            provider="simpletex",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = ""
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._get_formula_provider = MagicMock(return_value=SimpleNamespace())
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(item_key="BOOK1", daily_call_budget=1800)
+
+        assert result["processed"] == 1
+        assert result["high_density_deferred_count"] == 0
+        assert result["provider_calls_used"] == 3
+        assert result["results"][0]["status"] == "indexed"
+        indexer._recognize_formulas_for_item.assert_called_once()
+        indexer.store.replace_formulas.assert_called_once()
+
+    def test_formula_backfill_page_window_appends_with_stable_formula_indices(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "thesis.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("THESIS1", "Damage mechanics thesis", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=page,
+                bbox=(0, index * 10, 100, index * 10 + 8),
+                raw_text=rf"\sigma_{{{index}}}=E\epsilon",
+                confidence=0.95,
+                source="mineru_content_list",
+                latex=rf"\sigma_{{{index}}}=E\epsilon",
+                equation_number=f"(3.{index + 1})",
+            )
+            for index, page in enumerate([9, 10, 11])
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 80,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"THESIS1"}
+        indexer.store.add_new_formulas.return_value = 2
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = ""
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=candidates,
+        ) as extract:
+            result = indexer.index_formulas(
+                item_key="THESIS1",
+                daily_call_budget=1800,
+                page_min=10,
+                page_max=11,
+            )
+
+        stored_formulas = indexer.store.add_new_formulas.call_args.args[2]
+        assert [formula.page_num for formula in stored_formulas] == [10, 11]
+        assert [formula.formula_index for formula in stored_formulas] == [1, 2]
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 2
+        assert result["page_range_backfill"] is True
+        assert "append-only" in result["warnings"][0]
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 0
+        assert extract.call_args.kwargs["max_formulas_per_doc"] == 0
+        assert extract.call_args.kwargs["max_formulas_per_page"] == 0
+        indexer.store.replace_formulas.assert_not_called()
+
+    def test_formula_backfill_allows_high_density_documents_when_explicitly_included(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path, publication="Book")
+        formula = ExtractedFormula(
+            page_num=12,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"\sigma = E\epsilon",
+            equation_number="(1)",
+            provider="simpletex",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = ""
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._get_formula_provider = MagicMock(return_value=SimpleNamespace())
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(
+                item_keys=["BOOK1"],
+                daily_call_budget=1800,
+                include_high_density=True,
+            )
+
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 1
+        assert result["high_density_deferred_count"] == 0
+        assert result["include_high_density"] is True
+        assert result["provider_calls_used"] == 3
+        assert result["results"][0]["status"] == "indexed"
+        indexer._ensure_formula_provider_available.assert_called_once()
+        indexer._recognize_formulas_for_item.assert_called_once()
+        indexer.store.replace_formulas.assert_called_once()
+
+    def test_estimate_formula_backfill_preview_distinguishes_candidates_from_provider_calls(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 0, 0),
+                raw_text=r"E = mc^2",
+                confidence=0.95,
+                source="mineru_content_list",
+                latex=r"E = mc^2",
+            ),
+            FormulaCandidate(page_num=2, bbox=(1, 2, 3, 4), raw_text=r"\sigma = E\epsilon", confidence=0.8),
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=2)
+
+        assert result["candidate_count"] == 2
+        assert result["estimated_provider_calls"] == 1
+        assert result["estimated_external_calls"] == 1
+        assert result["estimated_min_duration_seconds"] == 0.5
+        assert result["summary"]["cached_latex_missing_number_paper_count"] == 1
+        assert result["cached_latex_missing_number_papers"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Paper",
+                "candidate_count": 2,
+                "cached_latex_count": 1,
+                "missing_equation_number_count": 1,
+                "missing_equation_number_ratio": 1.0,
+            }
+        ]
+        assert "Review cached LaTeX equation numbering" in result["summary"]["next_action"]
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["candidate_count"] == 2
+        assert audit["cached_latex_count"] == 1
+        assert audit["cached_latex_missing_equation_number_count"] == 1
+        assert audit["cached_latex_missing_equation_number_ratio"] == 1.0
+        assert audit["ocr_needed_count"] == 1
+        assert audit["equation_number_warnings"] == ["cached_latex_missing_equation_numbers"]
+        assert audit["source_counts"] == {"mineru_content_list": 1, "text_layer": 1}
+        assert audit["page_min"] == 1
+        assert audit["page_max"] == 2
+        assert result["results"][0]["candidate_preview"][0]["has_latex"] is True
+        assert result["results"][0]["candidate_preview"][0]["needs_ocr"] is False
+        assert result["results"][0]["candidate_preview"][1]["has_latex"] is False
+        assert result["results"][0]["candidate_preview"][1]["needs_ocr"] is True
+        assert result["results"][0]["candidate_preview"][1]["bbox"] == [1, 2, 3, 4]
+
+    def test_estimate_formula_backfill_preview_can_include_all_candidates_without_truncation(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path)
+        long_latex = r"E = mc^2 " * 30
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 0, 0),
+                raw_text=f"raw {index}",
+                confidence=0.95,
+                latex=long_latex,
+                equation_number=f"({index + 1})",
+            )
+            for index in range(3)
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=candidates,
+        ) as extract:
+            result = indexer.estimate_formula_backfill(
+                candidate_preview_limit=-1,
+                candidate_preview_chars=0,
+            )
+
+        previews = result["results"][0]["candidate_preview"]
+        assert [preview["candidate_index"] for preview in previews] == [0, 1, 2]
+        assert [preview["equation_number"] for preview in previews] == ["(1)", "(2)", "(3)"]
+        assert previews[0]["latex_preview"] == long_latex
+        assert extract.call_args.kwargs["max_candidates_per_doc"] == 0
+
+    def test_estimate_formula_backfill_candidate_audit_warns_on_truncated_sources(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=80,
+                bbox=(0, 0, 10, 10),
+                raw_text=r"E = mc^2",
+                confidence=0.72,
+                source="pdf_text_equation_number_truncated",
+                equation_number="(1)",
+            )
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=1)
+
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["has_truncated_source"] is True
+        assert audit["truncated_source_count"] == 1
+        assert result["truncated_candidate_papers"] == [
+            {
+                "item_key": "DOC1",
+                "title": "Paper",
+                "candidate_count": 1,
+                "truncated_source_count": 1,
+            }
+        ]
+        assert result["summary"]["truncated_candidate_paper_count"] == 1
+        assert any("truncated PDF fallback" in warning for warning in result["summary"]["warnings"])
+
+    def test_estimate_formula_backfill_cached_latex_still_needs_one_run(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path)
+        candidate = FormulaCandidate(
+            page_num=1,
+            bbox=(0, 0, 0, 0),
+            raw_text=r"E = mc^2",
+            confidence=0.95,
+            source="mineru_content_list",
+            latex=r"E = mc^2",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_simpletex_min_interval": 0.5,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[candidate]):
+            result = indexer.estimate_formula_backfill(daily_call_budget=1800)
+
+        assert result["candidate_count"] == 1
+        assert result["estimated_provider_calls"] == 0
+        assert result["estimated_external_calls"] == 0
+        assert result["estimated_runs"] == 1
+
+    def test_formula_backfill_writes_jsonl_run_and_item_events(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        state_path = tmp_path / "formula_state.jsonl"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=[object()]):
+            result = indexer.index_formulas(status_jsonl=state_path)
+
+        events = [json.loads(line) for line in state_path.read_text(encoding="utf-8").splitlines()]
+        assert [event["event"] for event in events] == [
+            "formula_backfill_run_started",
+            "formula_backfill_item",
+            "formula_backfill_run_finished",
+        ]
+        assert {event["run_id"] for event in events} == {result["run_id"]}
+        assert all(event["schema_version"] == 1 for event in events)
+        assert events[1]["status"] == "indexed"
+
+    def test_formula_backfill_writes_jsonl_high_density_deferred_events(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "book.pdf"
+        state_path = tmp_path / "formula_state.jsonl"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("BOOK1", "Damage mechanics", "Auth", 2024, pdf_path)
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            **{
+                **self._hash_config().__dict__,
+                "formula_ocr_provider": "simpletex",
+                "formula_ocr_high_density_call_threshold": 2,
+            }
+        )
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"BOOK1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock()
+
+        with patch(
+            "zotpilot.feature_extraction.formula_ocr.extract_formula_candidates",
+            return_value=[object(), object(), object()],
+        ):
+            result = indexer.index_formulas(item_keys=["BOOK1"], daily_call_budget=1800, status_jsonl=state_path)
+
+        events = [json.loads(line) for line in state_path.read_text(encoding="utf-8").splitlines()]
+        assert [event["event"] for event in events] == [
+            "formula_backfill_run_started",
+            "formula_backfill_item",
+            "formula_backfill_run_finished",
+        ]
+        assert events[0]["high_density_call_threshold"] == 2
+        assert events[0]["include_high_density"] is False
+        assert events[1]["status"] == "deferred_high_density"
+        assert events[1]["provider_calls"] == 3
+        assert events[1]["high_density_call_threshold"] == 2
+        assert events[2]["processed"] == 0
+        assert events[2]["high_density_deferred_count"] == 1
+        assert result["high_density_deferred_count"] == 1
 
     def test_formula_failure_does_not_block_table_failure_cleanup(self, tmp_path):
         from zotpilot.index_authority import IndexJournal, mark_committed, record_table_failure
@@ -699,6 +2495,7 @@ class TestFormulaBackfill:
             formula_index=0,
             bbox=(0, 0, 10, 10),
             latex=r"E = mc^2",
+            equation_number="(1)",
         )
         journal = IndexJournal(tmp_path / "journal.json")
         mark_committed(journal, item.item_key)
@@ -731,6 +2528,64 @@ class TestFormulaBackfill:
         assert item.item_key not in journal.table_failures
         assert "table_failure" not in journal.committed[item.item_key]
 
+    def test_index_extraction_skips_truncated_pdf_fallback_formula_storage(self, tmp_path):
+        from zotpilot.index_authority import IndexJournal
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import Chunk, ExtractedFormula, PageExtraction, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        extraction = SimpleNamespace(
+            pages=[PageExtraction(page_num=1, markdown="Body text", char_start=0)],
+            full_markdown="Body text",
+            sections=[],
+            tables=[],
+            figures=[],
+            stats={"text_pages": 1, "ocr_pages": 0, "empty_pages": 0},
+            quality_grade="A",
+            formulas=[],
+        )
+        chunk = Chunk(
+            text="Body text",
+            chunk_index=0,
+            page_num=1,
+            char_start=0,
+            char_end=9,
+            section="body",
+        )
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E = mc^2",
+            confidence=0.95,
+            equation_number="(1)",
+            source="pdf_text_equation_number_truncated",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(formula_ocr_enabled=True)
+        indexer.chunker = MagicMock()
+        indexer.chunker.chunk.return_value = [chunk]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer.store = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        n_chunks, n_tables, reason, _stats, quality = indexer._index_extraction(
+            item,
+            extraction,
+            IndexJournal(tmp_path / "journal.json"),
+        )
+
+        assert n_chunks == 1
+        assert n_tables == 0
+        assert reason == ""
+        assert quality == "A"
+        indexer.store.add_chunks.assert_called_once()
+        indexer.store.add_formulas.assert_not_called()
+
     def test_formula_provider_error_is_tool_error_for_index_formulas(self, tmp_path):
         from zotpilot.indexer import FormulaProviderUnavailableError
         from zotpilot.state import ToolError
@@ -754,75 +2609,6 @@ class TestFormulaBackfill:
              patch("zotpilot.indexer.Indexer", FakeIndexer):
             with pytest.raises(ToolError, match="zotpilot\\[formula\\]"):
                 idx_mod.index_formulas()
-
-    def test_index_formulas_tool_forwards_scheduler_options(self, tmp_path):
-        from zotpilot.tools import indexing as idx_mod
-
-        config = MagicMock()
-        config.validate.return_value = []
-        config.formula_ocr_enabled = True
-        config.chroma_db_path = tmp_path / "chroma"
-        captured_kwargs = {}
-
-        class FakeIndexer:
-            def __init__(self, _config):
-                pass
-
-            def index_formulas(self, **kwargs):
-                captured_kwargs.update(kwargs)
-                return {"processed": 0, "formulas_indexed": 0, "results": []}
-
-        status_path = tmp_path / "formula_status.jsonl"
-        with patch.object(idx_mod, "_get_config", return_value=config), \
-             patch.object(idx_mod, "acquire_lease"), \
-             patch.object(idx_mod, "release_lease"), \
-             patch("zotpilot.indexer.Indexer", FakeIndexer):
-            result = idx_mod.index_formulas(
-                daily_call_budget=1800,
-                resume_after="DOC1",
-                stop_on_quota=False,
-                status_jsonl=str(status_path),
-                low_confidence_threshold=0.5,
-                include_high_density=True,
-            )
-
-        assert result["processed"] == 0
-        assert captured_kwargs["daily_call_budget"] == 1800
-        assert captured_kwargs["resume_after"] == "DOC1"
-        assert captured_kwargs["stop_on_quota"] is False
-        assert captured_kwargs["status_jsonl"] == str(status_path)
-        assert captured_kwargs["low_confidence_threshold"] == 0.5
-        assert captured_kwargs["include_high_density"] is True
-
-    def test_estimate_formula_backfill_tool_ignores_simpletex_auth_and_does_not_lease(self, tmp_path):
-        from zotpilot.tools import indexing as idx_mod
-
-        config = MagicMock()
-        config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
-        captured_kwargs = {}
-        indexer = MagicMock()
-        indexer.estimate_formula_backfill.side_effect = lambda **kwargs: captured_kwargs.update(kwargs) or {
-            "processed": 0,
-            "candidate_count": 0,
-            "estimated_provider_calls": 0,
-            "results": [],
-        }
-
-        with patch.object(idx_mod, "_get_config", return_value=config), \
-             patch.object(idx_mod, "acquire_lease") as acquire_lease, \
-             patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer):
-            result = idx_mod.estimate_formula_backfill(
-                daily_call_budget=10,
-                sample_size=2,
-                sample_seed=7,
-            )
-
-        assert result["processed"] == 0
-        assert captured_kwargs["item_key"] is None
-        assert captured_kwargs["daily_call_budget"] == 10
-        assert captured_kwargs["sample_size"] == 2
-        assert captured_kwargs["sample_seed"] == 7
-        acquire_lease.assert_not_called()
 
     def test_formula_provider_error_is_tool_error_for_index_library(self, tmp_path):
         from zotpilot.indexer import FormulaProviderUnavailableError

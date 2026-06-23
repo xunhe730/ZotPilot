@@ -197,6 +197,17 @@ class VectorStore:
             )
         self.collection.add(ids=ids, documents=documents, embeddings=embeddings, metadatas=metadatas)
 
+    def _guarded_upsert(self, ids: list, documents: list, embeddings: list, metadatas: list) -> None:
+        """Upsert to the collection only when vector payloads are aligned."""
+        n = len(ids)
+        if not (len(documents) == n and len(embeddings) == n and len(metadatas) == n):
+            raise ValueError(
+                "Refusing to store misaligned vectors: "
+                f"ids={n}, documents={len(documents)}, embeddings={len(embeddings)}, "
+                f"metadatas={len(metadatas)} (embedding provider returned a wrong count)"
+            )
+        self.collection.upsert(ids=ids, documents=documents, embeddings=embeddings, metadatas=metadatas)
+
     def add_chunks(self, doc_id: str, doc_meta: dict, chunks: list[Chunk]) -> None:
         """
         Add all chunks for a document.
@@ -337,11 +348,68 @@ class VectorStore:
         doc_id: str,
         doc_meta: dict,
         formulas: list[ExtractedFormula],
-    ) -> None:
+    ) -> int:
         """Add formula chunks to the store."""
         if not formulas:
-            return
+            return 0
 
+        ids, documents, metadatas = self._formula_payload(doc_id, doc_meta, formulas)
+        embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
+        self._guarded_add(ids, documents, embeddings, metadatas)
+        return len(ids)
+
+    def add_new_formulas(
+        self,
+        doc_id: str,
+        doc_meta: dict,
+        formulas: list[ExtractedFormula],
+    ) -> int:
+        """Add only formula chunks whose stable IDs do not already exist."""
+        if not formulas:
+            return 0
+
+        existing_ids = self._formula_chunk_ids(doc_id)
+        ids, documents, metadatas = self._formula_payload(doc_id, doc_meta, formulas)
+        new_payload = [
+            (chunk_id, document, metadata)
+            for chunk_id, document, metadata in zip(ids, documents, metadatas)
+            if chunk_id not in existing_ids
+        ]
+        if not new_payload:
+            return 0
+
+        new_ids, new_documents, new_metadatas = (list(values) for values in zip(*new_payload))
+        embeddings = self.embedder.embed(new_documents, task_type="RETRIEVAL_DOCUMENT")
+        self._guarded_add(new_ids, new_documents, embeddings, new_metadatas)
+        return len(new_ids)
+
+    def replace_formulas(
+        self,
+        doc_id: str,
+        doc_meta: dict,
+        formulas: list[ExtractedFormula],
+    ) -> int:
+        """Replace formula chunks without deleting existing formulas before new vectors are ready."""
+        if not formulas:
+            return 0
+
+        existing_ids = self._formula_chunk_ids(doc_id)
+        ids, documents, metadatas = self._formula_payload(doc_id, doc_meta, formulas)
+        embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
+        self._guarded_upsert(ids, documents, embeddings, metadatas)
+
+        stale_ids = sorted(existing_ids - set(ids))
+        if stale_ids:
+            self.collection.delete(ids=stale_ids)
+        return len(ids)
+
+    def _formula_payload(
+        self,
+        doc_id: str,
+        doc_meta: dict,
+        formulas: list[ExtractedFormula],
+    ) -> tuple[list[str], list[str], list[dict]]:
+        """Build Chroma payload lists for formula chunks."""
         ids = []
         documents = []
         metadatas = []
@@ -383,8 +451,20 @@ class VectorStore:
             documents.append(text)
             metadatas.append(metadata)
 
-        embeddings = self.embedder.embed(documents, task_type="RETRIEVAL_DOCUMENT")
-        self._guarded_add(ids, documents, embeddings, metadatas)
+        return ids, documents, metadatas
+
+    def _formula_chunk_ids(self, doc_id: str) -> set[str]:
+        """Return existing formula chunk IDs for one document."""
+        results = self.collection.get(
+            where={
+                "$and": [
+                    {"doc_id": {"$eq": doc_id}},
+                    {"chunk_type": {"$eq": "formula"}},
+                ]
+            },
+            include=[],
+        )
+        return set(results.get("ids") or [])
 
     def _cached_embed_query(self, query: str) -> list[float]:
         """Embed a query, returning cached result if available."""

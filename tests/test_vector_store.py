@@ -1,6 +1,6 @@
 """Tests for ChromaDB vector store."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -119,7 +119,6 @@ class TestVectorStore:
                 confidence=0.91,
                 reference_context="Energy is defined by the following equation.",
                 equation_number="(1)",
-                equation_number_status="provided",
             ),
             ExtractedFormula(
                 page_num=3,
@@ -142,17 +141,91 @@ class TestVectorStore:
             include=["documents", "metadatas"],
         )
         indices = sorted(meta["chunk_index"] for meta in results["metadatas"])
+        metas_by_index = {
+            meta["formula_index"]: meta
+            for meta in results["metadatas"]
+        }
         counts = populated_store.count_chunk_types({"TEST001"})
 
         assert indices == [0, 1]
         assert counts == {"text": 3, "table": 0, "figure": 0, "formula": 2}
         assert all(doc.startswith("Formula on page") for doc in results["documents"])
-        meta_by_index = {meta["formula_index"]: meta for meta in results["metadatas"]}
-        assert meta_by_index[0]["formula_equation_number_status"] == "provided"
-        assert meta_by_index[0]["formula_locator"] == "page 2, index #1, equation (1)"
-        assert meta_by_index[1]["formula_equation_number_status"] == "missing"
-        assert meta_by_index[1]["formula_locator"] == "page 3, index #2"
+        assert metas_by_index[0]["page_num"] == 2
+        assert metas_by_index[0]["formula_equation_number"] == "(1)"
+        assert metas_by_index[0]["formula_equation_number_status"] == "provided"
+        assert metas_by_index[0]["formula_locator"] == "page 2, index #1, equation (1)"
+        assert metas_by_index[1]["page_num"] == 3
+        assert metas_by_index[1]["formula_equation_number"] == ""
+        assert metas_by_index[1]["formula_equation_number_status"] == "missing"
+        assert metas_by_index[1]["formula_locator"] == "page 3, index #2"
         assert populated_store._doc_id_from_chunk_id("TEST001_formula_0001") == "TEST001"
+
+    def test_replace_formulas_upserts_before_deleting_stale_formula_ids(self):
+        from zotpilot.models import ExtractedFormula
+
+        store = VectorStore.__new__(VectorStore)
+        store.collection = MagicMock()
+        store.collection.get.return_value = {
+            "ids": ["DOC_formula_0000", "DOC_formula_0001"],
+        }
+        store.embedder = MagicMock()
+        store.embedder.embed.return_value = [[0.1] * 3]
+        calls = []
+        store.collection.upsert.side_effect = lambda **_kwargs: calls.append("upsert")
+        store.collection.delete.side_effect = lambda **_kwargs: calls.append("delete")
+
+        store.replace_formulas(
+            "DOC",
+            {"title": "Paper"},
+            [ExtractedFormula(page_num=1, formula_index=0, bbox=(0, 0, 1, 1), latex=r"a=b")],
+        )
+
+        assert calls == ["upsert", "delete"]
+        store.collection.upsert.assert_called_once()
+        store.collection.delete.assert_called_once_with(ids=["DOC_formula_0001"])
+
+    def test_replace_formulas_does_not_delete_existing_on_embedding_count_mismatch(self):
+        from zotpilot.models import ExtractedFormula
+
+        store = VectorStore.__new__(VectorStore)
+        store.collection = MagicMock()
+        store.collection.get.return_value = {
+            "ids": ["DOC_formula_0000", "DOC_formula_0001"],
+        }
+        store.embedder = MagicMock()
+        store.embedder.embed.return_value = []
+
+        with pytest.raises(ValueError, match="misaligned"):
+            store.replace_formulas(
+                "DOC",
+                {"title": "Paper"},
+                [ExtractedFormula(page_num=1, formula_index=0, bbox=(0, 0, 1, 1), latex=r"a=b")],
+            )
+
+        store.collection.upsert.assert_not_called()
+        store.collection.delete.assert_not_called()
+
+    def test_add_new_formulas_skips_existing_stable_formula_ids(self):
+        from zotpilot.models import ExtractedFormula
+
+        store = VectorStore.__new__(VectorStore)
+        store.collection = MagicMock()
+        store.collection.get.return_value = {"ids": ["DOC_formula_0000"]}
+        store.embedder = MagicMock()
+        store.embedder.embed.return_value = [[0.1] * 3]
+
+        added = store.add_new_formulas(
+            "DOC",
+            {"title": "Paper"},
+            [
+                ExtractedFormula(page_num=1, formula_index=0, bbox=(0, 0, 1, 1), latex=r"a=b"),
+                ExtractedFormula(page_num=1, formula_index=1, bbox=(0, 0, 1, 1), latex=r"c=d"),
+            ],
+        )
+
+        assert added == 1
+        store.collection.add.assert_called_once()
+        assert store.collection.add.call_args.kwargs["ids"] == ["DOC_formula_0001"]
 
     def test_delete_chunks_by_type_removes_only_formulas(self, populated_store):
         from zotpilot.models import ExtractedFormula
