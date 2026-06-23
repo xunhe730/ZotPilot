@@ -317,9 +317,12 @@ class TestIndexCli:
                 "daily_call_budget": 1800,
                 "resume_after": "DOC1",
                 "stop_on_quota": False,
+                "no_stop_on_quota": True,
                 "status_jsonl": str(tmp_path / "formula_status.jsonl"),
                 "low_confidence_threshold": 0.5,
                 "include_high_density": True,
+                "allow_candidate_quality_warnings": True,
+                "json": False,
             },
         )()
 
@@ -341,6 +344,10 @@ class TestIndexCli:
             "status_jsonl": str(tmp_path / "formula_status.jsonl"),
             "low_confidence_threshold": 0.5,
             "include_high_density": True,
+            "allow_candidate_quality_warnings": True,
+            "pdf_fallback_max_pages": None,
+            "page_min": None,
+            "page_max": None,
         }
 
     def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_estimate(
@@ -400,6 +407,9 @@ class TestIndexCli:
             daily_call_budget=10,
             candidate_preview_limit=1,
             candidate_preview_chars=160,
+            pdf_fallback_max_pages=None,
+            page_min=None,
+            page_max=None,
             sample_size=2,
             sample_seed=7,
         )

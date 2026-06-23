@@ -785,6 +785,27 @@ _STRUCTURAL_FORMULA_REVIEW_REASONS = frozenset({
 })
 
 
+_BLOCKING_CANDIDATE_REVIEW_WARNINGS = frozenset({
+    "cached_latex_missing_equation_numbers",
+    "duplicate_equation_numbers",
+    "equation_number_regression",
+    "large_equation_number_gap",
+    "missing_equation_number_gap",
+})
+
+
+def _formula_candidate_blocking_review_reasons(candidate_audit: dict[str, object]) -> list[str]:
+    """Return candidate-stage warnings that should block OCR/index writes by default."""
+    warnings = candidate_audit.get("equation_number_warnings", [])
+    reasons = {
+        warning for warning in warnings
+        if isinstance(warning, str) and warning in _BLOCKING_CANDIDATE_REVIEW_WARNINGS
+    }
+    if candidate_audit.get("has_truncated_source"):
+        reasons.add("fallback_truncated")
+    return sorted(reasons)
+
+
 def _structural_formula_review_reasons(review_rows: list[dict[str, object]]) -> list[str]:
     """Return structural review reasons that should block formula index writes."""
     reasons: set[str] = set()
@@ -1117,6 +1138,7 @@ class Indexer:
         status_jsonl: Path | str | None = None,
         low_confidence_threshold: float | None = None,
         include_high_density: bool = False,
+        allow_candidate_quality_warnings: bool = False,
         pdf_fallback_max_pages: int | None = None,
         page_min: int | None = None,
         page_max: int | None = None,
@@ -1200,6 +1222,7 @@ class Indexer:
             for item, reason in skipped_items
         ]
         low_confidence_review_queue: list[dict[str, object]] = []
+        candidate_quality_review_queue: list[dict[str, object]] = []
         provider_calls_used = 0
         external_calls_used = 0
         stopped_reason = ""
@@ -1236,6 +1259,7 @@ class Indexer:
                 "high_density_call_threshold": high_density_threshold,
                 "high_density_candidate_threshold": high_density_candidate_threshold,
                 "include_high_density": include_high_density,
+                "allow_candidate_quality_warnings": allow_candidate_quality_warnings,
                 "pdf_fallback_max_pages": effective_pdf_fallback_max_pages,
                 "page_min": page_min or 0,
                 "page_max": page_max or 0,
@@ -1318,6 +1342,40 @@ class Indexer:
                     f"{item.item_key} is a high-density formula document "
                     f"({trigger_text}); "
                     "backfill it separately after reviewing the estimate."
+                )
+                _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
+                continue
+            candidate_audit = _formula_candidate_audit(candidates) if candidates else {}
+            candidate_review_reasons = (
+                []
+                if allow_candidate_quality_warnings
+                else _formula_candidate_blocking_review_reasons(candidate_audit)
+            )
+            if candidate_review_reasons:
+                existing_formula_count = (
+                    self._count_existing_formulas(item.item_key)
+                    if refresh_existing and not partial_page_backfill
+                    else 0
+                )
+                row = _formula_backfill_row(
+                    item_key=item.item_key,
+                    title=item.title,
+                    status="needs_review",
+                    reason="formula_candidate_review_required",
+                    candidate_count=candidate_count,
+                    provider_calls=provider_call_count,
+                    external_calls=provider_call_count if has_external_egress else 0,
+                    n_formulas=0,
+                    existing_formulas_kept=existing_formula_count,
+                    review_reasons=candidate_review_reasons,
+                )
+                row["candidate_audit"] = candidate_audit
+                candidate_quality_review_queue.append(row)
+                results.append(row)
+                resume_cursor = item.item_key
+                run_warnings.append(
+                    f"{item.item_key} candidate quality warning(s) require review before formula backfill: "
+                    f"{', '.join(candidate_review_reasons)}."
                 )
                 _append_formula_backfill_state(state_path, {**row, "run_id": run_id})
                 continue
@@ -1562,6 +1620,7 @@ class Indexer:
             "high_density_candidate_threshold": high_density_candidate_threshold,
             "high_density_deferred_count": high_density_deferred_count,
             "include_high_density": include_high_density,
+            "allow_candidate_quality_warnings": allow_candidate_quality_warnings,
             "pdf_fallback_max_pages": effective_pdf_fallback_max_pages,
             "page_min": page_min or 0,
             "page_max": page_max or 0,
@@ -1574,6 +1633,8 @@ class Indexer:
             "next_item_candidate_count": next_item_candidate_count,
             "resume_after_found": resume_after_found,
             "state_path": str(state_path) if state_path is not None else "",
+            "candidate_quality_review_count": len(candidate_quality_review_queue),
+            "candidate_quality_review_queue": candidate_quality_review_queue,
             "low_confidence_review_count": len(low_confidence_review_queue),
             "low_confidence_review_queue": low_confidence_review_queue,
             "warnings": run_warnings,
@@ -1590,6 +1651,7 @@ class Indexer:
                 "formulas_indexed": result["formulas_indexed"],
                 "provider_calls_used": result["provider_calls_used"],
                 "external_calls_used": result["external_calls_used"],
+                "candidate_quality_review_count": result["candidate_quality_review_count"],
                 "high_density_deferred_count": high_density_deferred_count,
                 "high_density_call_threshold": high_density_threshold,
                 "high_density_candidate_threshold": high_density_candidate_threshold,

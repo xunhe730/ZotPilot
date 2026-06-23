@@ -1017,6 +1017,7 @@ def cmd_index_formulas(args):
             status_jsonl=("" if status_jsonl == "" else status_jsonl),
             low_confidence_threshold=getattr(args, "low_confidence_threshold", None),
             include_high_density=getattr(args, "include_high_density", False),
+            allow_candidate_quality_warnings=getattr(args, "allow_candidate_quality_warnings", False),
             pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
             page_min=getattr(args, "page_min", None),
             page_max=getattr(args, "page_max", None),
@@ -2189,6 +2190,11 @@ def main(argv: list[str] | None = None) -> int:
         "--include-high-density",
         action="store_true",
         help="Allow high-density formula documents in this run after reviewing the estimate",
+    )
+    sub_index_formulas.add_argument(
+        "--allow-candidate-quality-warnings",
+        action="store_true",
+        help="Allow formula writes despite candidate-stage numbering/truncation warnings after manual review",
     )
     sub_index_formulas.add_argument(
         "--pdf-fallback-max-pages",

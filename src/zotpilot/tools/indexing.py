@@ -418,6 +418,10 @@ def index_formulas(
         bool,
         Field(description="Allow high-density formula documents in this run after reviewing the estimate"),
     ] = False,
+    allow_candidate_quality_warnings: Annotated[
+        bool,
+        Field(description="Allow formula writes despite candidate-stage numbering/truncation warnings after review"),
+    ] = False,
     cache_pdf_number_enrichment: Annotated[
         bool,
         Field(
@@ -480,6 +484,7 @@ def index_formulas(
                 status_jsonl="",
                 low_confidence_threshold=low_confidence_threshold,
                 include_high_density=include_high_density,
+                allow_candidate_quality_warnings=allow_candidate_quality_warnings,
                 page_min=page_min,
                 page_max=page_max,
             )

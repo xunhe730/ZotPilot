@@ -220,6 +220,117 @@ class TestFormulaBackfill:
         indexer.store.replace_formulas.assert_called_once()
         indexer.store.add_formulas.assert_not_called()
 
+    def test_index_formulas_blocks_candidate_numbering_warnings_by_default(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text=r"E=mc^2",
+                confidence=0.95,
+                equation_number="(1)",
+                latex=r"E=mc^2",
+                source="mineru_content_list",
+            ),
+            FormulaCandidate(
+                page_num=2,
+                bbox=(0, 20, 10, 30),
+                raw_text=r"\sigma=E\epsilon",
+                confidence=0.95,
+                equation_number="(3)",
+                latex=r"\sigma=E\epsilon",
+                source="mineru_content_list",
+            ),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E=mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.index_formulas()
+
+        assert result["processed"] == 1
+        assert result["formulas_indexed"] == 0
+        assert result["candidate_quality_review_count"] == 1
+        assert result["results"][0]["status"] == "needs_review"
+        assert result["results"][0]["reason"] == "formula_candidate_review_required"
+        assert result["results"][0]["review_reasons"] == ["missing_equation_number_gap"]
+        assert result["results"][0]["candidate_audit"]["equation_number_warnings"] == [
+            "missing_equation_number_gap"
+        ]
+        indexer._recognize_formulas_for_item.assert_not_called()
+        indexer.store.replace_formulas.assert_not_called()
+        indexer.store.add_new_formulas.assert_not_called()
+
+    def test_index_formulas_can_override_candidate_quality_warnings(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ExtractedFormula, ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Paper", "Auth", 2024, pdf_path, publication="Nature")
+        candidates = [
+            FormulaCandidate(
+                page_num=1,
+                bbox=(0, 0, 10, 10),
+                raw_text=r"E=mc^2",
+                confidence=0.95,
+                equation_number="",
+                latex=r"E=mc^2",
+                source="mineru_content_list",
+            ),
+        ]
+        formula = ExtractedFormula(
+            page_num=1,
+            formula_index=0,
+            bbox=(0, 0, 10, 10),
+            latex=r"E=mc^2",
+            equation_number="(1)",
+        )
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = self._hash_config()
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.store.replace_formulas.return_value = 1
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer.journal_ranker = MagicMock()
+        indexer.journal_ranker.lookup.return_value = "Q1"
+        indexer._ensure_formula_provider_available = MagicMock()
+        indexer._assert_config_hash_current = MagicMock()
+        indexer._pdf_hash = MagicMock(return_value="hash")
+        indexer._recognize_formulas_for_item = MagicMock(return_value=[formula])
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.index_formulas(allow_candidate_quality_warnings=True)
+
+        assert result["formulas_indexed"] == 1
+        assert result["candidate_quality_review_count"] == 0
+        assert result["results"][0]["status"] == "indexed"
+        indexer._recognize_formulas_for_item.assert_called_once()
+        indexer.store.replace_formulas.assert_called_once()
+
     def test_index_formulas_no_refresh_adds_only_new_formula_chunks(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ExtractedFormula, ZoteroItem
@@ -737,9 +848,10 @@ class TestFormulaBackfill:
         assert row["review_reasons"] == ["fallback_truncated"]
         assert row["existing_formulas_kept"] == 1
         assert result["formulas_indexed"] == 0
-        review = result["low_confidence_review_queue"][0]
+        review = result["candidate_quality_review_queue"][0]
         assert review["review_reasons"] == ["fallback_truncated"]
-        assert review["source"] == "pdf_text_equation_number_truncated"
+        assert review["candidate_audit"]["has_truncated_source"] is True
+        indexer._recognize_formulas_for_item.assert_not_called()
         indexer.store.delete_chunks_by_type.assert_not_called()
         indexer.store.add_formulas.assert_not_called()
 
@@ -813,6 +925,7 @@ class TestFormulaBackfill:
             raw_text=r"E = mc^2",
             confidence=0.95,
             source="mineru_content_list",
+            equation_number="(1)",
             latex=r"E = mc^2",
         )
         indexer = Indexer.__new__(Indexer)
