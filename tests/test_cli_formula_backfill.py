@@ -944,6 +944,57 @@ def test_index_formulas_cli_dry_run_uses_estimate_without_lease(tmp_path, capsys
     )
 
 
+def test_index_formulas_dry_run_cli_can_fail_on_candidate_quality_blocked(tmp_path, capsys):
+    from zotpilot.cli import main
+
+    config = MagicMock()
+    config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
+    config.formula_ocr_enabled = True
+    config.chroma_db_path = tmp_path / "chroma"
+    indexer = MagicMock()
+    indexer.estimate_formula_backfill.return_value = {
+        "provider": "simpletex",
+        "candidate_provider": "mineru_cache",
+        "processed": 1,
+        "candidate_count": 12,
+        "candidate_quality_blocking_paper_count": 1,
+        "average_candidates_per_paper": 12.0,
+        "estimated_provider_calls": 0,
+        "estimated_external_calls": 0,
+        "estimated_min_duration": "0s",
+        "daily_call_budget": 1800,
+        "estimated_runs": 1,
+        "data_egress": False,
+        "summary": {
+            "next_action": "Review candidate-stage formula quality warnings before writing formulas.",
+            "warnings": [],
+        },
+        "results": [],
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.index_authority.acquire_lease") as acquire_lease,
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = main(
+            [
+                "index-formulas",
+                "--dry-run",
+                "--item-key",
+                "DOC1",
+                "--fail-on-candidate-quality-blocked",
+            ]
+        )
+
+    out = capsys.readouterr().out
+    assert rc == 4
+    assert "[dry-run] No formula chunks were written." in out
+    assert "Candidate quality blocked: 1" in out
+    assert "Next: Review candidate-stage formula quality warnings before writing formulas." in out
+    acquire_lease.assert_not_called()
+
+
 def test_estimate_formula_backfill_cli_can_export_all_candidate_preview(capsys):
     from zotpilot.cli import cmd_estimate_formula_backfill
 

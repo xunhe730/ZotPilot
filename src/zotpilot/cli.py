@@ -2377,6 +2377,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Return exit code 3 when formula writes succeed but still require review",
     )
     sub_index_formulas.add_argument(
+        "--fail-on-candidate-quality-blocked",
+        action="store_true",
+        help="With --dry-run, return exit code 4 when candidate quality blockers are found",
+    )
+    sub_index_formulas.add_argument(
         "--fail-on-unmatched",
         action="store_true",
         help="Return exit code 5 when requested item keys are not matched",
