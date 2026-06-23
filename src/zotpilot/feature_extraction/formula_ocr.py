@@ -2344,7 +2344,7 @@ def _enrich_candidate_equation_numbers_from_pdf(
     if not records_by_page:
         return candidates
 
-    enriched = list(candidates)
+    enriched = _enrich_candidate_equation_numbers_from_pdf_page_order(candidates, records_by_page)
     enriched = _enrich_candidate_equation_numbers_from_pdf_text(enriched, records_by_page)
     candidates_by_page: dict[int, list[tuple[int, FormulaCandidate]]] = {}
     for index, candidate in enumerate(enriched):
@@ -2412,6 +2412,53 @@ def _enrich_candidate_equation_numbers_from_pdf(
                 continue
             used_numbers.add(match_index)
             enriched[candidate_index] = replace(candidate, equation_number=ordered_numbers[match_index][0])
+    return enriched
+
+
+def _enrich_candidate_equation_numbers_from_pdf_page_order(
+    candidates: list[FormulaCandidate],
+    records_by_page: dict[int, list[_PdfEquationNumberRecord]],
+) -> list[FormulaCandidate]:
+    """Assign equation numbers by page reading order when cache and PDF counts align."""
+    enriched = list(candidates)
+    existing_numbers = {
+        candidate.equation_number
+        for candidate in candidates
+        if candidate.equation_number
+    }
+    candidates_by_page: dict[int, list[tuple[int, FormulaCandidate]]] = {}
+    for index, candidate in enumerate(candidates):
+        if (
+            candidate.equation_number
+            or not candidate.latex.strip()
+            or not _is_structured_cache_candidate(candidate)
+        ):
+            continue
+        candidates_by_page.setdefault(candidate.page_num, []).append((index, candidate))
+
+    for page_num, page_candidates in candidates_by_page.items():
+        if len(page_candidates) < 2:
+            continue
+        records = records_by_page.get(page_num, [])
+        if not records:
+            continue
+        ordered_records = _pdf_equation_records_in_reading_order(records)
+        ordered_primary_records = [
+            record for record in ordered_records
+            if not record.standalone and record.number not in existing_numbers
+        ]
+        if len(page_candidates) != len(ordered_primary_records):
+            continue
+        ordered_candidates = [
+            (page_candidates[local_index][0], candidate)
+            for local_index, candidate in _candidate_items_in_reading_order(
+                [candidate for _index, candidate in page_candidates]
+            )
+        ]
+        for (candidate_index, candidate), record in zip(ordered_candidates, ordered_primary_records):
+            enriched[candidate_index] = replace(candidate, equation_number=record.number)
+            existing_numbers.add(record.number)
+
     return enriched
 
 
@@ -4854,7 +4901,10 @@ def _independent_formula_rows_from_latex(latex: str) -> list[str]:
     for row in raw_rows:
         if not row:
             continue
-        if rows and _formula_row_likely_continuation(row):
+        if rows and (
+            _formula_row_likely_continuation(row)
+            or not _formula_row_has_relation(row)
+        ):
             rows[-1] = _normalize_space(f"{rows[-1]} {row}")
             continue
         rows.append(row)
@@ -4955,6 +5005,8 @@ def _formula_alignment_cell_likely_label(cell: str) -> bool:
         return False
     visible_text = _normalize_space(_latex_visible_text(cell))
     if re.match(r"^(?:\+|-|−|=)", visible_text):
+        return False
+    if re.search(r"(?:\+|-|−|/|\^|\*|\\frac|\\sqrt|\\left|\\right)", visible_text):
         return False
     compact = re.sub(r"[^0-9A-Za-zΑ-Ωα-ω]", "", visible_text)
     return 0 < len(compact) <= 8

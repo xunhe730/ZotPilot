@@ -18,6 +18,7 @@ from zotpilot.feature_extraction.formula_ocr import (
     _coerce_provider_result,
     _coerce_simpletex_response,
     _dedupe_candidates,
+    _enrich_candidate_equation_numbers_from_pdf,
     _enrich_candidate_equation_numbers_from_pdf_text,
     _extract_block_signals,
     _extract_embedded_pdf_equation_number,
@@ -1707,6 +1708,115 @@ def test_unknown_cache_bbox_uses_clear_low_score_text_match_for_numbering():
     enriched = _enrich_candidate_equation_numbers_from_pdf_text([candidate], {1: records})
 
     assert enriched[0].equation_number == "(5)"
+
+
+def test_unknown_cache_page_order_matches_numbered_records_when_counts_align():
+    candidates = [
+        FormulaCandidate(
+            page_num=31,
+            bbox=(376.0, 367.0, 591.0, 388.0),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\sigma _ { \mathrm { e q } } = f \big ( \varepsilon _ { \mathrm { e q } } \big ) "
+                r"g \big ( \varepsilon _ { \mathrm { e q } } \big ) h ( T )"
+            ),
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=31,
+            bbox=(218.0, 453.0, 747.0, 475.0),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\sigma _ { \mathrm { e q } } = \big ( A + B \varepsilon _ { \mathrm { e q } } "
+                r"{ } ^ { n } \big ) \big ( 1 + C l n \varepsilon _ { \mathrm { ~ e q } } "
+                r"^ { \ast } \big )"
+            ),
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=31,
+            bbox=(275.0, 604.0, 692.0, 642.0),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\sigma _ { \mathrm { e q } } = \sqrt { \frac { 1 } { 2 } "
+                r"[ ( \sigma _ { 1 } - \sigma _ { 2 } ) ^ { 2 } + "
+                r"( \sigma _ { 2 } - \sigma _ { 3 } ) ^ { 2 } ] }"
+            ),
+            source="mineru_content_list_row",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=31,
+            bbox=(275.0, 642.0, 692.0, 680.0),
+            raw_text="",
+            confidence=0.95,
+            latex=(
+                r"\varepsilon _ { \mathrm { e q } } = \sqrt { \frac { 2 } { 9 } "
+                r"[ ( \varepsilon _ { 1 } - \varepsilon _ { 2 } ) ^ { 2 } + "
+                r"( \varepsilon _ { 2 } - \varepsilon _ { 3 } ) ^ { 2 } ] }"
+            ),
+            source="mineru_content_list_row",
+            bbox_coordinate_space="unknown",
+        ),
+        FormulaCandidate(
+            page_num=31,
+            bbox=(398.0, 808.0, 571.0, 829.0),
+            raw_text="",
+            confidence=0.95,
+            latex=r"\xi _ { \mathrm { e q } } = f ( \eta , L , \xi _ { \mathrm { e q } } , T )",
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+        ),
+    ]
+    records_by_page = {
+        31: [
+            _PdfEquationNumberRecord(
+                "(4.1)", 319.0, 507.7, False, (453.0, 312.0, 507.7, 326.0), "fg h (4.1)", 595.0, 842.0,
+            ),
+            _PdfEquationNumberRecord(
+                "(4.2)", 404.5, 507.7, False, (218.0, 397.0, 507.7, 412.0), "long jc (4.2)", 595.0, 842.0,
+            ),
+            _PdfEquationNumberRecord(
+                "(4.3)",
+                541.7,
+                507.7,
+                False,
+                (333.0, 530.0, 507.7, 550.0),
+                "sigma sqrt eps sqrt (4.3)",
+                595.0,
+                842.0,
+            ),
+            _PdfEquationNumberRecord(
+                "(4.4)",
+                541.7,
+                507.7,
+                False,
+                (333.0, 555.0, 507.7, 575.0),
+                "sigma sqrt eps sqrt (4.4)",
+                595.0,
+                842.0,
+            ),
+            _PdfEquationNumberRecord(
+                "(4.5)",
+                689.6,
+                507.7,
+                False,
+                (398.0, 682.0, 507.7, 697.0),
+                "xi eq f eta L T (4.5)",
+                595.0,
+                842.0,
+            ),
+        ]
+    }
+
+    enriched = _enrich_candidate_equation_numbers_from_pdf("ignored.pdf", candidates, records_by_page=records_by_page)
+
+    assert [candidate.equation_number for candidate in enriched] == ["(4.1)", "(4.2)", "(4.3)", "(4.4)", "(4.5)"]
 
 
 def test_standalone_number_merges_same_line_fragmented_spans_before_nearby_formula():
@@ -4642,6 +4752,48 @@ def test_split_multirow_independent_formula_candidates_splits_aligned_top_level_
     assert r"\begin{array}" in split[1].latex
     assert inferred[1].equation_number == "(8)"
     assert inferred[1].equation_number_status == "inferred"
+
+
+def test_split_multirow_independent_formula_candidates_merges_non_relation_middle_rows():
+    candidates = [
+        FormulaCandidate(
+            page_num=5,
+            bbox=(552.0, 72.0, 865.0, 226.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(2)",
+            latex=(
+                r"\begin{array} { c } "
+                r"{ \varepsilon_f = \left\{ A + B \right. } \\ "
+                r"{ \left[ C + D \right] \times } \\ "
+                r"{ (1 + E)(1 + F) } \\ "
+                r"{ c_\theta^{\alpha\alpha} = \left\{ \frac{1}{c_\theta^\alpha} \right. } "
+                r"\end{array}"
+            ),
+        ),
+        FormulaCandidate(
+            page_num=5,
+            bbox=(526.0, 271.0, 877.0, 308.0),
+            raw_text="",
+            confidence=0.95,
+            source="mineru_content_list",
+            bbox_coordinate_space="unknown",
+            equation_number="(4)",
+            latex=r"\bar{\theta}=1-\frac{2}{\pi}\cos^{-1}(x)",
+        ),
+    ]
+
+    split = _split_multirow_independent_formula_candidates(candidates)
+    inferred = _infer_missing_equation_numbers_between_numbered(split)
+
+    assert len(split) == 3
+    assert split[0].equation_number == "(2)"
+    assert "(1 + E)(1 + F)" in split[0].latex
+    assert split[1].equation_number == ""
+    assert r"c_\theta" in split[1].latex
+    assert inferred[1].equation_number == "(3)"
 
 
 def test_extract_block_signals_collects_text_fonts_and_flags():
