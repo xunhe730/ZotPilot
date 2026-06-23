@@ -321,6 +321,13 @@ class _PdfEquationNumberScanResult:
 
 
 @dataclass(frozen=True)
+class _FormulaNumberCue:
+    number: str
+    page_num: int
+    bbox: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
 class FormulaOCRResult:
     """Provider-normalized OCR output."""
     latex: str
@@ -1724,7 +1731,112 @@ def _parse_mineru_json_payload(payload: Any, *, source: str) -> list[FormulaCand
         candidate = _candidate_from_formula_record(record, source=source)
         if candidate is not None:
             candidates.append(candidate)
-    return candidates
+    return _assign_adjacent_text_equation_number_cues(
+        candidates,
+        _iter_formula_number_cues(payload),
+    )
+
+
+def _iter_formula_number_cues(payload: Any, *, inherited_page_num: int | None = None) -> list[_FormulaNumberCue]:
+    cues: list[_FormulaNumberCue] = []
+    if isinstance(payload, list):
+        for item in payload:
+            cues.extend(_iter_formula_number_cues(item, inherited_page_num=inherited_page_num))
+    elif isinstance(payload, dict):
+        page_num = _record_page_num_or_none(payload) or inherited_page_num
+        number = _record_formula_number_cue(payload)
+        bbox = _record_bbox(payload)
+        if number and page_num is not None and _is_valid_bbox(bbox):
+            cues.append(_FormulaNumberCue(number=number, page_num=page_num, bbox=bbox))
+        for value in payload.values():
+            if isinstance(value, (dict, list)):
+                cues.extend(_iter_formula_number_cues(value, inherited_page_num=page_num))
+    return cues
+
+
+def _record_formula_number_cue(record: dict[str, Any]) -> str:
+    type_text = str(record.get("type") or record.get("block_type") or "").lower()
+    if type_text and "text" not in type_text and "paragraph" not in type_text:
+        return ""
+    text = str(record.get("text") or record.get("content") or "")
+    normalized = _normalize_space(text)
+    if not normalized or "$" in normalized or len(normalized) > 120:
+        return ""
+    matches = re.findall(r"[（(]\s*\d+(?:\.\d+)?\s*[)）]", normalized)
+    numbers = {_format_equation_number_token(match[1:-1].strip()) for match in matches}
+    numbers.discard("")
+    if len(numbers) != 1:
+        return ""
+    number = next(iter(numbers))
+    integer_match = re.fullmatch(r"\((\d+)\)", number)
+    if integer_match is not None and int(integer_match.group(1)) >= 100:
+        return ""
+    cue_context = re.search(
+        r"(?:式|ʽ|formula|equation|eq\.?)",
+        normalized,
+        re.IGNORECASE,
+    )
+    return number if cue_context else ""
+
+
+def _assign_adjacent_text_equation_number_cues(
+    candidates: list[FormulaCandidate],
+    cues: list[_FormulaNumberCue],
+) -> list[FormulaCandidate]:
+    if not candidates or not cues:
+        return candidates
+    assigned = list(candidates)
+    used_candidate_indices: set[int] = set()
+    for cue in cues:
+        match_index = _nearest_same_column_formula_candidate_index(cue, assigned, used_candidate_indices)
+        if match_index is None:
+            continue
+        candidate = assigned[match_index]
+        source = candidate.source
+        if candidate.latex.strip() and not _is_usable_structured_formula_latex(candidate.latex):
+            source = source if source.endswith("_low_quality") else f"{source}_low_quality"
+        assigned[match_index] = replace(
+            candidate,
+            equation_number=cue.number,
+            source=source,
+        )
+        used_candidate_indices.add(match_index)
+    return assigned
+
+
+def _nearest_same_column_formula_candidate_index(
+    cue: _FormulaNumberCue,
+    candidates: list[FormulaCandidate],
+    used_candidate_indices: set[int],
+) -> int | None:
+    best_index: int | None = None
+    best_score = float("inf")
+    cue_x0, _cue_y0, cue_x1, cue_y1 = cue.bbox
+    for index, candidate in enumerate(candidates):
+        if index in used_candidate_indices or candidate.equation_number:
+            continue
+        if candidate.page_num != cue.page_num or not _is_valid_bbox(candidate.bbox):
+            continue
+        x0, y0, x1, _y1 = candidate.bbox
+        vertical_gap = y0 - cue_y1
+        if vertical_gap < -8.0 or vertical_gap > 120.0:
+            continue
+        overlap_ratio = _horizontal_overlap_ratio((cue_x0, cue_x1), (x0, x1))
+        if overlap_ratio < 0.25:
+            continue
+        center_distance = abs(((cue_x0 + cue_x1) / 2.0) - ((x0 + x1) / 2.0))
+        score = max(vertical_gap, 0.0) + center_distance * 0.03
+        if score < best_score:
+            best_score = score
+            best_index = index
+    return best_index
+
+
+def _horizontal_overlap_ratio(left: tuple[float, float], right: tuple[float, float]) -> float:
+    left_width = max(left[1] - left[0], 1.0)
+    right_width = max(right[1] - right[0], 1.0)
+    overlap = max(0.0, min(left[1], right[1]) - max(left[0], right[0]))
+    return overlap / min(left_width, right_width)
 
 
 def _manifest_referenced_cache_paths(
@@ -2242,6 +2354,8 @@ def _source_from_cache_path(path: Path) -> str:
 def _candidate_has_usable_payload(candidate: FormulaCandidate) -> bool:
     latex = candidate.latex.strip()
     if latex:
+        if candidate.source.endswith("_low_quality") and candidate.equation_number and _is_valid_bbox(candidate.bbox):
+            return True
         if _is_structured_cache_candidate(candidate):
             return _is_usable_structured_formula_latex(latex)
         return is_high_quality_formula_latex(latex)

@@ -2243,6 +2243,83 @@ def test_mineru_cache_provider_reads_leading_numbered_formula_from_text_record(t
     assert "式中" not in candidates[0].latex
 
 
+def test_mineru_cache_provider_pairs_text_number_cue_with_same_column_formula(tmp_path):
+    cache_dir = tmp_path / "mineru-cache" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    bad_latex = (
+        r"\varepsilon _ { \mathrm { f } } = [ D _ { 1 } + D _ { 2 } "
+        r"\tt e x p { D } \eta _ { \gamma } \rvert ) \# ( D _ { 4 } "
+        r"\amalg _ { \varepsilon } ^ { * }"
+    )
+    (cache_dir / "content_list.json").write_text(
+        json.dumps([
+            {
+                "type": "text",
+                "page_idx": 8,
+                "bbox": [124, 74, 341, 90],
+                "text": "MJC 断裂准则如式(13)所示",
+            },
+            {
+                "type": "equation",
+                "page_idx": 8,
+                "bbox": [650, 72, 769, 90],
+                "text": r"$$\nu _ { \mathrm { r } } = a ( \nu_i ^ p - \nu_{bl} ^ p ) ^ { 1 / p }$$",
+            },
+            {
+                "type": "equation",
+                "page_idx": 8,
+                "bbox": [109, 95, 442, 115],
+                "text": f"$$\n{bad_latex}\n$$",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(tmp_path / "mineru-cache")),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 2
+    assert candidates[0].equation_number == "(13)"
+    assert candidates[0].source == "mineru_content_list_low_quality"
+    assert candidates[0].latex == bad_latex
+    assert candidates[1].equation_number == ""
+    assert candidates[1].latex.startswith(r"\nu")
+
+
+def test_mineru_cache_provider_does_not_treat_citation_year_as_text_number_cue(tmp_path):
+    cache_dir = tmp_path / "mineru-cache" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "content_list.json").write_text(
+        json.dumps([
+            {
+                "type": "text",
+                "page_idx": 4,
+                "bbox": [35, 558, 444, 576],
+                "text": "The model proposed by Johnson and Cook (1983) is used here.",
+            },
+            {
+                "type": "equation",
+                "page_idx": 4,
+                "bbox": [162, 590, 318, 612],
+                "text": r"$$\sigma _ { \mathrm { e q } } = [ A + B p ^ n ] [ 1 - T ^ { * m } ]$$",
+            },
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(tmp_path / "mineru-cache")),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].equation_number == ""
+
+
 def test_mineru_cache_provider_follows_manifest_references(tmp_path):
     cache_dir = tmp_path / "mineru-cache" / "ITEM123"
     cache_dir.mkdir(parents=True)

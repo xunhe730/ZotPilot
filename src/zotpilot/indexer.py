@@ -410,6 +410,13 @@ def _formula_candidate_is_structured_cache(candidate: object) -> bool:
     return _formula_candidate_source(candidate).startswith(("mineru_", "pdf_extract_kit_"))
 
 
+def _formula_candidate_has_low_quality_cached_latex(candidate: object) -> bool:
+    return (
+        _formula_candidate_has_cached_latex(candidate)
+        and _formula_candidate_source(candidate).endswith("_low_quality")
+    )
+
+
 def _format_index_ranges(indices: list[int]) -> str:
     """Compress stable formula indices for human review output."""
     unique = sorted({int(index) for index in indices if int(index) >= 0})
@@ -599,6 +606,10 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
         if count > 1
     ]
     cached_latex_count = sum(1 for candidate in candidates if _formula_candidate_has_cached_latex(candidate))
+    cached_latex_low_quality_count = sum(
+        1 for candidate in candidates
+        if _formula_candidate_has_low_quality_cached_latex(candidate)
+    )
     cached_latex_missing_number_count = sum(
         1 for candidate in candidates
         if _formula_candidate_has_cached_latex(candidate)
@@ -620,9 +631,12 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
         equation_number_warnings.add("duplicate_equation_numbers")
     if cached_latex_missing_number_count:
         equation_number_warnings.add("cached_latex_missing_equation_numbers")
+    if cached_latex_low_quality_count:
+        equation_number_warnings.add("cached_latex_low_quality")
     return {
         "candidate_count": len(candidates),
         "cached_latex_count": cached_latex_count,
+        "cached_latex_low_quality_count": cached_latex_low_quality_count,
         "cached_latex_missing_equation_number_count": cached_latex_missing_number_count,
         "cached_latex_missing_equation_number_ratio": (
             round(cached_latex_missing_number_count / cached_latex_count, 4)
@@ -787,6 +801,7 @@ _STRUCTURAL_FORMULA_REVIEW_REASONS = frozenset({
 
 
 _BLOCKING_CANDIDATE_REVIEW_WARNINGS = frozenset({
+    "cached_latex_low_quality",
     "cached_latex_missing_equation_numbers",
     "duplicate_equation_numbers",
     "equation_number_regression",

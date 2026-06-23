@@ -2063,6 +2063,42 @@ class TestFormulaBackfill:
             "Review candidate-stage formula quality warnings"
         )
 
+    def test_estimate_formula_backfill_blocks_low_quality_cached_latex(self, tmp_path):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "paper.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4")
+        item = ZoteroItem("DOC1", "Impact paper", "Auth", 2024, pdf_path)
+        candidates = [
+            FormulaCandidate(
+                page_num=9,
+                bbox=(109, 95, 442, 115),
+                raw_text=r"\varepsilon_f = [ D_1 + D_2 \tt e x p",
+                confidence=0.95,
+                equation_number="(13)",
+                latex=r"\varepsilon_f = [ D_1 + D_2 \tt e x p",
+                source="mineru_content_list_low_quality",
+            )
+        ]
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(**self._hash_config().__dict__)
+        indexer.store = MagicMock()
+        indexer.store.get_indexed_doc_ids.return_value = {"DOC1"}
+        indexer.zotero = MagicMock()
+        indexer.zotero.get_all_items_with_pdfs.return_value = [item]
+        indexer._assert_config_hash_current = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.extract_formula_candidates", return_value=candidates):
+            result = indexer.estimate_formula_backfill(candidate_preview_limit=20)
+
+        audit = result["results"][0]["candidate_audit"]
+        assert audit["cached_latex_low_quality_count"] == 1
+        assert audit["equation_number_warnings"] == ["cached_latex_low_quality"]
+        assert result["candidate_quality_blocking_paper_count"] == 1
+        assert result["candidate_quality_blocking_papers"][0]["review_reasons"] == ["cached_latex_low_quality"]
+
     def test_estimate_formula_backfill_does_not_block_on_mixed_number_prefixes_only(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
         from zotpilot.indexer import Indexer
