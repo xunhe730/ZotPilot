@@ -927,6 +927,8 @@ def _print_formula_backfill_estimate(result: dict, *, preview_limit: int = 0) ->
     print(f"  Daily call budget:         {result.get('daily_call_budget', 0)}")
     print(f"  Estimated runs:            {result.get('estimated_runs', 1)}")
     print(f"  Data egress:               {'yes' if result.get('data_egress') else 'no'}")
+    if result.get("candidate_quality_blocking_paper_count"):
+        print(f"  Candidate quality blocked: {result.get('candidate_quality_blocking_paper_count')}")
     if summary.get("next_action"):
         print(f"\nNext: {summary['next_action']}")
     warnings = summary.get("warnings") or []
@@ -978,6 +980,16 @@ def _formula_backfill_exit_code(args: object, result: dict[str, object]) -> int:
         return 2
     if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
         return 3
+    return 0
+
+
+def _formula_estimate_exit_code(args: object, result: dict[str, object]) -> int:
+    """Return the CLI exit code for formula backfill estimate guard outcomes."""
+    if (
+        getattr(args, "fail_on_candidate_quality_blocked", False)
+        and int(result.get("candidate_quality_blocking_paper_count") or 0) > 0
+    ):
+        return 4
     return 0
 
 
@@ -1182,10 +1194,10 @@ def cmd_estimate_formula_backfill(args):
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return _formula_estimate_exit_code(args, result)
 
     _print_formula_backfill_estimate(result, preview_limit=preview_limit)
-    return 0
+    return _formula_estimate_exit_code(args, result)
 
 
 def cmd_status(args):
@@ -2409,6 +2421,11 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=None,
         help="Only estimate formula candidates on or before this 1-based PDF page; single-item estimates only",
+    )
+    sub_formula_estimate.add_argument(
+        "--fail-on-candidate-quality-blocked",
+        action="store_true",
+        help="Return exit code 4 when read-only estimate finds candidate quality blocking papers",
     )
     sub_formula_estimate.add_argument("--json", action="store_true", help="Output the full estimate as JSON")
     sub_formula_estimate.add_argument("--config", type=str, default=None, help="Config file path")

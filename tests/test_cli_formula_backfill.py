@@ -50,6 +50,7 @@ def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_esti
                 sample_size=None,
                 sample_seed=0,
                 fail_on_write_blocked=False,
+                fail_on_candidate_quality_blocked=False,
                 json=False,
             )
         )
@@ -117,6 +118,7 @@ def test_estimate_formula_backfill_json_redirects_third_party_stdout_to_stderr(c
                 page_max=None,
                 sample_size=None,
                 sample_seed=0,
+                fail_on_candidate_quality_blocked=False,
                 json=True,
             )
         )
@@ -127,6 +129,117 @@ def test_estimate_formula_backfill_json_redirects_third_party_stdout_to_stderr(c
     assert captured.out.lstrip().startswith("{")
     assert "MinerU cache warning" in captured.err
     assert "MuPDF fd warning" in captured.err
+
+
+def test_estimate_formula_backfill_cli_can_fail_on_candidate_quality_blocked(capsys):
+    from zotpilot.cli import cmd_estimate_formula_backfill
+
+    config = MagicMock()
+    config.validate.return_value = []
+    indexer = MagicMock()
+    indexer.estimate_formula_backfill.return_value = {
+        "provider": "simpletex",
+        "candidate_provider": "mineru_cache",
+        "processed": 2,
+        "candidate_count": 20,
+        "average_candidates_per_paper": 10.0,
+        "estimated_provider_calls": 12,
+        "estimated_external_calls": 12,
+        "estimated_min_duration": "6s",
+        "daily_call_budget": 1800,
+        "estimated_runs": 1,
+        "data_egress": True,
+        "candidate_quality_blocking_paper_count": 1,
+        "candidate_quality_blocking_papers": [
+            {
+                "item_key": "DOC1",
+                "candidate_count": 12,
+                "review_reasons": ["cached_latex_low_quality"],
+            }
+        ],
+        "summary": {
+            "next_action": "Review candidate-stage formula quality warnings before running index_formulas.",
+            "warnings": [],
+        },
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = cmd_estimate_formula_backfill(
+            SimpleNamespace(
+                config="config.json",
+                item_key=None,
+                item_keys=None,
+                limit=None,
+                resume_after=None,
+                daily_call_budget=1800,
+                preview_candidates=0,
+                preview_all_candidates=False,
+                preview_chars=160,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                fail_on_candidate_quality_blocked=True,
+                json=False,
+            )
+        )
+
+    out = capsys.readouterr().out
+    assert rc == 4
+    assert "Candidate quality blocked: 1" in out
+    assert "Review candidate-stage formula quality warnings before running index_formulas." in out
+
+
+def test_estimate_formula_backfill_cli_json_can_fail_on_candidate_quality_blocked(capsys):
+    from zotpilot.cli import cmd_estimate_formula_backfill
+
+    config = MagicMock()
+    config.validate.return_value = []
+    indexer = MagicMock()
+    indexer.estimate_formula_backfill.return_value = {
+        "provider": "simpletex",
+        "candidate_provider": "mineru_cache",
+        "processed": 1,
+        "candidate_count": 12,
+        "candidate_quality_blocking_paper_count": 1,
+        "candidate_quality_blocking_papers": [{"item_key": "DOC1"}],
+        "summary": {"warnings": [], "next_action": "Review candidates."},
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = cmd_estimate_formula_backfill(
+            SimpleNamespace(
+                config="config.json",
+                item_key=None,
+                item_keys=None,
+                limit=None,
+                resume_after=None,
+                daily_call_budget=1800,
+                preview_candidates=0,
+                preview_all_candidates=False,
+                preview_chars=160,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                fail_on_candidate_quality_blocked=True,
+                json=True,
+            )
+        )
+
+    out = capsys.readouterr().out
+    assert rc == 4
+    assert json.loads(out)["candidate_quality_blocking_paper_count"] == 1
 
 
 def test_index_formulas_cli_passes_budget_resume_and_status_jsonl(tmp_path, capsys):
