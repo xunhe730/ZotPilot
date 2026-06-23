@@ -305,6 +305,16 @@ def _formula_equation_number_audit(equation_numbers: list[str]) -> dict[str, obj
                     "reason": "large_gap",
                     "gap": value - previous_value,
                 })
+            elif value - previous_value > 1:
+                warnings.add("missing_equation_number_gap")
+                sequence_breaks.append({
+                    "previous": previous_number,
+                    "current": equation_number,
+                    "prefix": prefix or "regular",
+                    "reason": "missing_gap",
+                    "gap": value - previous_value,
+                    "missing_count": value - previous_value - 1,
+                })
         previous_by_prefix[prefix] = (equation_number, value)
 
     return {
