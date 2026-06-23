@@ -1843,6 +1843,76 @@ def test_mineru_cache_provider_infers_exact_numbering_gaps_between_neighbors(tmp
     ]
 
 
+def test_inferred_gap_number_survives_pdf_status_assignment_when_pdf_scan_misses_anchor(tmp_path):
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4")
+    candidates = [
+        FormulaCandidate(
+            page_num=16,
+            bbox=(100, 100, 300, 130),
+            raw_text="",
+            confidence=0.95,
+            latex=r"a=b",
+            equation_number="(25)",
+            source="mineru_content_list",
+        ),
+        FormulaCandidate(
+            page_num=16,
+            bbox=(100, 150, 300, 180),
+            raw_text="",
+            confidence=0.95,
+            latex=r"c=d",
+            source="mineru_content_list_row",
+        ),
+        FormulaCandidate(
+            page_num=16,
+            bbox=(100, 200, 300, 230),
+            raw_text="",
+            confidence=0.95,
+            latex=r"e=f",
+            equation_number="(27)",
+            source="mineru_content_list_row",
+        ),
+    ]
+    inferred = _infer_missing_equation_numbers_between_numbered(candidates)
+
+    assert inferred[1].equation_number == "(26)"
+    assert inferred[1].equation_number_status == "inferred"
+
+    assigned = _assign_equation_number_statuses_from_pdf(
+        pdf_path,
+        inferred,
+        records_by_page={
+            16: [
+                _PdfEquationNumberRecord(
+                    number="(25)",
+                    y_center=115.0,
+                    x_right=500.0,
+                    standalone=False,
+                    bbox=(460, 100, 500, 130),
+                    text="(25)",
+                    page_width=600.0,
+                    page_height=800.0,
+                ),
+                _PdfEquationNumberRecord(
+                    number="(27)",
+                    y_center=215.0,
+                    x_right=500.0,
+                    standalone=False,
+                    bbox=(460, 200, 500, 230),
+                    text="(27)",
+                    page_width=600.0,
+                    page_height=800.0,
+                ),
+            ]
+        },
+        scan_ok=True,
+    )
+
+    assert assigned[1].equation_number == "(26)"
+    assert assigned[1].equation_number_status == "inferred"
+
+
 def test_mineru_cache_provider_uses_column_order_for_gap_inference(tmp_path):
     cache_dir = tmp_path / "mineru-cache" / "ITEM123"
     cache_dir.mkdir(parents=True)

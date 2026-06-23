@@ -603,6 +603,7 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
         1 for candidate in candidates
         if _formula_candidate_has_cached_latex(candidate)
         and _formula_candidate_is_structured_cache(candidate)
+        and getattr(candidate, "equation_number_status", "") != "unnumbered"
         and not _formula_candidate_effective_equation_number(candidate)
     )
     unnumbered_count = sum(

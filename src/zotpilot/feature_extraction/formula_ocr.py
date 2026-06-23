@@ -2625,13 +2625,14 @@ def _assign_equation_number_statuses_from_pdf(
         if (
             scan_ok
             and candidate.equation_number
+            and candidate.equation_number_status != "inferred"
             and page_records
             and candidate.equation_number not in {record.number for record in page_records}
         ):
             candidate = replace(candidate, equation_number="", equation_number_status="")
         status = candidate.equation_number_status
         if candidate.equation_number:
-            status = "provided"
+            status = "inferred" if status == "inferred" else "provided"
         elif (
             scan_ok
             and candidate.latex.strip()
@@ -2742,7 +2743,11 @@ def _infer_missing_equation_numbers_between_numbered(candidates: list[FormulaCan
             missing_numbers = _missing_sequence_numbers_between(previous_sequence, sequence)
             if missing_numbers and len(missing_numbers) == len(pending):
                 for (pending_index, pending_candidate), equation_number in zip(pending, missing_numbers):
-                    inferred[pending_index] = replace(pending_candidate, equation_number=equation_number)
+                    inferred[pending_index] = replace(
+                        pending_candidate,
+                        equation_number=equation_number,
+                        equation_number_status="inferred",
+                    )
 
         previous_sequence = sequence
         pending = []
@@ -2783,7 +2788,11 @@ def _repair_shifted_equation_numbers_between_anchors(
                 continue
             for (candidate_index, candidate), equation_number in zip(between, expected_numbers):
                 if repaired[candidate_index].equation_number != equation_number:
-                    repaired[candidate_index] = replace(candidate, equation_number=equation_number)
+                    repaired[candidate_index] = replace(
+                        candidate,
+                        equation_number=equation_number,
+                        equation_number_status="inferred",
+                    )
             return repaired
     return repaired
 
