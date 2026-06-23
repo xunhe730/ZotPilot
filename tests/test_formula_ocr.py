@@ -2209,6 +2209,40 @@ def test_mineru_cache_provider_ignores_inline_math_in_text_records(tmp_path):
     assert count_formula_provider_calls(candidates) == 0
 
 
+def test_mineru_cache_provider_reads_leading_numbered_formula_from_text_record(tmp_path):
+    cache_dir = tmp_path / "mineru-cache" / "ITEM123"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "content_list.json").write_text(
+        json.dumps([
+            {
+                "type": "text",
+                "page_idx": 3,
+                "bbox": [514, 856, 909, 920],
+                "text": (
+                    r"$\sigma _ { \mathrm { e q } } = \alpha ( A + B \varepsilon _ { \mathrm { e q } } ^ { n } ) "
+                    r"+ ( 1 - \alpha ) [ A + Q ( 1 - \exp ( - \beta \varepsilon _ { \mathrm { e q } } ) ) ]$ "
+                    "(3)式中，Q 和 beta 为参数。"
+                ),
+            }
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(
+            formula_candidate_cache_dirs=str(tmp_path / "mineru-cache"),
+            formula_candidate_cache_pdf_number_enrichment=True,
+        ),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].equation_number == "(3)"
+    assert candidates[0].latex.startswith(r"\sigma _ { \mathrm { e q } } = \alpha")
+    assert "式中" not in candidates[0].latex
+
+
 def test_mineru_cache_provider_follows_manifest_references(tmp_path):
     cache_dir = tmp_path / "mineru-cache" / "ITEM123"
     cache_dir.mkdir(parents=True)

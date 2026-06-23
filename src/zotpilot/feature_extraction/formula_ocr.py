@@ -1837,6 +1837,8 @@ def _record_looks_like_formula(record: dict[str, Any]) -> bool:
     if "latex" in format_text and is_high_quality_formula_latex(_record_latex(record)):
         return True
     latex = _record_explicit_latex(record)
+    if not latex:
+        latex = _record_leading_numbered_formula_latex(record)
     return bool(latex and is_high_quality_formula_latex(latex))
 
 
@@ -1847,7 +1849,7 @@ def _candidate_from_formula_record(record: dict[str, Any], *, source: str) -> Fo
         return None
     bbox_coordinate_space = _record_bbox_coordinate_space(record)
     confidence = _record_confidence(record)
-    raw_text = latex or str(record.get("text") or record.get("content") or "") or _record_formula_label(record)
+    raw_text = str(record.get("text") or record.get("content") or latex) or _record_formula_label(record)
     raw_text = _normalize_space(raw_text)
     if not latex and len(raw_text) > MAX_RECORD_FORMULA_LABEL_CHARS:
         return None
@@ -1887,7 +1889,10 @@ def _record_equation_number(record: dict[str, Any], *, latex: str, raw_text: str
         formatted_number = _format_equation_number_token(number)
         if formatted_number:
             return formatted_number
-    return _extract_equation_number(latex or raw_text)
+    leading_number = _record_leading_numbered_formula_number(record)
+    if leading_number:
+        return leading_number
+    return _extract_equation_number(latex) or _extract_equation_number(raw_text)
 
 
 def _record_formula_label(record: dict[str, Any]) -> str:
@@ -1901,6 +1906,9 @@ def _record_formula_label(record: dict[str, Any]) -> str:
 
 
 def _record_latex(record: dict[str, Any]) -> str:
+    leading_formula = _record_leading_numbered_formula_latex(record)
+    if leading_formula:
+        return leading_formula
     content = record.get("content")
     if isinstance(content, dict):
         for key in (
@@ -1946,6 +1954,74 @@ def _record_latex(record: dict[str, Any]) -> str:
             if latex:
                 return latex
     return ""
+
+
+def _record_leading_numbered_formula_latex(record: dict[str, Any]) -> str:
+    content = record.get("content")
+    if isinstance(content, dict):
+        for key in ("text", "content", "html", "value"):
+            value = content.get(key)
+            if isinstance(value, str):
+                latex = _leading_numbered_formula_latex(value)
+                if latex:
+                    return latex
+    for key in ("text", "content", "html", "value"):
+        value = record.get(key)
+        if isinstance(value, str):
+            latex = _leading_numbered_formula_latex(value)
+            if latex:
+                return latex
+    return ""
+
+
+def _record_leading_numbered_formula_number(record: dict[str, Any]) -> str:
+    content = record.get("content")
+    if isinstance(content, dict):
+        for key in ("text", "content", "html", "value"):
+            value = content.get(key)
+            if isinstance(value, str):
+                number = _leading_numbered_formula_number(value)
+                if number:
+                    return number
+    for key in ("text", "content", "html", "value"):
+        value = record.get(key)
+        if isinstance(value, str):
+            number = _leading_numbered_formula_number(value)
+            if number:
+                return number
+    return ""
+
+
+def _leading_numbered_formula_latex(text: str) -> str:
+    match = _leading_numbered_formula_match(text)
+    if match is not None:
+        latex = _clean_candidate_latex(match.group("latex"))
+        if latex and is_high_quality_formula_latex(latex):
+            return latex
+    return ""
+
+
+def _leading_numbered_formula_number(text: str) -> str:
+    match = _leading_numbered_formula_match(text)
+    if match is None:
+        return ""
+    number = match.group("number")[1:-1].strip()
+    return _format_equation_number_token(number)
+
+
+def _leading_numbered_formula_match(text: str) -> re.Match[str] | None:
+    stripped = text.strip()
+    number_pattern = r"(?P<number>\(\s*\d+(?:\.\d+)?\s*\)|（\s*\d+(?:\.\d+)?\s*）)"
+    patterns = (
+        rf"^\$\$(?P<latex>.+?)\$\$\s*{number_pattern}",
+        rf"^\\\[(?P<latex>.+?)\\\]\s*{number_pattern}",
+        rf"^\$(?P<latex>[^\n$]+?)\$\s*{number_pattern}",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, stripped, re.DOTALL)
+        if match is not None:
+            return match
+    return None
 
 
 def _record_explicit_latex(record: dict[str, Any]) -> str:
