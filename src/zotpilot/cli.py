@@ -1075,7 +1075,7 @@ def cmd_index_formulas(args):
 
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
+        return 2 if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked") else 0
 
     print("Formula backfill complete:")
     print(f"  Provider:                {result.get('provider', '')}")
