@@ -929,6 +929,11 @@ def _print_formula_backfill_estimate(result: dict, *, preview_limit: int = 0) ->
     print(f"  Data egress:               {'yes' if result.get('data_egress') else 'no'}")
     if result.get("candidate_quality_blocking_paper_count"):
         print(f"  Candidate quality blocked: {result.get('candidate_quality_blocking_paper_count')}")
+    _print_unmatched_requested_items(
+        result,
+        count_label="  Unmatched requested:      ",
+        keys_label="  Missing item keys:        ",
+    )
     if summary.get("next_action"):
         print(f"\nNext: {summary['next_action']}")
     warnings = summary.get("warnings") or []
@@ -974,8 +979,37 @@ def _print_formula_backfill_estimate(result: dict, *, preview_limit: int = 0) ->
                 )
 
 
+def _unmatched_requested_item_count(result: dict[str, object]) -> int:
+    count = result.get("unmatched_requested_item_key_count")
+    if count is not None:
+        return int(count or 0)
+    return len(_unmatched_requested_item_keys(result))
+
+
+def _unmatched_requested_item_keys(result: dict[str, object]) -> list[str]:
+    keys = result.get("unmatched_requested_item_keys") or []
+    return [str(key) for key in keys] if isinstance(keys, list) else []
+
+
+def _print_unmatched_requested_items(
+    result: dict[str, object],
+    *,
+    count_label: str,
+    keys_label: str,
+) -> None:
+    unmatched_count = _unmatched_requested_item_count(result)
+    if not unmatched_count:
+        return
+    print(f"{count_label}{unmatched_count}")
+    keys = _unmatched_requested_item_keys(result)
+    if keys:
+        print(f"{keys_label}{', '.join(keys)}")
+
+
 def _formula_backfill_exit_code(args: object, result: dict[str, object]) -> int:
     """Return the CLI exit code for formula backfill write guard outcomes."""
+    if getattr(args, "fail_on_unmatched", False) and _unmatched_requested_item_count(result) > 0:
+        return 5
     if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
         return 2
     if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
@@ -985,6 +1019,8 @@ def _formula_backfill_exit_code(args: object, result: dict[str, object]) -> int:
 
 def _formula_estimate_exit_code(args: object, result: dict[str, object]) -> int:
     """Return the CLI exit code for formula backfill estimate guard outcomes."""
+    if getattr(args, "fail_on_unmatched", False) and _unmatched_requested_item_count(result) > 0:
+        return 5
     if (
         getattr(args, "fail_on_candidate_quality_blocked", False)
         and int(result.get("candidate_quality_blocking_paper_count") or 0) > 0
@@ -1050,10 +1086,10 @@ def cmd_index_formulas(args):
             return 1
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 0
+            return _formula_estimate_exit_code(args, result)
         print("[dry-run] No formula chunks were written.")
         _print_formula_backfill_estimate(result, preview_limit=preview_limit)
-        return 0
+        return _formula_estimate_exit_code(args, result)
 
     from .index_authority import IndexLease, LeaseContentionError, acquire_lease, release_lease
 
@@ -1115,6 +1151,11 @@ def cmd_index_formulas(args):
         print(f"  Review required:         {'yes' if result.get('write_review_required') else 'no'}")
     if result.get("next_action"):
         print(f"  Next:                    {result.get('next_action')}")
+    _print_unmatched_requested_items(
+        result,
+        count_label="  Unmatched requested:     ",
+        keys_label="  Missing item keys:       ",
+    )
     print(f"  Provider calls used:     {result.get('provider_calls_used', 0)}")
     print(f"  External calls used:     {result.get('external_calls_used', 0)}")
     if "pdf_fallback_max_pages" in result:
@@ -2335,6 +2376,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Return exit code 3 when formula writes succeed but still require review",
     )
+    sub_index_formulas.add_argument(
+        "--fail-on-unmatched",
+        action="store_true",
+        help="Return exit code 5 when requested item keys are not matched",
+    )
     sub_index_formulas.add_argument("--json", action="store_true", help="Output the full result as JSON")
     sub_index_formulas.add_argument("--config", type=str, default=None, help="Config file path")
     sub_index_formulas.set_defaults(func=cmd_index_formulas)
@@ -2426,6 +2472,11 @@ def main(argv: list[str] | None = None) -> int:
         "--fail-on-candidate-quality-blocked",
         action="store_true",
         help="Return exit code 4 when read-only estimate finds candidate quality blocking papers",
+    )
+    sub_formula_estimate.add_argument(
+        "--fail-on-unmatched",
+        action="store_true",
+        help="Return exit code 5 when requested item keys are not matched",
     )
     sub_formula_estimate.add_argument("--json", action="store_true", help="Output the full estimate as JSON")
     sub_formula_estimate.add_argument("--config", type=str, default=None, help="Config file path")
