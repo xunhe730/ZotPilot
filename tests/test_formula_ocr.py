@@ -15,6 +15,7 @@ from zotpilot.feature_extraction.formula_ocr import (
     _extract_block_signals,
     _extract_equation_number,
     _is_likely_non_formula_text,
+    _merge_multiline_formula_candidates,
     _simpletex_app_headers,
     create_formula_ocr_provider,
     is_high_quality_formula_latex,
@@ -310,6 +311,12 @@ def test_formula_candidate_confidence_rejects_common_paper_prose_noise():
         "Figure 3. Force-displacement curves for different specimens.",
         "The model parameters were calibrated according to Bai et al. [12].",
         "References",
+        "6061-T651 铝合金动态力学性能及断裂准则修正 *",
+        "800 mm/min ，应变率为 0.133 ～ 0.533 s  1 。可以发现，在低应变率下，"
+        "6061-T651 铝合金材料无显著的应变率强化效应。",
+        "式中，η 为应力三轴度；A pl，n F，c 1，c 2 为材料性能参数；θ 为 Lode 角。",
+        "试样类型 应力三轴度 η Lode 角 θ 断裂应变 ε f",
+        "R =∞ 0.612 1 0.459 5",
     ]
 
     for text in noisy_blocks:
@@ -387,6 +394,64 @@ def test_attach_standalone_equation_number_keeps_formula_crop_bbox():
     assert attached[0].equation_number == "(1)"
     assert attached[0].equation_number_status == "provided"
     assert attached[0].bbox == candidates[0].bbox
+
+
+def test_merge_multiline_formula_candidates_preserves_trailing_equation_number():
+    candidates = [
+        FormulaCandidate(
+            page_num=1,
+            bbox=(100.0, 100.0, 430.0, 120.0),
+            raw_text=r"\sigma = (A + B\varepsilon^n)",
+            confidence=0.82,
+            font_names=("CMMI10",),
+            equation_number_status="missing",
+        ),
+        FormulaCandidate(
+            page_num=1,
+            bbox=(104.0, 123.0, 500.0, 143.0),
+            raw_text=r"[1 + C\ln(\dot{\varepsilon}/\dot{\varepsilon}_0)] (1)",
+            confidence=0.8,
+            font_names=("CMMI10",),
+            equation_number="(1)",
+            equation_number_status="provided",
+        ),
+    ]
+
+    merged = _merge_multiline_formula_candidates(candidates)
+
+    assert len(merged) == 1
+    assert merged[0].raw_text == (
+        r"\sigma = (A + B\varepsilon^n) "
+        r"[1 + C\ln(\dot{\varepsilon}/\dot{\varepsilon}_0)] (1)"
+    )
+    assert merged[0].bbox == (100.0, 100.0, 500.0, 143.0)
+    assert merged[0].equation_number == "(1)"
+    assert merged[0].equation_number_status == "provided"
+
+
+def test_merge_multiline_formula_candidates_keeps_separate_numbered_equations():
+    candidates = [
+        FormulaCandidate(
+            page_num=1,
+            bbox=(100.0, 100.0, 430.0, 120.0),
+            raw_text=r"a = b + c (3)",
+            confidence=0.82,
+            equation_number="(3)",
+            equation_number_status="provided",
+        ),
+        FormulaCandidate(
+            page_num=1,
+            bbox=(104.0, 123.0, 430.0, 143.0),
+            raw_text=r"d = e + f (4)",
+            confidence=0.8,
+            equation_number="(4)",
+            equation_number_status="provided",
+        ),
+    ]
+
+    merged = _merge_multiline_formula_candidates(candidates)
+
+    assert [candidate.equation_number for candidate in merged] == ["(3)", "(4)"]
 
 
 def test_dedupe_candidates_keeps_best_overlapping_candidate():

@@ -89,6 +89,15 @@ PROSE_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 VARIABLE_GLOSS_RE = re.compile(r"\bwhere\b[^.。;；]{0,260}|其中[^.。;；]{0,260}|式中[^.。;；]{0,260}", re.IGNORECASE)
+CHINESE_PROSE_CUE_RE = re.compile(
+    r"(?:可以发现|发现|显著|强化效应|动态力学性能|断裂准则|修正|铝合金|材料|试验|实验|"
+    r"模拟|数值|有限元|本文|研究|结果|表明|影响|性能|应变率|温度)"
+)
+TABLE_HEADER_CUE_RE = re.compile(
+    r"(?:试样类型|应力三轴度|断裂应变|材料参数|编号|组别|类型|Lode\s*角|"
+    r"strain\s+rate|stress\s+triaxiality|fracture\s+strain)",
+    re.IGNORECASE,
+)
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
@@ -352,6 +361,7 @@ def extract_formula_candidates(
                     )
                 )
             page_candidates = _attach_standalone_equation_numbers(page_candidates, standalone_numbers)
+            page_candidates = _merge_multiline_formula_candidates(page_candidates)
             page_candidates.sort(key=lambda c: c.confidence, reverse=True)
             page_candidates = _dedupe_candidates(page_candidates)
             if max_formulas_per_page > 0:
@@ -568,6 +578,14 @@ def _is_likely_non_formula_text(text: str) -> bool:
         return True
     if NOISE_RE.search(normalized) and not math_signal:
         return True
+    if _looks_like_chinese_prose_noise(normalized, has_relation=has_relation):
+        return True
+    if _looks_like_table_header_noise(normalized):
+        return True
+    if _looks_like_numeric_table_row_noise(normalized):
+        return True
+    if VARIABLE_GLOSS_RE.search(normalized) and not has_relation:
+        return True
     if AUTHOR_AFFILIATION_RE.search(normalized) and not math_signal:
         return True
     if CAPTION_OR_REFERENCE_RE.search(normalized) and not math_signal:
@@ -585,6 +603,41 @@ def _is_likely_non_formula_text(text: str) -> bool:
     if word_hits >= 8 and PROSE_CUE_RE.search(normalized) and symbol_hits < 2:
         return True
     return False
+
+
+def _looks_like_chinese_prose_noise(text: str, *, has_relation: bool) -> bool:
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text))
+    if cjk_count < 6:
+        return False
+    if has_relation and not re.search(r"[。；，,;]", text):
+        return False
+    if re.search(r"[。；，,;]", text) and CHINESE_PROSE_CUE_RE.search(text):
+        return True
+    if not has_relation and CHINESE_PROSE_CUE_RE.search(text):
+        return True
+    return False
+
+
+def _looks_like_table_header_noise(text: str) -> bool:
+    if not TABLE_HEADER_CUE_RE.search(text):
+        return False
+    cue_hits = len(TABLE_HEADER_CUE_RE.findall(text))
+    return cue_hits >= 2 or re.search(r"(?:η|θ|ε|Lode)", text) is not None
+
+
+def _looks_like_numeric_table_row_noise(text: str) -> bool:
+    if "\\" in text:
+        return False
+    tokens = re.findall(r"[A-Za-z]+|[-+]?\d+(?:\.\d+)?|[=<>≤≥∞≈≠+\-*/^]", text)
+    if len(tokens) < 5:
+        return False
+    numeric_tokens = re.findall(r"[-+]?\d+(?:\.\d+)?", text)
+    alpha_tokens = re.findall(r"[A-Za-z]+", text)
+    operator_tokens = re.findall(r"[+*/^]", text)
+    if len(numeric_tokens) < 3:
+        return False
+    numeric_ratio = len(numeric_tokens) / max(len(tokens), 1)
+    return numeric_ratio >= 0.45 and len(alpha_tokens) <= 2 and not operator_tokens
 
 
 def _looks_like_explicit_doi_or_url(text: str) -> bool:
@@ -656,6 +709,64 @@ def _attach_standalone_equation_numbers(
     return attached
 
 
+def _merge_multiline_formula_candidates(candidates: list[FormulaCandidate]) -> list[FormulaCandidate]:
+    """Merge adjacent formula-line candidates that belong to one display equation."""
+    if len(candidates) < 2:
+        return candidates
+    ordered = sorted(candidates, key=lambda c: (c.page_num, c.bbox[1], c.bbox[0]))
+    merged: list[FormulaCandidate] = []
+    current = ordered[0]
+    for candidate in ordered[1:]:
+        if _should_merge_multiline_formula_candidates(current, candidate):
+            current = _merge_formula_candidate_pair(current, candidate)
+        else:
+            merged.append(current)
+            current = candidate
+    merged.append(current)
+    return merged
+
+
+def _should_merge_multiline_formula_candidates(first: FormulaCandidate, second: FormulaCandidate) -> bool:
+    if first.page_num != second.page_num:
+        return False
+    if first.equation_number and second.equation_number:
+        return False
+    first_x0, first_y0, first_x1, first_y1 = first.bbox
+    second_x0, second_y0, second_x1, second_y1 = second.bbox
+    vertical_gap = second_y0 - first_y1
+    max_height = max(first_y1 - first_y0, second_y1 - second_y0, 1.0)
+    if vertical_gap < -max_height * 0.25 or vertical_gap > max(10.0, max_height * 0.75):
+        return False
+    overlap = min(first_x1, second_x1) - max(first_x0, second_x0)
+    min_width = max(min(first_x1 - first_x0, second_x1 - second_x0), 1.0)
+    if overlap / min_width < 0.35:
+        return False
+    if _is_likely_non_formula_text(first.raw_text) or _is_likely_non_formula_text(second.raw_text):
+        return False
+    return True
+
+
+def _merge_formula_candidate_pair(first: FormulaCandidate, second: FormulaCandidate) -> FormulaCandidate:
+    equation_number = first.equation_number or second.equation_number
+    equation_number_status = (
+        "provided"
+        if equation_number
+        else first.equation_number_status or second.equation_number_status or "missing"
+    )
+    return replace(
+        first,
+        bbox=_union_bbox(first.bbox, second.bbox),
+        raw_text=_normalize_space(f"{first.raw_text} {second.raw_text}"),
+        confidence=max(first.confidence, second.confidence),
+        font_names=tuple(sorted(set(first.font_names) | set(second.font_names))),
+        span_flags=tuple(sorted(set(first.span_flags) | set(second.span_flags))),
+        reference_context=first.reference_context or second.reference_context,
+        variable_gloss=first.variable_gloss or second.variable_gloss,
+        equation_number=equation_number,
+        equation_number_status=equation_number_status,
+    )
+
+
 def _standalone_equation_number_match_score(
     candidate_bbox: tuple[float, float, float, float],
     number_bbox: tuple[float, float, float, float],
@@ -680,6 +791,18 @@ def _standalone_equation_number_match_score(
     if horizontal_gap > 300:
         return None
     return vertical_gap * 4 + horizontal_gap + side_penalty
+
+
+def _union_bbox(
+    first: tuple[float, float, float, float],
+    second: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    return (
+        min(first[0], second[0]),
+        min(first[1], second[1]),
+        max(first[2], second[2]),
+        max(first[3], second[3]),
+    )
 
 
 def _bbox_iou(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
