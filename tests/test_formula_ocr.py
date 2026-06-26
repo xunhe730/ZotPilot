@@ -876,6 +876,67 @@ def test_pdf_extract_kit_provider_accepts_detection_only_bbox(tmp_path):
     assert candidates[0].source == "pdf_extract_kit_json"
 
 
+def test_pdf_extract_kit_provider_ignores_mineru_cache_files(tmp_path):
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(
+        json.dumps([{"type": "equation", "text": r"E = mc^2", "bbox": [1, 2, 3, 4]}]),
+        encoding="utf-8",
+    )
+    full_md = tmp_path / "full.md"
+    full_md.write_text("$$F = ma\\tag{1}$$", encoding="utf-8")
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=f"{content_list};{full_md}"),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
+def test_pdf_extract_kit_provider_normalizes_detection_only_raw_text(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit"
+    cache_dir.mkdir()
+    (cache_dir / "formula_detection.json").write_text(
+        json.dumps([{
+            "det_label": "  formula\n region\t",
+            "page_no": 1,
+            "bbox": [10, 20, 30, 40],
+        }]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(cache_dir)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert len(candidates) == 1
+    assert candidates[0].raw_text == "formula region"
+
+
+def test_pdf_extract_kit_provider_rejects_oversized_detection_only_raw_text(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit"
+    cache_dir.mkdir()
+    (cache_dir / "formula_detection.json").write_text(
+        json.dumps([{
+            "det_label": "formula " + ("x" * 300),
+            "page_no": 1,
+            "bbox": [10, 20, 30, 40],
+        }]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(cache_dir)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
 def test_cached_latex_does_not_open_pdf_or_call_ocr_provider(tmp_path):
     class CachedCandidateProvider:
         name = "cached-test"
