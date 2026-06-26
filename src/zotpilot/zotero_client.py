@@ -270,6 +270,9 @@ class ZoteroClient:
         conn = sqlite3.connect(_sqlite_uri(self.db_path), uri=True)
         conn.row_factory = sqlite3.Row
         try:
+            mineru_like = "%mineru%"
+            zip_path_like = "%.zip"
+            zip_content_like = "%zip%"
             rows = conn.execute(
                 """
                 SELECT attachment_items."key" AS attachmentKey,
@@ -280,14 +283,14 @@ class ZoteroClient:
                 JOIN items attachment_items ON attachment_items.itemID = ia.itemID
                 WHERE base."key" = ?
                   AND base.libraryID = ?
-                  AND lower(COALESCE(ia.path, '')) LIKE '%mineru%'
+                  AND lower(COALESCE(ia.path, '')) LIKE ?
                   AND (
-                      lower(COALESCE(ia.path, '')) LIKE '%.zip'
-                      OR lower(COALESCE(ia.contentType, '')) LIKE '%zip%'
+                      lower(COALESCE(ia.path, '')) LIKE ?
+                      OR lower(COALESCE(ia.contentType, '')) LIKE ?
                   )
                 ORDER BY ia.itemID
                 """,
-                (item_key, self.library_id),
+                (item_key, self.library_id, mineru_like, zip_path_like, zip_content_like),
             ).fetchall()
         finally:
             conn.close()

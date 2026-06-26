@@ -17,7 +17,7 @@ import string
 import time
 import zipfile
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Protocol, cast
 
 import httpx
@@ -104,6 +104,10 @@ LATEX_TAG_RE = re.compile(r"\\tag\s*\{\s*(?P<tag>[^{}]+?)\s*\}")
 DISPLAY_MATH_RE = re.compile(r"\$\$(?P<latex>.+?)\$\$|\\\[(?P<bracket>.+?)\\\]", re.DOTALL)
 MARKDOWN_PAGE_RE = re.compile(r"<!--\s*page\s*(?P<page>\d+)\s*-->", re.IGNORECASE)
 FORMULA_CACHE_NAMES = {"content_list.json", "content_list_v2.json", "middle.json", "manifest.json", "full.md"}
+MAX_FORMULA_CACHE_ZIP_MEMBERS = 128
+MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES = 100 * 1024 * 1024
+MAX_FORMULA_CACHE_JSON_DEPTH = 256
+MIN_CACHE_KEY_SUBSTRING_LENGTH = 8
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
@@ -772,10 +776,10 @@ def _candidate_cache_paths(
         candidate_dirs = [root]
         for key in keys:
             direct = root / key
-            if direct.is_dir():
+            if direct.is_dir() and _path_is_within_root(direct, root):
                 candidate_dirs.append(direct)
         for directory in candidate_dirs:
-            found.extend(_cache_paths_in_directory(directory, keys))
+            found.extend(_cache_paths_in_directory(directory, keys, root=root))
         if not found:
             found.extend(_bounded_cache_scan(root, keys))
     return _unique_paths(found)
@@ -789,23 +793,27 @@ def _cache_lookup_keys(pdf_path: Path | str, *, item_key: str | None) -> set[str
     return {key for key in keys if key}
 
 
-def _cache_paths_in_directory(directory: Path, keys: set[str]) -> list[Path]:
+def _cache_paths_in_directory(directory: Path, keys: set[str], *, root: Path) -> list[Path]:
     found: list[Path] = []
     try:
         children = list(directory.iterdir())
     except OSError:
         return found
     for path in children:
-        if path.is_file() and _is_formula_cache_path(path):
+        if _is_safe_formula_cache_file(path, root=root):
             found.append(path)
     if found:
         return found
     for child in children:
-        if not child.is_dir() or (keys and child.name.lower() not in keys):
+        if (
+            not child.is_dir()
+            or not _path_is_within_root(child, root)
+            or (keys and child.name.lower() not in keys)
+        ):
             continue
         try:
             for path in child.iterdir():
-                if path.is_file() and _is_formula_cache_path(path):
+                if _is_safe_formula_cache_file(path, root=root):
                     found.append(path)
         except OSError:
             continue
@@ -819,7 +827,7 @@ def _bounded_cache_scan(root: Path, keys: set[str], *, max_entries: int = 20000)
         visited += 1
         if visited > max_entries:
             break
-        if path.is_file() and _is_formula_cache_path(path) and _cache_path_matches_keys(path, keys):
+        if _is_safe_formula_cache_file(path, root=root) and _cache_path_matches_keys(path, keys):
             found.append(path)
     return found
 
@@ -827,8 +835,14 @@ def _bounded_cache_scan(root: Path, keys: set[str], *, max_entries: int = 20000)
 def _cache_path_matches_keys(path: Path, keys: set[str]) -> bool:
     if not keys:
         return True
+    lower_parts = {part.lower() for part in path.parts}
+    if keys & lower_parts:
+        return True
     lower_path = path.as_posix().lower()
-    return any(key in lower_path for key in keys)
+    return any(
+        len(key) >= MIN_CACHE_KEY_SUBSTRING_LENGTH and key in lower_path
+        for key in keys
+    )
 
 
 def _is_formula_cache_path(path: Path) -> bool:
@@ -860,13 +874,30 @@ def _unique_paths(paths: list[Path]) -> list[Path]:
     return unique
 
 
+def _is_safe_formula_cache_file(path: Path, *, root: Path) -> bool:
+    try:
+        return path.is_file() and _is_formula_cache_path(path) and _path_is_within_root(path, root)
+    except OSError:
+        return False
+
+
+def _path_is_within_root(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
 def _parse_mineru_json_candidates(path: Path) -> list[FormulaCandidate]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
+        candidates = _parse_mineru_json_payload(payload, source=_source_from_cache_path(path))
     except (OSError, ValueError) as e:
         logger.warning("Failed to read formula candidate cache %s: %s", path, e)
         return []
-    candidates = _parse_mineru_json_payload(payload, source=_source_from_cache_path(path))
+    except RecursionError as e:
+        logger.warning("Formula candidate cache %s is too deeply nested: %s", path, e)
+        return []
     if path.name.lower() == "manifest.json":
         for referenced_path in _manifest_referenced_cache_paths(payload, base_dir=path.parent):
             if referenced_path == path:
@@ -882,11 +913,32 @@ def _parse_mineru_zip_candidates(path: Path) -> list[FormulaCandidate]:
     candidates: list[FormulaCandidate] = []
     try:
         with zipfile.ZipFile(path) as archive:
-            names = sorted(
-                name for name in archive.namelist()
-                if not name.endswith("/") and _is_formula_cache_path(Path(name))
+            members = sorted(
+                (
+                    info for info in archive.infolist()
+                    if _is_safe_zip_formula_cache_member(info)
+                ),
+                key=lambda info: info.filename,
             )
-            for name in _select_zip_formula_cache_members(names):
+            if len(members) > MAX_FORMULA_CACHE_ZIP_MEMBERS:
+                logger.warning(
+                    "Skipping formula candidate archive %s: %d cache member(s) exceeds limit %d",
+                    path,
+                    len(members),
+                    MAX_FORMULA_CACHE_ZIP_MEMBERS,
+                )
+                return []
+            for info in _select_zip_formula_cache_members(members):
+                name = info.filename
+                if info.file_size > MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES:
+                    logger.warning(
+                        "Skipping formula cache member %s in %s: uncompressed size %d exceeds limit %d",
+                        name,
+                        path,
+                        info.file_size,
+                        MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES,
+                    )
+                    continue
                 try:
                     text = archive.read(name).decode("utf-8")
                 except (KeyError, UnicodeDecodeError, OSError) as e:
@@ -898,29 +950,48 @@ def _parse_mineru_zip_candidates(path: Path) -> list[FormulaCandidate]:
                     continue
                 try:
                     payload = json.loads(text)
+                    candidates.extend(_parse_mineru_json_payload(payload, source=source))
                 except ValueError as e:
                     logger.warning("Failed to parse formula cache member %s in %s: %s", name, path, e)
                     continue
-                candidates.extend(_parse_mineru_json_payload(payload, source=source))
+                except RecursionError as e:
+                    logger.warning("Formula cache member %s in %s is too deeply nested: %s", name, path, e)
+                    continue
     except (OSError, zipfile.BadZipFile) as e:
         logger.warning("Failed to read formula candidate archive %s: %s", path, e)
     return candidates
 
 
-def _select_zip_formula_cache_members(names: list[str]) -> list[str]:
-    if not names:
+def _is_safe_zip_formula_cache_member(info: zipfile.ZipInfo) -> bool:
+    name = info.filename
+    if name.endswith("/"):
+        return False
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts:
+        return False
+    if path.parts and ":" in path.parts[0]:
+        return False
+    return _is_formula_cache_path(Path(name))
+
+
+def _select_zip_formula_cache_members(members: list[zipfile.ZipInfo]) -> list[zipfile.ZipInfo]:
+    if not members:
         return []
     preferred = ("content_list.json", "content_list_v2.json", "middle.json", "full.md")
-    lower_to_name = {Path(name).name.lower(): name for name in names}
     for cache_name in preferred:
-        if cache_name in lower_to_name:
-            return [lower_to_name[cache_name]]
-    return names
+        matches = [member for member in members if Path(member.filename).name.lower() == cache_name]
+        if matches:
+            return matches
+    return members
 
 
 def _parse_mineru_json_payload(payload: Any, *, source: str) -> list[FormulaCandidate]:
     candidates: list[FormulaCandidate] = []
-    for record in _iter_formula_records(payload):
+    try:
+        records = _iter_formula_records(payload)
+    except RecursionError:
+        return candidates
+    for record in records:
         candidate = _candidate_from_formula_record(record, source=source)
         if candidate is not None:
             candidates.append(candidate)
@@ -929,6 +1000,10 @@ def _parse_mineru_json_payload(payload: Any, *, source: str) -> list[FormulaCand
 
 def _manifest_referenced_cache_paths(payload: Any, *, base_dir: Path) -> list[Path]:
     paths: list[Path] = []
+    try:
+        base_root = base_dir.resolve()
+    except OSError:
+        return paths
     stack = [payload]
     while stack and len(paths) < 64:
         value = stack.pop()
@@ -943,6 +1018,8 @@ def _manifest_referenced_cache_paths(payload: Any, *, base_dir: Path) -> list[Pa
         candidate = Path(value)
         if not candidate.is_absolute():
             candidate = base_dir / candidate
+        if not _path_is_within_root(candidate, base_root):
+            continue
         if candidate.exists() and candidate.is_file() and _is_formula_cache_path(candidate):
             paths.append(candidate)
     return _unique_paths(paths)
@@ -979,11 +1056,24 @@ def _parse_mineru_markdown_text(markdown: str, *, source: str) -> list[FormulaCa
     return candidates
 
 
-def _iter_formula_records(payload: Any, *, inherited_page_num: int | None = None) -> list[dict[str, Any]]:
+def _iter_formula_records(
+    payload: Any,
+    *,
+    inherited_page_num: int | None = None,
+    depth: int = 0,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    if depth > MAX_FORMULA_CACHE_JSON_DEPTH:
+        return records
     if isinstance(payload, list):
         for item in payload:
-            records.extend(_iter_formula_records(item, inherited_page_num=inherited_page_num))
+            records.extend(
+                _iter_formula_records(
+                    item,
+                    inherited_page_num=inherited_page_num,
+                    depth=depth + 1,
+                )
+            )
         return records
     if not isinstance(payload, dict):
         return records
@@ -996,7 +1086,13 @@ def _iter_formula_records(payload: Any, *, inherited_page_num: int | None = None
         records.append(record)
     for value in payload.values():
         if isinstance(value, (dict, list)):
-            records.extend(_iter_formula_records(value, inherited_page_num=page_num))
+            records.extend(
+                _iter_formula_records(
+                    value,
+                    inherited_page_num=page_num,
+                    depth=depth + 1,
+                )
+            )
     return records
 
 
