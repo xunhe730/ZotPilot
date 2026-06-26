@@ -44,6 +44,7 @@ from zotpilot.feature_extraction.formula_ocr import (
     _PdfEquationNumberRecord,
     _remove_repeated_regular_pdf_numbers_on_page,
     _scan_pdf_equation_number_records_by_page,
+    _should_stop_formula_batch,
     _simpletex_app_headers,
     _split_multirow_independent_formula_candidates,
     _zotero_storage_cache_scan,
@@ -368,6 +369,18 @@ def test_simpletex_provider_raises_after_exhausting_retriable_statuses():
 
     assert client.post.call_count == 2
     sleep.assert_called_once_with(0.25)
+
+
+def test_simpletex_batch_stop_uses_specific_quota_and_retry_exhaustion_signals():
+    assert _should_stop_formula_batch(
+        RuntimeError("SimpleTex formula OCR daily call budget exhausted before request")
+    )
+    assert _should_stop_formula_batch(RuntimeError("SimpleTex formula OCR exhausted retries after HTTP 503"))
+    assert _should_stop_formula_batch(RuntimeError("SimpleTex formula OCR exhausted retries after request error"))
+    assert _should_stop_formula_batch(RuntimeError("quota exceeded"))
+    assert _should_stop_formula_batch(RuntimeError("insufficient balance"))
+
+    assert not _should_stop_formula_batch(RuntimeError("generate delimiter recovery failed"))
 
 
 def test_simpletex_app_headers_match_documented_signature():

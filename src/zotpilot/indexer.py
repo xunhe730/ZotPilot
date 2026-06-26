@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from tqdm import tqdm
@@ -144,8 +144,7 @@ def _append_formula_backfill_state(path: Path | None, payload: dict[str, object]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True, default=str))
-            f.write("\n")
+            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True, default=str) + "\n")
     except OSError as e:
         logger.warning("Failed to append formula backfill state to %s: %s", path, e)
 
@@ -350,6 +349,27 @@ def _keys_after_resume(keys: list[str], resume_after: str) -> list[str]:
             continue
         resumed_keys.append(key)
     return resumed_keys
+
+
+def _slice_formula_backfill_item_pairs(
+    item_pairs: list[tuple[ZoteroItem, str]],
+    *,
+    limit: int | None,
+    resume_after: str | None,
+) -> list[tuple[ZoteroItem, str]]:
+    selected_pairs = list(item_pairs)
+    if resume_after:
+        skipped = True
+        resumed_pairs: list[tuple[ZoteroItem, str]] = []
+        for item, reason in selected_pairs:
+            if skipped:
+                skipped = item.item_key != resume_after
+                continue
+            resumed_pairs.append((item, reason))
+        selected_pairs = resumed_pairs
+    if limit:
+        selected_pairs = selected_pairs[:limit]
+    return selected_pairs
 
 
 def _assert_single_item_for_formula_page_range(
@@ -618,6 +638,7 @@ def _formula_high_density_backfill_plan(
 
 def _formula_candidate_audit(candidates: list) -> dict[str, object]:
     """Return per-paper candidate quality signals for read-only review."""
+    audit_ordered_candidates = _formula_candidate_audit_order(candidates)
     source_counts = Counter(_formula_candidate_source(candidate) for candidate in candidates)
     page_nums = [
         int(page_num)
@@ -626,7 +647,7 @@ def _formula_candidate_audit(candidates: list) -> dict[str, object]:
     ]
     equation_numbers = [
         number
-        for candidate in candidates
+        for candidate in audit_ordered_candidates
         if (number := _formula_candidate_effective_equation_number(candidate))
     ]
     number_counts = Counter(equation_numbers)
@@ -834,11 +855,28 @@ def _formula_backfill_warnings(
 def _looks_like_formula_quota_error(exc: Exception) -> bool:
     """Classify provider errors that should stop formula backfill immediately."""
     message = str(exc).lower()
+    if _message_contains_status_code(message, {402, 429}):
+        return True
+    if re.search(r"\bquota\b", message):
+        return True
+    if re.search(r"\brate[-\s]?limit(?:ed|s)?\b", message):
+        return True
     hints = (
-        "401", "402", "429", "balance", "insufficient", "limit", "quota", "rate",
-        "budget", "余额", "次数", "额度", "限流",
+        "insufficient balance",
+        "balance insufficient",
+        "daily call budget",
+        "余额",
+        "额度",
+        "限流",
     )
     return any(hint in message for hint in hints)
+
+
+def _message_contains_status_code(message: str, status_codes: set[int]) -> bool:
+    for match in re.finditer(r"(?<!\d)(\d{3})(?!\d)", message):
+        if int(match.group(1)) in status_codes:
+            return True
+    return False
 
 
 def _looks_like_formula_daily_budget_error(exc: Exception) -> bool:
@@ -1481,10 +1519,13 @@ class Indexer:
             if status_jsonl == ""
             else Path(status_jsonl).expanduser() if status_jsonl is not None else None
         )
-        matched_items, matched_skipped = self._formula_backfill_selection(
+        raw_items = self._formula_backfill_candidate_items(
             item_key=item_key,
             item_keys=item_keys,
         )
+        matched_item_pairs = self._formula_backfill_original_item_pairs(raw_items)
+        matched_items = [item for item, reason in matched_item_pairs if not reason]
+        matched_skipped = [(item, reason) for item, reason in matched_item_pairs if reason]
         matched_keys = {item.item_key for item in matched_items}
         matched_keys.update(item.item_key for item, _reason in matched_skipped)
         requested_keys = (
@@ -1501,12 +1542,13 @@ class Indexer:
             resume_after is None
             or resume_after in matched_keys
         )
-        items, skipped_items = self._formula_backfill_selection(
-            item_key=item_key,
-            item_keys=item_keys,
+        selected_item_pairs = _slice_formula_backfill_item_pairs(
+            matched_item_pairs,
             limit=limit,
             resume_after=resume_after,
         )
+        items = [item for item, reason in selected_item_pairs if not reason]
+        skipped_items = [(item, reason) for item, reason in selected_item_pairs if reason]
 
         from .feature_extraction.formula_ocr import count_formula_provider_calls
 
@@ -2036,6 +2078,8 @@ class Indexer:
         page_max: int | None = None,
         sample_size: int | None = None,
         sample_seed: int = 0,
+        include_high_density: bool = False,
+        allow_candidate_quality_warnings: bool = False,
     ) -> dict:
         """Estimate formula OCR candidate volume without OCR calls or index writes."""
         self._assert_config_hash_current()
@@ -2162,6 +2206,7 @@ class Indexer:
             if (
                 high_density_candidate_threshold > 0
                 and item_key is None
+                and not include_high_density
                 and candidate_preview_limit >= 0
                 and not partial_page_estimate
             )
@@ -2199,7 +2244,9 @@ class Indexer:
                 candidate_threshold=high_density_candidate_threshold,
                 data_egress=has_external_egress,
             )
-            is_deferred_high_density = bool(high_density_trigger and item_key is None)
+            is_deferred_high_density = bool(
+                high_density_trigger and item_key is None and not include_high_density
+            )
             high_density_scan_limited = (
                 bool(high_density_trigger)
                 and batch_candidate_scan_limit > 0
@@ -2226,8 +2273,10 @@ class Indexer:
             if candidates:
                 candidate_audit = _formula_candidate_audit(candidates)
                 row["candidate_audit"] = candidate_audit
-                candidate_quality_review_reasons = _formula_candidate_blocking_review_reasons(
-                    candidate_audit
+                candidate_quality_review_reasons = (
+                    []
+                    if allow_candidate_quality_warnings
+                    else _formula_candidate_blocking_review_reasons(candidate_audit)
                 )
                 if candidate_quality_review_reasons:
                     candidate_quality_blocking_papers.append(
@@ -2423,6 +2472,13 @@ class Indexer:
             next_action = (
                 "Resolve unmatched requested item keys before treating this formula estimate as complete."
             )
+        write_block_reasons: list[str] = []
+        if candidate_quality_blocking_papers:
+            write_block_reasons.append("candidate_quality_review_required")
+        if deferred_high_density_candidates:
+            write_block_reasons.append("high_density_deferred")
+        write_blocked = bool(write_block_reasons)
+        write_review_required = False
         summary = {
             "papers": processed,
             "selected": selected,
@@ -2451,6 +2507,11 @@ class Indexer:
             "page_min": page_min or 0,
             "page_max": page_max or 0,
             "page_range_estimate": partial_page_estimate,
+            "include_high_density": include_high_density,
+            "allow_candidate_quality_warnings": allow_candidate_quality_warnings,
+            "write_blocked": write_blocked,
+            "write_review_required": write_review_required,
+            "write_block_reasons": write_block_reasons,
             "dense_formula_paper_count": len(dense_formula_papers),
             "high_density_backfill_plan_count": len(high_density_backfill_plans),
             "scan_limited_high_density_paper_count": len(scan_limited_high_density_papers),
@@ -2496,6 +2557,11 @@ class Indexer:
             "page_min": page_min or 0,
             "page_max": page_max or 0,
             "page_range_estimate": partial_page_estimate,
+            "include_high_density": include_high_density,
+            "allow_candidate_quality_warnings": allow_candidate_quality_warnings,
+            "write_blocked": write_blocked,
+            "write_review_required": write_review_required,
+            "write_block_reasons": write_block_reasons,
             "high_call_papers": high_call_papers,
             "dense_formula_papers": dense_formula_papers,
             "high_density_backfill_plans": high_density_backfill_plans,
@@ -2584,8 +2650,16 @@ class Indexer:
         self,
         items: list[ZoteroItem],
     ) -> tuple[list[ZoteroItem], list[tuple[ZoteroItem, str]]]:
-        selected: list[ZoteroItem] = []
-        skipped_items: list[tuple[ZoteroItem, str]] = []
+        item_pairs = self._formula_backfill_original_item_pairs(items)
+        selected = [item for item, reason in item_pairs if not reason]
+        skipped_items = [(item, reason) for item, reason in item_pairs if reason]
+        return selected, skipped_items
+
+    def _formula_backfill_original_item_pairs(
+        self,
+        items: list[ZoteroItem],
+    ) -> list[tuple[ZoteroItem, str]]:
+        item_pairs: list[tuple[ZoteroItem, str]] = []
         for item in items:
             original_pdf_path = None
             resolver = getattr(self.zotero, "resolve_original_pdf_path", None)
@@ -2596,14 +2670,14 @@ class Indexer:
                     fallback_path=item.pdf_path,
                 )
             if isinstance(original_pdf_path, Path) and original_pdf_path != item.pdf_path:
-                item.pdf_path = original_pdf_path
-            if is_likely_bilingual_or_translated_pdf(item.pdf_path):
-                skipped_items.append((item, "bilingual_or_translated_pdf"))
+                item = replace(item, pdf_path=original_pdf_path)
+            if item.pdf_path is None or is_likely_bilingual_or_translated_pdf(item.pdf_path):
+                item_pairs.append((item, "bilingual_or_translated_pdf"))
             elif pdf_content_translation_risk_score(item.pdf_path, title=item.title) >= 20.0:
-                skipped_items.append((item, "bilingual_or_translated_pdf_content"))
+                item_pairs.append((item, "bilingual_or_translated_pdf_content"))
             else:
-                selected.append(item)
-        return selected, skipped_items
+                item_pairs.append((item, ""))
+        return item_pairs
 
     def _formula_backfill_items(
         self,

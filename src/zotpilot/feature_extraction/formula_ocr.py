@@ -162,17 +162,11 @@ SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
 SIMPLETEX_STOP_STATUS_CODES = {401, 402, 429}
+SIMPLETEX_EXHAUSTED_STOP_STATUS_CODES = {500, 502, 503, 504}
 SIMPLETEX_STOP_ERROR_HINTS = (
-    "401",
-    "402",
-    "429",
-    "balance",
-    "insufficient",
-    "limit",
-    "quota",
-    "rate",
+    "insufficient balance",
+    "balance insufficient",
     "余额",
-    "次数",
     "额度",
     "限流",
 )
@@ -1393,7 +1387,28 @@ def _should_stop_formula_batch(exc: Exception) -> bool:
         if status_code in SIMPLETEX_STOP_STATUS_CODES:
             return True
     message = str(exc).lower()
+    if _contains_http_status_code(message, SIMPLETEX_STOP_STATUS_CODES):
+        return True
+    exhausted_retries = "exhausted retries" in message
+    if exhausted_retries and (
+        "request error" in message
+        or _contains_http_status_code(message, SIMPLETEX_EXHAUSTED_STOP_STATUS_CODES)
+    ):
+        return True
+    if "daily call budget" in message and "exhausted" in message:
+        return True
+    if re.search(r"\bquota\b", message):
+        return True
+    if re.search(r"\brate[-\s]?limit(?:ed|s)?\b", message):
+        return True
     return any(hint in message for hint in SIMPLETEX_STOP_ERROR_HINTS)
+
+
+def _contains_http_status_code(message: str, status_codes: set[int]) -> bool:
+    for match in re.finditer(r"(?<!\d)(\d{3})(?!\d)", message):
+        if int(match.group(1)) in status_codes:
+            return True
+    return False
 
 
 def _simpletex_app_headers(data: dict[str, str], app_id: str, app_secret: str) -> dict[str, str]:

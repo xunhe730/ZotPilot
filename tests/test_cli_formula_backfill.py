@@ -3,6 +3,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 def test_estimate_formula_backfill_cli_ignores_simpletex_auth_for_read_only_estimate(capsys):
     from zotpilot.cli import cmd_estimate_formula_backfill
@@ -873,6 +875,8 @@ def test_index_formulas_cli_dry_run_uses_estimate_without_lease(tmp_path, capsys
         "daily_call_budget": 1800,
         "estimated_runs": 1,
         "data_egress": True,
+        "write_blocked": False,
+        "write_review_required": False,
         "summary": {"next_action": "Review candidates.", "warnings": []},
         "results": [
             {
@@ -915,6 +919,10 @@ def test_index_formulas_cli_dry_run_uses_estimate_without_lease(tmp_path, capsys
                 page_max=None,
                 sample_size=None,
                 sample_seed=0,
+                include_high_density=True,
+                allow_candidate_quality_warnings=True,
+                fail_on_write_blocked=True,
+                fail_on_review_required=True,
                 json=False,
             )
         )
@@ -941,7 +949,154 @@ def test_index_formulas_cli_dry_run_uses_estimate_without_lease(tmp_path, capsys
         page_max=None,
         sample_size=None,
         sample_seed=0,
+        include_high_density=True,
+        allow_candidate_quality_warnings=True,
     )
+
+
+def test_index_formulas_dry_run_cli_can_fail_on_write_blocked(tmp_path, capsys):
+    from zotpilot.cli import cmd_index_formulas
+
+    config = MagicMock()
+    config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
+    config.formula_ocr_enabled = True
+    config.chroma_db_path = tmp_path / "chroma"
+    indexer = MagicMock()
+    indexer.estimate_formula_backfill.return_value = {
+        "provider": "simpletex",
+        "candidate_provider": "mineru_cache",
+        "processed": 1,
+        "candidate_count": 12,
+        "estimated_provider_calls": 0,
+        "estimated_external_calls": 0,
+        "daily_call_budget": 1800,
+        "data_egress": False,
+        "write_blocked": True,
+        "write_review_required": False,
+        "summary": {"next_action": "Review high-density documents first.", "warnings": []},
+        "results": [],
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = cmd_index_formulas(
+            SimpleNamespace(
+                config="config.json",
+                item_key=None,
+                item_keys=None,
+                limit=None,
+                dry_run=True,
+                preview_candidates=0,
+                preview_all_candidates=False,
+                preview_chars=160,
+                daily_call_budget=1800,
+                resume_after=None,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                include_high_density=False,
+                allow_candidate_quality_warnings=False,
+                fail_on_write_blocked=True,
+                fail_on_review_required=True,
+                fail_on_candidate_quality_blocked=False,
+                fail_on_unmatched=False,
+                json=False,
+            )
+        )
+
+    assert rc == 2
+
+
+def test_index_formulas_dry_run_cli_can_fail_on_review_required(tmp_path, capsys):
+    from zotpilot.cli import cmd_index_formulas
+
+    config = MagicMock()
+    config.validate.return_value = ["SimpleTex formula OCR requires formula_ocr_simpletex_token"]
+    config.formula_ocr_enabled = True
+    config.chroma_db_path = tmp_path / "chroma"
+    indexer = MagicMock()
+    indexer.estimate_formula_backfill.return_value = {
+        "provider": "simpletex",
+        "candidate_provider": "mineru_cache",
+        "processed": 1,
+        "candidate_count": 2,
+        "estimated_provider_calls": 0,
+        "estimated_external_calls": 0,
+        "daily_call_budget": 1800,
+        "data_egress": False,
+        "write_blocked": False,
+        "write_review_required": True,
+        "summary": {"next_action": "Review sampled formulas after writing.", "warnings": []},
+        "results": [],
+    }
+
+    with (
+        patch("zotpilot.cli.resolve_runtime_config", return_value=config),
+        patch("zotpilot.indexer.Indexer.for_formula_estimate", return_value=indexer),
+    ):
+        rc = cmd_index_formulas(
+            SimpleNamespace(
+                config="config.json",
+                item_key="DOC1",
+                item_keys=None,
+                limit=None,
+                dry_run=True,
+                preview_candidates=0,
+                preview_all_candidates=False,
+                preview_chars=160,
+                daily_call_budget=1800,
+                resume_after=None,
+                pdf_fallback_max_pages=None,
+                cache_pdf_number_enrichment=False,
+                page_min=None,
+                page_max=None,
+                sample_size=None,
+                sample_seed=0,
+                include_high_density=False,
+                allow_candidate_quality_warnings=False,
+                fail_on_write_blocked=True,
+                fail_on_review_required=True,
+                fail_on_candidate_quality_blocked=False,
+                fail_on_unmatched=False,
+                json=False,
+            )
+        )
+
+    assert rc == 3
+
+
+def test_index_formulas_parser_rejects_item_key_and_item_keys_together():
+    from zotpilot.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["index-formulas", "--dry-run", "--item-key", "DOC1", "--item-keys", "DOC2"])
+
+    assert exc.value.code == 2
+
+
+def test_index_formulas_parser_rejects_page_window_without_single_item_scope():
+    from zotpilot.cli import main
+
+    with patch("zotpilot.cli.resolve_runtime_config", side_effect=AssertionError("config should not load")):
+        with pytest.raises(SystemExit) as exc:
+            main(["index-formulas", "--dry-run", "--item-keys", "DOC1", "DOC2", "--page-min", "4"])
+
+    assert exc.value.code == 2
+
+
+def test_index_formulas_parser_rejects_negative_preview_chars():
+    from zotpilot.cli import main
+
+    with patch("zotpilot.cli.resolve_runtime_config", side_effect=AssertionError("config should not load")):
+        with pytest.raises(SystemExit) as exc:
+            main(["index-formulas", "--dry-run", "--item-key", "DOC1", "--preview-chars", "-1"])
+
+    assert exc.value.code == 2
 
 
 def test_index_formulas_dry_run_cli_can_fail_on_candidate_quality_blocked(tmp_path, capsys):

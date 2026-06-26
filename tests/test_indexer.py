@@ -1210,6 +1210,17 @@ class TestFormulaBackfill:
         indexer.store.replace_formulas.assert_called_once()
         indexer.store.add_formulas.assert_not_called()
 
+    def test_formula_quota_error_classifier_requires_specific_quota_signals(self):
+        from zotpilot.indexer import _looks_like_formula_quota_error
+
+        assert _looks_like_formula_quota_error(RuntimeError("HTTP 402: insufficient balance"))
+        assert _looks_like_formula_quota_error(RuntimeError("HTTP 429: too many requests"))
+        assert _looks_like_formula_quota_error(RuntimeError("quota exceeded"))
+        assert _looks_like_formula_quota_error(RuntimeError("SimpleTex 余额不足"))
+
+        assert not _looks_like_formula_quota_error(RuntimeError("401 unauthorized"))
+        assert not _looks_like_formula_quota_error(RuntimeError("generate delimiter recovery failed"))
+
     def test_formula_backfill_requires_positive_config_budget_for_default_simpletex_run(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ZoteroItem
@@ -1328,8 +1339,9 @@ class TestFormulaBackfill:
 
         assert result["processed"] == 1
         assert result["skipped"] == 0
-        assert item.pdf_path == original_pdf
+        assert item.pdf_path == translated_pdf
         assert extract.call_count == 1
+        assert extract.call_args.args[0] == original_pdf
         indexer.zotero.resolve_original_pdf_path.assert_any_call(
             "DOC1",
             title="Paper",
@@ -1444,7 +1456,7 @@ class TestFormulaBackfill:
 
         assert result["processed"] == 1
         assert result["results"][0]["item_key"] == "DOC1"
-        assert indexer.zotero.get_item.call_count == 2
+        assert indexer.zotero.get_item.call_count == 1
         indexer.zotero.get_item.assert_called_with("DOC1")
         indexer.zotero.get_all_items_with_pdfs.assert_not_called()
 
@@ -1945,7 +1957,7 @@ class TestFormulaBackfill:
         assert result["high_density_backfill_plans"][0]["segments"][1]["formula_index_offset"] == 2
         assert result["summary"]["high_density_backfill_plan_count"] == 1
 
-    def test_high_density_page_window_plan_flags_suspicious_equation_number_ordering(self, tmp_path):
+    def test_high_density_page_window_plan_audits_equation_numbers_in_review_order(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
         from zotpilot.indexer import Indexer
         from zotpilot.models import ZoteroItem
@@ -1983,30 +1995,27 @@ class TestFormulaBackfill:
 
         audit = result["results"][0]["candidate_audit"]
         assert audit["equation_number_prefixes"] == ["regular"]
-        assert audit["equation_number_warnings"] == [
-            "equation_number_regression",
-            "large_equation_number_gap",
-        ]
+        assert audit["equation_number_warnings"] == ["missing_equation_number_gap"]
         assert audit["equation_number_sequence_breaks"] == [
             {
                 "previous": "(1)",
-                "current": "(8)",
-                "prefix": "regular",
-                "reason": "large_gap",
-                "gap": 7,
-            },
-            {
-                "previous": "(8)",
                 "current": "(3)",
                 "prefix": "regular",
-                "reason": "regression",
+                "reason": "missing_gap",
+                "gap": 2,
+                "missing_count": 1,
+            },
+            {
+                "previous": "(3)",
+                "current": "(8)",
+                "prefix": "regular",
+                "reason": "missing_gap",
+                "gap": 5,
+                "missing_count": 4,
             },
         ]
         plan = result["high_density_backfill_plans"][0]
-        assert plan["equation_number_warnings"] == [
-            "equation_number_regression",
-            "large_equation_number_gap",
-        ]
+        assert plan["equation_number_warnings"] == ["missing_equation_number_gap"]
         assert plan["segments"][0]["equation_number_warnings"] == ["large_equation_number_gap"]
 
     def test_high_density_page_window_plan_preserves_provider_order_within_page(self, tmp_path):
@@ -2110,6 +2119,48 @@ class TestFormulaBackfill:
         assert segment["last_equation_number"] == "(4.30)"
         assert segment["equation_number_sequence_breaks"] == []
         assert "equation_number_regression" not in segment["equation_number_warnings"]
+
+    def test_formula_candidate_audit_uses_equation_review_order(self):
+        from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
+        from zotpilot.indexer import _formula_candidate_audit
+
+        page_ordered_candidates = [
+            FormulaCandidate(
+                page_num=128,
+                bbox=(40, 140, 130, 158),
+                raw_text=r"\sigma_{28}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.28)",
+            ),
+            FormulaCandidate(
+                page_num=128,
+                bbox=(40, 180, 130, 198),
+                raw_text=r"\sigma_{30}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.30)",
+            ),
+            FormulaCandidate(
+                page_num=129,
+                bbox=(40, 120, 130, 138),
+                raw_text=r"\sigma_{27}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.27)",
+            ),
+            FormulaCandidate(
+                page_num=132,
+                bbox=(40, 160, 130, 178),
+                raw_text=r"\sigma_{29}=E\epsilon",
+                confidence=0.95,
+                equation_number="(4.29)",
+            ),
+        ]
+
+        audit = _formula_candidate_audit(page_ordered_candidates)
+
+        assert audit["first_equation_number"] == "(4.27)"
+        assert audit["last_equation_number"] == "(4.30)"
+        assert audit["equation_number_sequence_breaks"] == []
+        assert "equation_number_regression" not in audit["equation_number_warnings"]
 
     def test_estimate_formula_backfill_flags_missing_equation_number_gap(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
@@ -3172,6 +3223,33 @@ class TestFormulaBackfill:
         assert events[2]["write_blocked"] is False
         assert events[2]["low_confidence_review_count"] == 0
 
+    def test_formula_backfill_state_appends_event_with_single_write(self, tmp_path, monkeypatch):
+        from zotpilot import indexer as indexer_mod
+
+        writes: list[str] = []
+
+        class RecordingFile:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def write(self, text: str):
+                writes.append(text)
+                return len(text)
+
+        monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: RecordingFile())
+
+        indexer_mod._append_formula_backfill_state(
+            tmp_path / "state.jsonl",
+            {"event": "formula_backfill_run_finished", "processed": 1},
+        )
+
+        assert len(writes) == 1
+        assert writes[0].endswith("\n")
+        assert json.loads(writes[0])["processed"] == 1
+
     def test_formula_backfill_jsonl_records_unmatched_requested_item_keys(self, tmp_path):
         from zotpilot.feature_extraction.formula_ocr import FormulaCandidate
         from zotpilot.indexer import Indexer
@@ -3450,12 +3528,14 @@ class TestFormulaBackfill:
                 item_key="DOC1",
                 daily_call_budget=1800,
                 pdf_fallback_max_pages=0,
+                status_jsonl=str(tmp_path / "formula-status.jsonl"),
             )
 
         assert result["processed"] == 1
         assert calls["item_key"] == "DOC1"
         assert calls["daily_call_budget"] == 1800
         assert calls["pdf_fallback_max_pages"] == 0
+        assert calls["status_jsonl"] == str(tmp_path / "formula-status.jsonl")
         store.clear_query_cache.assert_called_once()
 
     def test_estimate_formula_backfill_tool_forwards_pdf_fallback_page_limit(self, tmp_path):

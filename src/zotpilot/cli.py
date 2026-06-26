@@ -1021,6 +1021,10 @@ def _formula_estimate_exit_code(args: object, result: dict[str, object]) -> int:
     """Return the CLI exit code for formula backfill estimate guard outcomes."""
     if getattr(args, "fail_on_unmatched", False) and _unmatched_requested_item_count(result) > 0:
         return 5
+    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
+        return 2
+    if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
+        return 3
     if (
         getattr(args, "fail_on_candidate_quality_blocked", False)
         and int(result.get("candidate_quality_blocking_paper_count") or 0) > 0
@@ -1078,6 +1082,8 @@ def cmd_index_formulas(args):
                     page_max=getattr(args, "page_max", None),
                     sample_size=getattr(args, "sample_size", None),
                     sample_seed=getattr(args, "sample_seed", 0),
+                    include_high_density=getattr(args, "include_high_density", False),
+                    allow_candidate_quality_warnings=getattr(args, "allow_candidate_quality_warnings", False),
                 ),
                 json_output=args.json,
             )
@@ -1110,7 +1116,7 @@ def cmd_index_formulas(args):
             daily_call_budget=getattr(args, "daily_call_budget", None),
             resume_after=getattr(args, "resume_after", None),
             stop_on_quota=not getattr(args, "no_stop_on_quota", False),
-            status_jsonl=("" if status_jsonl == "" else status_jsonl),
+            status_jsonl=status_jsonl,
             low_confidence_threshold=getattr(args, "low_confidence_threshold", None),
             include_high_density=getattr(args, "include_high_density", False),
             allow_candidate_quality_warnings=getattr(args, "allow_candidate_quality_warnings", False),
@@ -1239,6 +1245,23 @@ def cmd_estimate_formula_backfill(args):
 
     _print_formula_backfill_estimate(result, preview_limit=preview_limit)
     return _formula_estimate_exit_code(args, result)
+
+
+def _validate_formula_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.command not in {"index-formulas", "estimate-formula-backfill"}:
+        return
+    preview_chars = getattr(args, "preview_chars", 0)
+    if preview_chars is not None and preview_chars < 0:
+        parser.error("--preview-chars must be >= 0")
+    page_min = getattr(args, "page_min", None)
+    page_max = getattr(args, "page_max", None)
+    if page_min is None and page_max is None:
+        return
+    item_key = getattr(args, "item_key", None)
+    item_keys = getattr(args, "item_keys", None)
+    if item_key or (item_keys is not None and len(item_keys) == 1):
+        return
+    parser.error("--page-min/--page-max require --item-key or exactly one --item-keys value")
 
 
 def cmd_status(args):
@@ -2250,8 +2273,9 @@ def main(argv: list[str] | None = None) -> int:
         "index-formulas",
         help="Backfill formula chunks for already-indexed papers",
     )
-    sub_index_formulas.add_argument("--item-key", type=str, default=None, help="Backfill one Zotero item key")
-    sub_index_formulas.add_argument(
+    index_formula_scope = sub_index_formulas.add_mutually_exclusive_group()
+    index_formula_scope.add_argument("--item-key", type=str, default=None, help="Backfill one Zotero item key")
+    index_formula_scope.add_argument(
         "--item-keys",
         nargs="+",
         default=None,
@@ -2395,8 +2419,9 @@ def main(argv: list[str] | None = None) -> int:
         "estimate-formula-backfill",
         help="Estimate formula OCR backfill volume without writing the index",
     )
-    sub_formula_estimate.add_argument("--item-key", type=str, default=None, help="Estimate one Zotero item key")
-    sub_formula_estimate.add_argument(
+    formula_estimate_scope = sub_formula_estimate.add_mutually_exclusive_group()
+    formula_estimate_scope.add_argument("--item-key", type=str, default=None, help="Estimate one Zotero item key")
+    formula_estimate_scope.add_argument(
         "--item-keys",
         nargs="+",
         default=None,
@@ -2605,6 +2630,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_register.set_defaults(func=cmd_register)
 
     args = parser.parse_args(argv)
+    _validate_formula_cli_args(parser, args)
 
     if not args.command:
         # Default: run MCP server — signal state.py to start parent monitor

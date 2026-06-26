@@ -410,6 +410,15 @@ def index_formulas(
         bool,
         Field(description="Stop the batch immediately on quota, balance, or rate-limit provider errors"),
     ] = True,
+    status_jsonl: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Append per-paper formula backfill status to this JSONL path; "
+                "None disables status writes and an empty string uses ZotPilot's default state path"
+            )
+        ),
+    ] = None,
     low_confidence_threshold: Annotated[
         float | None,
         Field(description="Return recognized formulas below this confidence in a review queue", ge=0.0, le=1.0),
@@ -491,7 +500,7 @@ def index_formulas(
                 daily_call_budget=daily_call_budget,
                 resume_after=resume_after,
                 stop_on_quota=stop_on_quota,
-                status_jsonl="",
+                status_jsonl=status_jsonl,
                 low_confidence_threshold=low_confidence_threshold,
                 include_high_density=include_high_density,
                 allow_candidate_quality_warnings=allow_candidate_quality_warnings,
