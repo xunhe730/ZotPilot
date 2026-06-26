@@ -18,7 +18,7 @@ import time
 import zipfile
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 import httpx
 import pymupdf
@@ -109,6 +109,7 @@ MAX_FORMULA_CACHE_ZIP_MEMBERS = 128
 MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES = 100 * 1024 * 1024
 MAX_FORMULA_CACHE_JSON_DEPTH = 256
 MIN_CACHE_KEY_SUBSTRING_LENGTH = 8
+MINERU_JSON_CACHE_NAMES = {"content_list.json", "content_list_v2.json", "middle.json", "manifest.json"}
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
@@ -373,9 +374,39 @@ class AutoFormulaCandidateProvider:
         )
 
 
-class MinerUJsonFormulaCandidateProvider(MinerUCacheFormulaCandidateProvider):
-    """Read candidates from generic MinerU JSON/Markdown output paths."""
+class MinerUJsonFormulaCandidateProvider:
+    """Read candidates from explicit structured MinerU JSON output paths."""
     name = "mineru_json"
+
+    def __init__(self, cache_dirs: tuple[str, ...] = ()) -> None:
+        self._cache_dirs = tuple(Path(path).expanduser() for path in cache_dirs if path)
+
+    def extract_candidates(
+        self,
+        pdf_path: Path | str,
+        *,
+        item_key: str | None = None,
+        cache_paths: tuple[Path | str, ...] | None = None,
+        max_formulas_per_doc: int = 40,
+        max_formulas_per_page: int = 6,
+        min_confidence: float = 0.6,
+    ) -> list[FormulaCandidate]:
+        del max_formulas_per_page, min_confidence
+        candidates: list[FormulaCandidate] = []
+        for cache_path in _mineru_json_candidate_cache_paths(
+            pdf_path,
+            item_key=item_key,
+            cache_dirs=self._cache_dirs,
+            cache_paths=cache_paths,
+        ):
+            candidates.extend(_parse_mineru_json_candidates(cache_path, allowed_cache_path=_is_mineru_json_cache_path))
+        candidates = _dedupe_candidates(candidates)
+        cached = [candidate for candidate in candidates if candidate.latex.strip()]
+        needs_ocr = [candidate for candidate in candidates if not candidate.latex.strip()]
+        ordered = cached + needs_ocr
+        if max_formulas_per_doc > 0:
+            ordered = ordered[:max_formulas_per_doc]
+        return ordered
 
 
 FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider] | type[SimpleTexFormulaOCRProvider]] = {
@@ -796,6 +827,31 @@ def _candidate_cache_paths(
     return _unique_paths(found)
 
 
+def _mineru_json_candidate_cache_paths(
+    pdf_path: Path | str,
+    *,
+    item_key: str | None,
+    cache_dirs: tuple[Path, ...],
+    cache_paths: tuple[Path | str, ...] | None,
+) -> list[Path]:
+    roots = [Path(path).expanduser() for path in cache_paths or ()]
+    roots.extend(cache_dirs)
+    keys = _cache_lookup_keys(pdf_path, item_key=item_key)
+    found: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            if _is_mineru_json_cache_path(root):
+                found.append(root)
+            continue
+        if not root.is_dir():
+            continue
+        root_found = _mineru_json_paths_in_directory(root, keys)
+        if not root_found:
+            root_found = _bounded_mineru_json_scan(root, keys)
+        found.extend(root_found)
+    return _unique_paths(found)
+
+
 def _cache_lookup_keys(pdf_path: Path | str, *, item_key: str | None) -> set[str]:
     path = Path(pdf_path)
     keys = {path.stem.lower(), path.parent.name.lower()}
@@ -831,6 +887,29 @@ def _cache_paths_in_directory(directory: Path, keys: set[str], *, root: Path) ->
     return found
 
 
+def _mineru_json_paths_in_directory(directory: Path, keys: set[str]) -> list[Path]:
+    found: list[Path] = []
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return found
+    for path in children:
+        if path.is_file() and _is_mineru_json_cache_path(path):
+            found.append(path)
+    if found:
+        return found
+    for child in children:
+        if not child.is_dir() or (keys and child.name.lower() not in keys):
+            continue
+        try:
+            for path in child.iterdir():
+                if path.is_file() and _is_mineru_json_cache_path(path):
+                    found.append(path)
+        except OSError:
+            continue
+    return found
+
+
 def _bounded_cache_scan(root: Path, keys: set[str], *, max_entries: int = 20000) -> list[Path]:
     found: list[Path] = []
     visited = 0
@@ -839,6 +918,18 @@ def _bounded_cache_scan(root: Path, keys: set[str], *, max_entries: int = 20000)
         if visited > max_entries:
             break
         if _is_safe_formula_cache_file(path, root=root) and _cache_path_matches_keys(path, keys):
+            found.append(path)
+    return found
+
+
+def _bounded_mineru_json_scan(root: Path, keys: set[str], *, max_entries: int = 20000) -> list[Path]:
+    found: list[Path] = []
+    visited = 0
+    for path in root.rglob("*"):
+        visited += 1
+        if visited > max_entries:
+            break
+        if path.is_file() and _is_mineru_json_cache_path(path) and _cache_path_matches_keys(path, keys):
             found.append(path)
     return found
 
@@ -853,6 +944,17 @@ def _cache_path_matches_keys(path: Path, keys: set[str]) -> bool:
     return any(
         len(key) >= MIN_CACHE_KEY_SUBSTRING_LENGTH and key in lower_path
         for key in keys
+    )
+
+
+def _is_mineru_json_cache_path(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        name in MINERU_JSON_CACHE_NAMES
+        or name.endswith("_content_list.json")
+        or name.endswith("_content_list_v2.json")
+        or name.endswith(".content_list.json")
+        or name.endswith(".content_list_v2.json")
     )
 
 
@@ -899,7 +1001,11 @@ def _path_is_within_root(path: Path, root: Path) -> bool:
         return False
 
 
-def _parse_mineru_json_candidates(path: Path) -> list[FormulaCandidate]:
+def _parse_mineru_json_candidates(
+    path: Path,
+    *,
+    allowed_cache_path: Callable[[Path], bool] = _is_formula_cache_path,
+) -> list[FormulaCandidate]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         candidates = _parse_mineru_json_payload(payload, source=_source_from_cache_path(path))
@@ -910,13 +1016,17 @@ def _parse_mineru_json_candidates(path: Path) -> list[FormulaCandidate]:
         logger.warning("Formula candidate cache %s is too deeply nested: %s", path, e)
         return []
     if path.name.lower() == "manifest.json":
-        for referenced_path in _manifest_referenced_cache_paths(payload, base_dir=path.parent):
+        for referenced_path in _manifest_referenced_cache_paths(
+            payload,
+            base_dir=path.parent,
+            allowed_cache_path=allowed_cache_path,
+        ):
             if referenced_path == path:
                 continue
             if referenced_path.suffix.lower() == ".md":
                 candidates.extend(_parse_mineru_markdown_candidates(referenced_path))
             else:
-                candidates.extend(_parse_mineru_json_candidates(referenced_path))
+                candidates.extend(_parse_mineru_json_candidates(referenced_path, allowed_cache_path=allowed_cache_path))
     return candidates
 
 
@@ -1009,7 +1119,12 @@ def _parse_mineru_json_payload(payload: Any, *, source: str) -> list[FormulaCand
     return candidates
 
 
-def _manifest_referenced_cache_paths(payload: Any, *, base_dir: Path) -> list[Path]:
+def _manifest_referenced_cache_paths(
+    payload: Any,
+    *,
+    base_dir: Path,
+    allowed_cache_path: Callable[[Path], bool] = _is_formula_cache_path,
+) -> list[Path]:
     paths: list[Path] = []
     try:
         base_root = base_dir.resolve()
@@ -1031,7 +1146,7 @@ def _manifest_referenced_cache_paths(payload: Any, *, base_dir: Path) -> list[Pa
             candidate = base_dir / candidate
         if not _path_is_within_root(candidate, base_root):
             continue
-        if candidate.exists() and candidate.is_file() and _is_formula_cache_path(candidate):
+        if candidate.exists() and candidate.is_file() and allowed_cache_path(candidate):
             paths.append(candidate)
     return _unique_paths(paths)
 
