@@ -347,6 +347,14 @@ class VectorStore:
         metadatas = []
 
         for formula in formulas:
+            equation_number = formula.equation_number.strip()
+            equation_number_status = (
+                formula.equation_number_status.strip()
+                or ("provided" if equation_number else "missing")
+            )
+            formula_locator = f"page {formula.page_num}, index #{formula.formula_index + 1}"
+            if equation_number:
+                formula_locator = f"{formula_locator}, equation {equation_number}"
             chunk_id = f"{doc_id}_formula_{formula.formula_index:04d}"
             text = formula.to_searchable_text()
             metadata = self._build_base_metadata(doc_id, doc_meta)
@@ -359,7 +367,9 @@ class VectorStore:
                 "formula_confidence": formula.confidence if formula.confidence is not None else 0.0,
                 "formula_has_confidence": formula.confidence is not None,
                 "formula_raw_text": formula.raw_text,
-                "formula_equation_number": formula.equation_number,
+                "formula_equation_number": equation_number,
+                "formula_equation_number_status": equation_number_status,
+                "formula_locator": formula_locator,
                 "formula_variable_gloss": formula.variable_gloss,
                 "formula_provider": formula.provider,
                 "formula_source": formula.source,

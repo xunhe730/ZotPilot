@@ -25,6 +25,8 @@ def _stored_chunk_to_retrieval_result(chunk) -> RetrievalResult:
         chunk_type=meta.get("chunk_type", "text"),
         formula_latex=meta.get("formula_latex", ""),
         formula_equation_number=meta.get("formula_equation_number", ""),
+        formula_equation_number_status=meta.get("formula_equation_number_status", ""),
+        formula_locator=meta.get("formula_locator", ""),
         formula_variable_gloss=meta.get("formula_variable_gloss", ""),
         formula_provider=meta.get("formula_provider", ""),
         formula_source=meta.get("formula_source", ""),
@@ -75,6 +77,8 @@ def _result_to_dict(r, verbosity: str = "full") -> dict:
         formula_payload = {
             "formula_latex": r.formula_latex,
             "equation_number": r.formula_equation_number,
+            "equation_number_status": r.formula_equation_number_status,
+            "formula_locator": r.formula_locator,
             "variable_gloss": r.formula_variable_gloss,
             "reference_context": r.reference_context,
             "formula_provider": r.formula_provider,

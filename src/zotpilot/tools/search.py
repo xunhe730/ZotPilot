@@ -596,6 +596,8 @@ def search_formulas(
             "page_num": r.page_num,
             "formula_index": meta.get("formula_index", r.chunk_index),
             "equation_number": meta.get("formula_equation_number", ""),
+            "equation_number_status": meta.get("formula_equation_number_status", ""),
+            "formula_locator": meta.get("formula_locator", ""),
             "latex": meta.get("formula_latex", r.formula_latex),
             "passage": r.text,
             "reference_context": meta.get("reference_context", ""),
