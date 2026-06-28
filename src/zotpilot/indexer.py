@@ -149,6 +149,7 @@ class Indexer:
         self._config_hash_path = config.chroma_db_path / "config_hash.txt"
         self.journal: IndexJournal | None = None
         self._formula_provider = None
+        self._formula_candidate_provider = None
         vision_provider = getattr(config, "vision_provider", "anthropic")
         if vision_provider not in ("anthropic", "dashscope"):
             vision_provider = "anthropic"
@@ -204,9 +205,22 @@ class Indexer:
             )
         return self._formula_provider
 
+    def _get_formula_candidate_provider(self):
+        """Create the configured formula candidate detector lazily."""
+        if self._formula_candidate_provider is None:
+            from .feature_extraction.formula_ocr import create_formula_candidate_provider
+
+            self._formula_candidate_provider = create_formula_candidate_provider(
+                getattr(self.config, "formula_candidate_provider", "text_layer"),
+                config=self.config,
+            )
+        return self._formula_candidate_provider
+
     def _ensure_formula_provider_available(self) -> None:
         """Fail fast when formula OCR is enabled but its optional extra is missing."""
         if getattr(self.config, "formula_ocr_enabled", False) is not True:
+            return
+        if getattr(self.config, "formula_candidate_provider", "text_layer") == "mineru_cache":
             return
         provider_name = getattr(self.config, "formula_ocr_provider", "unknown")
         try:
@@ -227,9 +241,25 @@ class Indexer:
             return []
         from .feature_extraction.formula_ocr import recognize_formulas
 
+        cache_paths: tuple[Path | str, ...] = ()
+        cache_path_resolver = getattr(self.zotero, "mineru_cache_paths_for_item", None)
+        if callable(cache_path_resolver):
+            try:
+                cache_paths = tuple(cache_path_resolver(item.item_key, pdf_path=item.pdf_path))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to resolve MinerU formula cache paths for %s: %s",
+                    item.item_key,
+                    exc,
+                )
+        candidate_provider_name = getattr(self.config, "formula_candidate_provider", "text_layer")
+        provider = None if candidate_provider_name == "mineru_cache" else self._get_formula_provider()
         return recognize_formulas(
             item.pdf_path,
-            self._get_formula_provider(),
+            provider,
+            candidate_provider=self._get_formula_candidate_provider(),
+            item_key=item.item_key,
+            cache_paths=cache_paths,
             max_formulas_per_doc=self.config.formula_ocr_max_formulas_per_doc,
             max_formulas_per_page=self.config.formula_ocr_max_formulas_per_page,
             min_confidence=self.config.formula_ocr_min_confidence,

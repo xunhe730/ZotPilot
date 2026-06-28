@@ -1229,6 +1229,8 @@ _SCALAR_TYPES = {
     "formula_ocr_simpletex_timeout": float,
     "formula_ocr_simpletex_min_interval": float,
     "formula_ocr_simpletex_max_retries": int,
+    "formula_candidate_provider": str,
+    "formula_candidate_cache_dirs": str,
 }
 
 

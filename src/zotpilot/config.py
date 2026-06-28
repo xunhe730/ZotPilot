@@ -140,6 +140,8 @@ class Config:
     # Formula OCR settings (optional, local-first, excluded from index config hash)
     formula_ocr_enabled: bool = False
     formula_ocr_provider: str = "local"
+    formula_candidate_provider: str = "text_layer"
+    formula_candidate_cache_dirs: str = ""
     formula_ocr_max_formulas_per_doc: int = 40
     formula_ocr_max_formulas_per_page: int = 6
     formula_ocr_min_confidence: float = 0.6
@@ -233,6 +235,8 @@ class Config:
             embedding_api_key=data.get("embedding_api_key", None),
             formula_ocr_enabled=data.get("formula_ocr_enabled", False),
             formula_ocr_provider=data.get("formula_ocr_provider", "local"),
+            formula_candidate_provider=data.get("formula_candidate_provider", "text_layer"),
+            formula_candidate_cache_dirs=data.get("formula_candidate_cache_dirs", ""),
             formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
             formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
             formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
@@ -297,6 +301,8 @@ class Config:
             "embedding_api_key": self.embedding_api_key,
             "formula_ocr_enabled": self.formula_ocr_enabled,
             "formula_ocr_provider": self.formula_ocr_provider,
+            "formula_candidate_provider": self.formula_candidate_provider,
+            "formula_candidate_cache_dirs": self.formula_candidate_cache_dirs,
             "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
             "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
             "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
@@ -399,12 +405,18 @@ class Config:
             elif not parsed.netloc:
                 errors.append(f"gemini_base_url is malformed: {self.gemini_base_url}")
 
-        from .feature_extraction.formula_ocr import FORMULA_OCR_PROVIDERS
+        from .feature_extraction.formula_ocr import FORMULA_CANDIDATE_PROVIDERS, FORMULA_OCR_PROVIDERS
 
         if self.formula_ocr_provider not in FORMULA_OCR_PROVIDERS:
             valid = ", ".join(repr(p) for p in FORMULA_OCR_PROVIDERS)
             errors.append(
                 f"Invalid formula_ocr_provider: {self.formula_ocr_provider}. "
+                f"Must be one of: {valid}"
+            )
+        if self.formula_candidate_provider not in FORMULA_CANDIDATE_PROVIDERS:
+            valid = ", ".join(repr(p) for p in FORMULA_CANDIDATE_PROVIDERS)
+            errors.append(
+                f"Invalid formula_candidate_provider: {self.formula_candidate_provider}. "
                 f"Must be one of: {valid}"
             )
         if self.formula_ocr_max_formulas_per_doc < 0:

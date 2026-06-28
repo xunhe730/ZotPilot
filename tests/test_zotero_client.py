@@ -130,6 +130,31 @@ class TestZoteroClient:
         assert items[0].pdf_path is not None
         assert items[0].publication == "Nature"
 
+    def test_mineru_cache_paths_for_item_returns_cache_matching_selected_pdf(self, zotero_db):
+        conn = sqlite3.connect(str(zotero_db / "zotero.sqlite"))
+        conn.executescript("""
+            INSERT INTO items (itemID, itemTypeID, key) VALUES (3, 14, 'CACHE001');
+            INSERT INTO itemAttachments
+                VALUES (3, 1, 'application/zip', 0, 'storage:LLM-for-Zotero-MinerU-cache-ATT001AA.zip');
+            INSERT INTO items (itemID, itemTypeID, key) VALUES (4, 14, 'CACHE002');
+            INSERT INTO itemAttachments
+                VALUES (4, 1, 'application/zip', 0, 'storage:LLM-for-Zotero-MinerU-cache-OTHER001.zip');
+        """)
+        conn.close()
+        matching_dir = zotero_db / "storage" / "CACHE001"
+        matching_dir.mkdir()
+        matching_cache = matching_dir / "LLM-for-Zotero-MinerU-cache-ATT001AA.zip"
+        matching_cache.write_bytes(b"zip")
+        other_dir = zotero_db / "storage" / "CACHE002"
+        other_dir.mkdir()
+        (other_dir / "LLM-for-Zotero-MinerU-cache-OTHER001.zip").write_bytes(b"zip")
+        pdf_path = zotero_db / "storage" / "ATT001AA" / "test.pdf"
+
+        client = ZoteroClient(zotero_db)
+        cache_paths = client.mineru_cache_paths_for_item("ITEM001", pdf_path=pdf_path)
+
+        assert cache_paths == [matching_cache]
+
     def test_get_all_collections(self, zotero_db):
         client = ZoteroClient(zotero_db)
         collections = client.get_all_collections()

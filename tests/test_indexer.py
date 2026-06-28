@@ -227,6 +227,63 @@ class TestFormulaBackfill:
 
         indexer._get_formula_provider.assert_not_called()
 
+    def test_formula_provider_preflight_skips_for_mineru_cache_only(self):
+        from zotpilot.indexer import Indexer
+
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            formula_ocr_enabled=True,
+            formula_ocr_provider="local",
+            formula_candidate_provider="mineru_cache",
+        )
+        indexer._get_formula_provider = MagicMock()
+
+        with patch("zotpilot.feature_extraction.formula_ocr.importlib.util.find_spec", return_value=None):
+            indexer._ensure_formula_provider_available()
+
+        indexer._get_formula_provider.assert_not_called()
+
+    def test_recognize_formulas_for_item_passes_mineru_cache_paths_without_ocr_provider(self, tmp_path):
+        from zotpilot.indexer import Indexer
+        from zotpilot.models import ZoteroItem
+
+        pdf_path = tmp_path / "storage" / "ATT001" / "paper.pdf"
+        pdf_path.parent.mkdir(parents=True)
+        pdf_path.write_bytes(b"%PDF-1.4")
+        cache_path = tmp_path / "storage" / "CACHE001" / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+        cache_path.parent.mkdir(parents=True)
+        cache_path.write_bytes(b"zip")
+        item = ZoteroItem(
+            item_key="DOC1",
+            title="Paper",
+            authors="Auth",
+            year=2024,
+            pdf_path=pdf_path,
+        )
+        candidate_provider = MagicMock()
+        indexer = Indexer.__new__(Indexer)
+        indexer.config = SimpleNamespace(
+            formula_candidate_provider="mineru_cache",
+            formula_ocr_max_formulas_per_doc=40,
+            formula_ocr_max_formulas_per_page=6,
+            formula_ocr_min_confidence=0.6,
+        )
+        indexer.zotero = MagicMock()
+        indexer.zotero.mineru_cache_paths_for_item.return_value = [cache_path]
+        indexer._get_formula_candidate_provider = MagicMock(return_value=candidate_provider)
+        indexer._get_formula_provider = MagicMock(side_effect=AssertionError("OCR provider should not be created"))
+
+        with patch("zotpilot.feature_extraction.formula_ocr.recognize_formulas", return_value=[]) as recognize:
+            indexer._recognize_formulas_for_item(item)
+
+        args, kwargs = recognize.call_args
+        assert args[0] == pdf_path
+        assert args[1] is None
+        assert kwargs["candidate_provider"] is candidate_provider
+        assert kwargs["item_key"] == "DOC1"
+        assert kwargs["cache_paths"] == (cache_path,)
+        indexer.zotero.mineru_cache_paths_for_item.assert_called_once_with("DOC1", pdf_path=pdf_path)
+
     def test_formula_backfill_keeps_existing_chunks_when_refresh_finds_none(self, tmp_path):
         from zotpilot.indexer import Indexer
         from zotpilot.models import ZoteroItem
