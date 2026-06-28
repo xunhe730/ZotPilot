@@ -91,9 +91,16 @@ class TestConfigSet:
         assert _coerce_value("formula_ocr_enabled", "true") is True
         assert _coerce_value("formula_candidate_provider", "mineru_cache") == "mineru_cache"
         assert _coerce_value("formula_candidate_cache_dirs", "C:/cache;D:/cache") == "C:/cache;D:/cache"
+        assert _coerce_value("formula_candidate_cache_pdf_number_enrichment", "true") is True
+        assert _coerce_value("formula_candidate_pdf_number_append_missing_candidates", "true") is True
+        assert _coerce_value("formula_candidate_pdf_fallback_max_pages", "0") == 0
         assert _coerce_value("formula_ocr_simpletex_timeout", "12.5") == 12.5
         assert _coerce_value("formula_ocr_simpletex_min_interval", "0.25") == 0.25
         assert _coerce_value("formula_ocr_simpletex_max_retries", "3") == 3
+        assert _coerce_value("formula_ocr_daily_call_budget", "1800") == 1800
+        assert _coerce_value("formula_ocr_low_confidence_threshold", "0.7") == 0.7
+        assert _coerce_value("formula_ocr_high_density_call_threshold", "80") == 80
+        assert _coerce_value("formula_ocr_high_density_candidate_threshold", "160") == 160
 
 
 class TestConfigCommand:

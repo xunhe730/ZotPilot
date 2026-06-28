@@ -139,9 +139,12 @@ class Config:
     embedding_api_key: str | None = None
     # Formula OCR settings (optional, local-first, excluded from index config hash)
     formula_ocr_enabled: bool = False
-    formula_ocr_provider: str = "local"
-    formula_candidate_provider: str = "text_layer"
+    formula_candidate_provider: str = "auto"
     formula_candidate_cache_dirs: str = ""
+    formula_candidate_cache_pdf_number_enrichment: bool = False
+    formula_candidate_pdf_number_append_missing_candidates: bool = False
+    formula_candidate_pdf_fallback_max_pages: int = 80
+    formula_ocr_provider: str = "local"
     formula_ocr_max_formulas_per_doc: int = 40
     formula_ocr_max_formulas_per_page: int = 6
     formula_ocr_min_confidence: float = 0.6
@@ -152,6 +155,10 @@ class Config:
     formula_ocr_simpletex_timeout: float = 30.0
     formula_ocr_simpletex_min_interval: float = 0.55
     formula_ocr_simpletex_max_retries: int = 2
+    formula_ocr_daily_call_budget: int = 0
+    formula_ocr_low_confidence_threshold: float = 0.0
+    formula_ocr_high_density_call_threshold: int = 80
+    formula_ocr_high_density_candidate_threshold: int = 160
 
     @classmethod
     def load(cls, path: Path | str | None = None) -> "Config":
@@ -234,9 +241,21 @@ class Config:
             embedding_base_url=data.get("embedding_base_url", None),
             embedding_api_key=data.get("embedding_api_key", None),
             formula_ocr_enabled=data.get("formula_ocr_enabled", False),
-            formula_ocr_provider=data.get("formula_ocr_provider", "local"),
-            formula_candidate_provider=data.get("formula_candidate_provider", "text_layer"),
+            formula_candidate_provider=data.get("formula_candidate_provider", "auto"),
             formula_candidate_cache_dirs=data.get("formula_candidate_cache_dirs", ""),
+            formula_candidate_cache_pdf_number_enrichment=data.get(
+                "formula_candidate_cache_pdf_number_enrichment",
+                False,
+            ),
+            formula_candidate_pdf_number_append_missing_candidates=data.get(
+                "formula_candidate_pdf_number_append_missing_candidates",
+                False,
+            ),
+            formula_candidate_pdf_fallback_max_pages=data.get(
+                "formula_candidate_pdf_fallback_max_pages",
+                80,
+            ),
+            formula_ocr_provider=data.get("formula_ocr_provider", "local"),
             formula_ocr_max_formulas_per_doc=data.get("formula_ocr_max_formulas_per_doc", 40),
             formula_ocr_max_formulas_per_page=data.get("formula_ocr_max_formulas_per_page", 6),
             formula_ocr_min_confidence=data.get("formula_ocr_min_confidence", 0.6),
@@ -250,6 +269,13 @@ class Config:
             formula_ocr_simpletex_timeout=data.get("formula_ocr_simpletex_timeout", 30.0),
             formula_ocr_simpletex_min_interval=data.get("formula_ocr_simpletex_min_interval", 0.55),
             formula_ocr_simpletex_max_retries=data.get("formula_ocr_simpletex_max_retries", 2),
+            formula_ocr_daily_call_budget=data.get("formula_ocr_daily_call_budget", 0),
+            formula_ocr_low_confidence_threshold=data.get("formula_ocr_low_confidence_threshold", 0.0),
+            formula_ocr_high_density_call_threshold=data.get("formula_ocr_high_density_call_threshold", 80),
+            formula_ocr_high_density_candidate_threshold=data.get(
+                "formula_ocr_high_density_candidate_threshold",
+                160,
+            ),
         )
 
     def save(self, path: Path | str | None = None) -> None:
@@ -300,9 +326,14 @@ class Config:
             "embedding_base_url": self.embedding_base_url,
             "embedding_api_key": self.embedding_api_key,
             "formula_ocr_enabled": self.formula_ocr_enabled,
-            "formula_ocr_provider": self.formula_ocr_provider,
             "formula_candidate_provider": self.formula_candidate_provider,
             "formula_candidate_cache_dirs": self.formula_candidate_cache_dirs,
+            "formula_candidate_cache_pdf_number_enrichment": self.formula_candidate_cache_pdf_number_enrichment,
+            "formula_candidate_pdf_number_append_missing_candidates": (
+                self.formula_candidate_pdf_number_append_missing_candidates
+            ),
+            "formula_candidate_pdf_fallback_max_pages": self.formula_candidate_pdf_fallback_max_pages,
+            "formula_ocr_provider": self.formula_ocr_provider,
             "formula_ocr_max_formulas_per_doc": self.formula_ocr_max_formulas_per_doc,
             "formula_ocr_max_formulas_per_page": self.formula_ocr_max_formulas_per_page,
             "formula_ocr_min_confidence": self.formula_ocr_min_confidence,
@@ -313,6 +344,10 @@ class Config:
             "formula_ocr_simpletex_timeout": self.formula_ocr_simpletex_timeout,
             "formula_ocr_simpletex_min_interval": self.formula_ocr_simpletex_min_interval,
             "formula_ocr_simpletex_max_retries": self.formula_ocr_simpletex_max_retries,
+            "formula_ocr_daily_call_budget": self.formula_ocr_daily_call_budget,
+            "formula_ocr_low_confidence_threshold": self.formula_ocr_low_confidence_threshold,
+            "formula_ocr_high_density_call_threshold": self.formula_ocr_high_density_call_threshold,
+            "formula_ocr_high_density_candidate_threshold": self.formula_ocr_high_density_candidate_threshold,
         }
         data = {key: value for key, value in data.items() if value is not None}
 
@@ -419,6 +454,16 @@ class Config:
                 f"Invalid formula_candidate_provider: {self.formula_candidate_provider}. "
                 f"Must be one of: {valid}"
             )
+        if (
+            self.formula_candidate_provider not in {"auto", "text_layer"}
+            and not str(self.formula_candidate_cache_dirs).strip()
+        ):
+            errors.append(
+                "formula_candidate_cache_dirs must be set when formula_candidate_provider "
+                "uses a cache or JSON adapter"
+            )
+        if self.formula_candidate_pdf_fallback_max_pages < 0:
+            errors.append("formula_candidate_pdf_fallback_max_pages must be >= 0")
         if self.formula_ocr_max_formulas_per_doc < 0:
             errors.append("formula_ocr_max_formulas_per_doc must be >= 0")
         if self.formula_ocr_max_formulas_per_page < 0:
@@ -431,6 +476,14 @@ class Config:
             errors.append("formula_ocr_simpletex_min_interval must be >= 0")
         if self.formula_ocr_simpletex_max_retries < 0:
             errors.append("formula_ocr_simpletex_max_retries must be >= 0")
+        if self.formula_ocr_daily_call_budget < 0:
+            errors.append("formula_ocr_daily_call_budget must be >= 0")
+        if not 0.0 <= self.formula_ocr_low_confidence_threshold <= 1.0:
+            errors.append("formula_ocr_low_confidence_threshold must be between 0.0 and 1.0")
+        if self.formula_ocr_high_density_call_threshold < 0:
+            errors.append("formula_ocr_high_density_call_threshold must be >= 0")
+        if self.formula_ocr_high_density_candidate_threshold < 0:
+            errors.append("formula_ocr_high_density_candidate_threshold must be >= 0")
         if self.formula_ocr_provider == "simpletex":
             simpletex_token = providers._resolve_secret(
                 self.formula_ocr_simpletex_token,

@@ -1,5 +1,7 @@
 """CLI entry point for ZotPilot."""
 import argparse
+import contextlib
+import dataclasses
 import json
 import logging
 import os
@@ -39,6 +41,54 @@ def _split_validate_errors(errors: list[str]) -> tuple[list[str], list[str]]:
     warnings = [e for e in errors if "_API_KEY not set" in e]
     blocking = [e for e in errors if e not in warnings]
     return blocking, warnings
+
+
+def _with_formula_cache_pdf_number_enrichment(config, enabled: bool):
+    """Return a runtime-only config with cache PDF number enrichment enabled."""
+    if not enabled:
+        return config
+    if dataclasses.is_dataclass(config):
+        return dataclasses.replace(
+            config,
+            formula_candidate_cache_pdf_number_enrichment=True,
+        )
+    setattr(config, "formula_candidate_cache_pdf_number_enrichment", True)
+    return config
+
+
+def _call_with_json_stdout_guard(callable_obj, *, json_output: bool):
+    """Keep CLI JSON stdout parseable when dependencies print progress text."""
+    if not json_output:
+        return callable_obj()
+    stdout_fd = 1
+    try:
+        saved_stdout_fd = os.dup(stdout_fd)
+    except OSError:
+        with contextlib.redirect_stdout(sys.stderr):
+            return callable_obj()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as captured_fd_stdout:
+            os.dup2(captured_fd_stdout.fileno(), stdout_fd)
+            with contextlib.redirect_stdout(sys.stderr):
+                result = callable_obj()
+            sys.stdout.flush()
+            os.dup2(saved_stdout_fd, stdout_fd)
+            captured_fd_stdout.seek(0)
+            captured_bytes = captured_fd_stdout.read()
+            if captured_bytes:
+                if hasattr(sys.stderr, "buffer"):
+                    sys.stderr.buffer.write(captured_bytes)
+                    sys.stderr.flush()
+                else:
+                    print(captured_bytes.decode(errors="replace"), file=sys.stderr, end="")
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.dup2(saved_stdout_fd, stdout_fd)
+        os.close(saved_stdout_fd)
+    return result
 
 
 def _import_register_secret_overrides(args, config_path: Path) -> bool:
@@ -846,6 +896,374 @@ def cmd_index(args):
     return 1 if result["failed"] > 0 and result["indexed"] == 0 else 0
 
 
+def _print_formula_backfill_estimate(result: dict, *, preview_limit: int = 0) -> None:
+    summary = result.get("summary", {})
+    print("Formula backfill estimate:")
+    print(f"  Provider:                  {result.get('provider', '')}")
+    print(f"  Candidate provider:        {result.get('candidate_provider', '')}")
+    print(f"  Papers:                    {result.get('processed', 0)}")
+    print(f"  Formula candidates:        {result.get('candidate_count', 0)}")
+    print(f"  Avg candidates / paper:    {result.get('average_candidates_per_paper', 0)}")
+    print(f"  Estimated provider calls:  {result.get('estimated_provider_calls', 0)}")
+    print(f"  Estimated external calls:  {result.get('estimated_external_calls', 0)}")
+    if "pdf_fallback_max_pages" in result:
+        page_limit = result.get("pdf_fallback_max_pages")
+        page_limit_label = "full document" if page_limit == 0 else str(page_limit)
+        print(f"  PDF fallback pages:        {page_limit_label}")
+    if result.get("deferred_high_density_provider_calls"):
+        print(f"  Normal-batch calls:        {result.get('normal_batch_estimated_provider_calls', 0)}")
+        print(f"  Deferred high-density:     {result.get('deferred_high_density_provider_calls', 0)}")
+    print(f"  Estimated minimum runtime: {result.get('estimated_min_duration', '0s')}")
+    if result.get("deferred_high_density_provider_calls"):
+        print(
+            "  Normal-batch runtime:      "
+            f"{result.get('normal_batch_estimated_min_duration', '0s')}"
+        )
+    page_min = result.get("page_min", 0)
+    page_max = result.get("page_max", 0)
+    if page_min or page_max:
+        page_range_label = f"{page_min or 1}-{page_max or 'end'}"
+        print(f"  Page range:               {page_range_label}")
+    print(f"  Daily call budget:         {result.get('daily_call_budget', 0)}")
+    print(f"  Estimated runs:            {result.get('estimated_runs', 1)}")
+    print(f"  Data egress:               {'yes' if result.get('data_egress') else 'no'}")
+    if result.get("candidate_quality_blocking_paper_count"):
+        print(f"  Candidate quality blocked: {result.get('candidate_quality_blocking_paper_count')}")
+    _print_unmatched_requested_items(
+        result,
+        count_label="  Unmatched requested:      ",
+        keys_label="  Missing item keys:        ",
+    )
+    if summary.get("next_action"):
+        print(f"\nNext: {summary['next_action']}")
+    warnings = summary.get("warnings") or []
+    if warnings:
+        print("\nWarnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    plans = result.get("high_density_backfill_plans") or []
+    if plans:
+        print("\nHigh-density page-window plan:")
+        for plan in plans:
+            print(
+                f"  {plan.get('item_key')}: {plan.get('segment_count', 0)} segment(s), "
+                f"pages {plan.get('page_min', 0)}-{plan.get('page_max', 0)}, "
+                f"{plan.get('estimated_provider_calls', 0)} OCR call(s)"
+            )
+            for segment in (plan.get("segments") or [])[:5]:
+                print(
+                    "    - segment "
+                    f"{segment.get('segment_index')}: pages {segment.get('page_min')}-{segment.get('page_max')}, "
+                    f"ordered candidates {segment.get('candidate_start')}-{segment.get('candidate_end')}, "
+                    f"formula ids {segment.get('formula_index_ranges') or '?'}, "
+                    f"OCR {segment.get('estimated_provider_calls')}, "
+                    f"equations {segment.get('first_equation_number') or '?'}.."
+                    f"{segment.get('last_equation_number') or '?'}"
+                )
+            if len(plan.get("segments") or []) > 5:
+                print("    - ... use --json to inspect all segments")
+    if preview_limit != 0:
+        print("\nCandidate preview:")
+        for row in result.get("results", []):
+            previews = row.get("candidate_preview") if isinstance(row, dict) else None
+            if not previews:
+                continue
+            print(f"  {row.get('item_key')}:")
+            for preview in previews:
+                text = preview.get("latex_preview") or preview.get("raw_text_preview") or ""
+                equation_number = preview.get("equation_number") or preview.get("equation_number_status") or "missing"
+                needs_ocr = "needs_ocr" if preview.get("needs_ocr") else "cached"
+                print(
+                    f"    - p{preview.get('page_num')} {equation_number} {preview.get('source')} "
+                    f"{needs_ocr} conf={preview.get('confidence')} latex={preview.get('has_latex')}: {text}"
+                )
+
+
+def _unmatched_requested_item_count(result: dict[str, object]) -> int:
+    count = result.get("unmatched_requested_item_key_count")
+    if count is not None:
+        return int(count or 0)
+    return len(_unmatched_requested_item_keys(result))
+
+
+def _unmatched_requested_item_keys(result: dict[str, object]) -> list[str]:
+    keys = result.get("unmatched_requested_item_keys") or []
+    return [str(key) for key in keys] if isinstance(keys, list) else []
+
+
+def _print_unmatched_requested_items(
+    result: dict[str, object],
+    *,
+    count_label: str,
+    keys_label: str,
+) -> None:
+    unmatched_count = _unmatched_requested_item_count(result)
+    if not unmatched_count:
+        return
+    print(f"{count_label}{unmatched_count}")
+    keys = _unmatched_requested_item_keys(result)
+    if keys:
+        print(f"{keys_label}{', '.join(keys)}")
+
+
+def _formula_backfill_exit_code(args: object, result: dict[str, object]) -> int:
+    """Return the CLI exit code for formula backfill write guard outcomes."""
+    if getattr(args, "fail_on_unmatched", False) and _unmatched_requested_item_count(result) > 0:
+        return 5
+    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
+        return 2
+    if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
+        return 3
+    return 0
+
+
+def _formula_estimate_exit_code(args: object, result: dict[str, object]) -> int:
+    """Return the CLI exit code for formula backfill estimate guard outcomes."""
+    if getattr(args, "fail_on_unmatched", False) and _unmatched_requested_item_count(result) > 0:
+        return 5
+    if getattr(args, "fail_on_write_blocked", False) and result.get("write_blocked"):
+        return 2
+    if getattr(args, "fail_on_review_required", False) and result.get("write_review_required"):
+        return 3
+    if (
+        getattr(args, "fail_on_candidate_quality_blocked", False)
+        and int(result.get("candidate_quality_blocking_paper_count") or 0) > 0
+    ):
+        return 4
+    return 0
+
+
+def cmd_index_formulas(args):
+    """Backfill formula chunks for already-indexed documents."""
+    from .indexer import ConfigDriftError, FormulaProviderUnavailableError, Indexer
+    from .vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
+
+    config = _with_formula_cache_pdf_number_enrichment(
+        resolve_runtime_config(args.config),
+        getattr(args, "cache_pdf_number_enrichment", False),
+    )
+    errors = config.validate()
+    if getattr(args, "dry_run", False):
+        blocking_errors = [
+            e for e in errors
+            if "SimpleTex formula OCR requires" not in e and "_API_KEY not set" not in e
+        ]
+        api_warnings = []
+    else:
+        blocking_errors, api_warnings = _split_validate_errors(errors)
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    for w in api_warnings:
+        print(f"Warning: {w} (configure with `zotpilot setup` or `zotpilot config set ...`)", file=sys.stderr)
+    if not config.formula_ocr_enabled:
+        print("Error: formula_ocr_enabled must be true before running index-formulas", file=sys.stderr)
+        return 1
+
+    if getattr(args, "dry_run", False):
+        preview_limit = (
+            -1
+            if getattr(args, "preview_all_candidates", False)
+            else getattr(args, "preview_candidates", 0) or 0
+        )
+        try:
+            result = _call_with_json_stdout_guard(
+                lambda: Indexer.for_formula_estimate(config).estimate_formula_backfill(
+                    item_key=args.item_key,
+                    item_keys=args.item_keys,
+                    limit=args.limit,
+                    resume_after=getattr(args, "resume_after", None),
+                    daily_call_budget=getattr(args, "daily_call_budget", None),
+                    candidate_preview_limit=preview_limit,
+                    candidate_preview_chars=getattr(args, "preview_chars", 160),
+                    pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
+                    page_min=getattr(args, "page_min", None),
+                    page_max=getattr(args, "page_max", None),
+                    sample_size=getattr(args, "sample_size", None),
+                    sample_seed=getattr(args, "sample_seed", 0),
+                    include_high_density=getattr(args, "include_high_density", False),
+                    allow_candidate_quality_warnings=getattr(args, "allow_candidate_quality_warnings", False),
+                ),
+                json_output=args.json,
+            )
+        except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return _formula_estimate_exit_code(args, result)
+        print("[dry-run] No formula chunks were written.")
+        _print_formula_backfill_estimate(result, preview_limit=preview_limit)
+        return _formula_estimate_exit_code(args, result)
+
+    from .index_authority import IndexLease, LeaseContentionError, acquire_lease, release_lease
+
+    lease = IndexLease(index_lease_path(config))
+    try:
+        acquire_lease(lease)
+    except LeaseContentionError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    status_jsonl = getattr(args, "status_jsonl", None)
+    try:
+        result = Indexer(config).index_formulas(
+            item_key=args.item_key,
+            item_keys=args.item_keys,
+            limit=args.limit,
+            refresh_existing=not getattr(args, "no_refresh_existing", False),
+            daily_call_budget=getattr(args, "daily_call_budget", None),
+            resume_after=getattr(args, "resume_after", None),
+            stop_on_quota=not getattr(args, "no_stop_on_quota", False),
+            status_jsonl=status_jsonl,
+            low_confidence_threshold=getattr(args, "low_confidence_threshold", None),
+            include_high_density=getattr(args, "include_high_density", False),
+            allow_candidate_quality_warnings=getattr(args, "allow_candidate_quality_warnings", False),
+            pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
+            page_min=getattr(args, "page_min", None),
+            page_max=getattr(args, "page_max", None),
+        )
+    except (
+        ConfigDriftError,
+        FormulaProviderUnavailableError,
+        EmbeddingDimensionMismatchError,
+        IndexUnavailableError,
+        ValueError,
+    ) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    finally:
+        release_lease(lease)
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return _formula_backfill_exit_code(args, result)
+
+    print("Formula backfill complete:")
+    print(f"  Provider:                {result.get('provider', '')}")
+    print(f"  Processed:               {result.get('processed', 0)}")
+    print(f"  Formulas indexed:        {result.get('formulas_indexed', 0)}")
+    if "write_blocked" in result or "write_ready" in result:
+        write_status = (
+            "blocked"
+            if result.get("write_blocked")
+            else "ready"
+            if result.get("write_ready")
+            else "not ready"
+        )
+        print(f"  Write status:            {write_status}")
+    if "write_review_required" in result:
+        print(f"  Review required:         {'yes' if result.get('write_review_required') else 'no'}")
+    if result.get("next_action"):
+        print(f"  Next:                    {result.get('next_action')}")
+    _print_unmatched_requested_items(
+        result,
+        count_label="  Unmatched requested:     ",
+        keys_label="  Missing item keys:       ",
+    )
+    print(f"  Provider calls used:     {result.get('provider_calls_used', 0)}")
+    print(f"  External calls used:     {result.get('external_calls_used', 0)}")
+    if "pdf_fallback_max_pages" in result:
+        page_limit = result.get("pdf_fallback_max_pages")
+        page_limit_label = "full document" if page_limit == 0 else str(page_limit)
+        print(f"  PDF fallback pages:      {page_limit_label}")
+    if result.get("daily_call_budget"):
+        print(f"  Daily budget:            {result.get('daily_call_budget')}")
+        print(f"  Budget remaining:        {result.get('daily_call_budget_remaining')}")
+    if result.get("high_density_deferred_count"):
+        print(f"  High-density deferred:   {result.get('high_density_deferred_count')}")
+    if result.get("stopped_reason"):
+        print(f"  Stopped:                 {result.get('stopped_reason')}")
+    if result.get("resume_cursor"):
+        print(f"  Resume after:            {result.get('resume_cursor')}")
+    if result.get("next_item_key"):
+        print(f"  Next item:               {result.get('next_item_key')}")
+    if result.get("next_item_candidate_count"):
+        print(f"  Next item candidates:    {result.get('next_item_candidate_count')}")
+    if result.get("state_path"):
+        print(f"  State JSONL:             {result.get('state_path')}")
+    if result.get("low_confidence_review_count"):
+        print(f"  Needs review:            {result.get('low_confidence_review_count')}")
+        print("  Review details:          rerun with --json to inspect the low-confidence queue")
+    warnings = result.get("warnings") or []
+    if warnings:
+        print("\nWarnings:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    return _formula_backfill_exit_code(args, result)
+
+
+def cmd_estimate_formula_backfill(args):
+    """Estimate formula backfill volume without OCR calls or index writes."""
+    from .indexer import ConfigDriftError, Indexer
+    from .vector_store import IndexUnavailableError
+
+    config = _with_formula_cache_pdf_number_enrichment(
+        resolve_runtime_config(args.config),
+        getattr(args, "cache_pdf_number_enrichment", False),
+    )
+    errors = config.validate()
+    blocking_errors = [
+        e for e in errors
+        if "SimpleTex formula OCR requires" not in e and "_API_KEY not set" not in e
+    ]
+    if blocking_errors:
+        for e in blocking_errors:
+            print(f"Config error: {e}", file=sys.stderr)
+        return 1
+    preview_limit = (
+        -1
+        if getattr(args, "preview_all_candidates", False)
+        else getattr(args, "preview_candidates", 0) or 0
+    )
+    try:
+        result = _call_with_json_stdout_guard(
+            lambda: Indexer.for_formula_estimate(config).estimate_formula_backfill(
+                item_key=args.item_key,
+                item_keys=args.item_keys,
+                limit=args.limit,
+                resume_after=getattr(args, "resume_after", None),
+                daily_call_budget=getattr(args, "daily_call_budget", None),
+                candidate_preview_limit=preview_limit,
+                candidate_preview_chars=getattr(args, "preview_chars", 160),
+                pdf_fallback_max_pages=getattr(args, "pdf_fallback_max_pages", None),
+                page_min=getattr(args, "page_min", None),
+                page_max=getattr(args, "page_max", None),
+                sample_size=getattr(args, "sample_size", None),
+                sample_seed=getattr(args, "sample_seed", 0),
+            ),
+            json_output=args.json,
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return _formula_estimate_exit_code(args, result)
+
+    _print_formula_backfill_estimate(result, preview_limit=preview_limit)
+    return _formula_estimate_exit_code(args, result)
+
+
+def _validate_formula_cli_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.command not in {"index-formulas", "estimate-formula-backfill"}:
+        return
+    preview_chars = getattr(args, "preview_chars", 0)
+    if preview_chars is not None and preview_chars < 0:
+        parser.error("--preview-chars must be >= 0")
+    page_min = getattr(args, "page_min", None)
+    page_max = getattr(args, "page_max", None)
+    if page_min is None and page_max is None:
+        return
+    item_key = getattr(args, "item_key", None)
+    item_keys = getattr(args, "item_keys", None)
+    if item_key or (item_keys is not None and len(item_keys) == 1):
+        return
+    parser.error("--page-min/--page-max require --item-key or exactly one --item-keys value")
+
+
 def cmd_status(args):
     """Show configuration and index stats."""
     from . import __version__
@@ -1054,7 +1472,8 @@ def cmd_doctor(args):
             print(f"  [{icon}] {r.name}: {r.message}")
         print()
         if embedded:
-            print(f"  [FAIL] legacy_embedded_secrets: found embedded client secrets in {', '.join(embedded_platforms)}")
+            platforms = ", ".join(embedded_platforms)
+            print(f"  [FAIL] legacy_embedded_secrets: found embedded client secrets in {platforms}")
             print("    Run `zotpilot config migrate-secrets` and then restart affected clients.")
         counts = {"pass": 0, "warn": 0, "fail": 0}
         for r in results:
@@ -1223,14 +1642,21 @@ _SCALAR_TYPES = {
     "stats_sample_limit": int, "max_pages": int, "vision_enabled": bool,
     "embedding_dimensions": int, "preflight_enabled": bool,
     "formula_ocr_enabled": bool,
+    "formula_candidate_provider": str,
+    "formula_candidate_cache_dirs": str,
+    "formula_candidate_cache_pdf_number_enrichment": bool,
+    "formula_candidate_pdf_number_append_missing_candidates": bool,
+    "formula_candidate_pdf_fallback_max_pages": int,
     "formula_ocr_max_formulas_per_doc": int,
     "formula_ocr_max_formulas_per_page": int,
     "formula_ocr_min_confidence": float,
     "formula_ocr_simpletex_timeout": float,
     "formula_ocr_simpletex_min_interval": float,
     "formula_ocr_simpletex_max_retries": int,
-    "formula_candidate_provider": str,
-    "formula_candidate_cache_dirs": str,
+    "formula_ocr_daily_call_budget": int,
+    "formula_ocr_low_confidence_threshold": float,
+    "formula_ocr_high_density_call_threshold": int,
+    "formula_ocr_high_density_candidate_threshold": int,
 }
 
 
@@ -1842,6 +2268,250 @@ def main(argv: list[str] | None = None) -> int:
     sub_index.add_argument("-v", "--verbose", action="store_true", help="Debug logging")
     sub_index.set_defaults(func=cmd_index)
 
+    # index-formulas
+    sub_index_formulas = subparsers.add_parser(
+        "index-formulas",
+        help="Backfill formula chunks for already-indexed papers",
+    )
+    index_formula_scope = sub_index_formulas.add_mutually_exclusive_group()
+    index_formula_scope.add_argument("--item-key", type=str, default=None, help="Backfill one Zotero item key")
+    index_formula_scope.add_argument(
+        "--item-keys",
+        nargs="+",
+        default=None,
+        help="Backfill a space-separated list of Zotero item keys",
+    )
+    sub_index_formulas.add_argument("--limit", type=int, default=None, help="Max already-indexed papers to process")
+    sub_index_formulas.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="With --dry-run, randomly sample N matched already-indexed papers for formula estimation",
+    )
+    sub_index_formulas.add_argument(
+        "--sample-seed",
+        type=int,
+        default=0,
+        help="With --dry-run, seed for --sample-size so validation batches are reproducible",
+    )
+    sub_index_formulas.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Estimate formula backfill without OCR calls, status writes, or index writes",
+    )
+    sub_index_formulas.add_argument(
+        "--no-refresh-existing",
+        action="store_true",
+        help="Keep existing formula chunks and only add newly recognized formulas",
+    )
+    sub_index_formulas.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Max formula OCR provider calls for this run; 0 disables the cap",
+    )
+    sub_index_formulas.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume after the item key returned as resume_cursor by a previous run",
+    )
+    sub_index_formulas.add_argument(
+        "--no-stop-on-quota",
+        action="store_true",
+        help="Do not stop the batch on quota, balance, or rate-limit provider errors",
+    )
+    sub_index_formulas.add_argument(
+        "--low-confidence-threshold",
+        type=float,
+        default=None,
+        help="Return recognized formulas below this confidence in a review queue",
+    )
+    sub_index_formulas.add_argument(
+        "--include-high-density",
+        action="store_true",
+        help="Allow high-density formula documents in this run after reviewing the estimate",
+    )
+    sub_index_formulas.add_argument(
+        "--allow-candidate-quality-warnings",
+        action="store_true",
+        help="Allow formula writes despite candidate-stage numbering/truncation warnings after manual review",
+    )
+    sub_index_formulas.add_argument(
+        "--pdf-fallback-max-pages",
+        type=int,
+        default=None,
+        help=(
+            "Max PDF pages to scan for fallback equation-number candidates; "
+            "0 scans the full document for reviewed theses/books"
+        ),
+    )
+    sub_index_formulas.add_argument(
+        "--cache-pdf-number-enrichment",
+        action="store_true",
+        help=(
+            "Explicitly open PDFs to enrich equation numbers for cached LaTeX; "
+            "off by default so cache hits do not scan PDFs"
+        ),
+    )
+    sub_index_formulas.add_argument(
+        "--page-min",
+        type=int,
+        default=None,
+        help="Only backfill formula candidates on or after this 1-based PDF page; single-item runs only",
+    )
+    sub_index_formulas.add_argument(
+        "--page-max",
+        type=int,
+        default=None,
+        help="Only backfill formula candidates on or before this 1-based PDF page; single-item runs only",
+    )
+    sub_index_formulas.add_argument(
+        "--status-jsonl",
+        nargs="?",
+        const="",
+        default=None,
+        help="Append per-paper formula backfill status to JSONL (default path when no path is provided)",
+    )
+    sub_index_formulas.add_argument(
+        "--preview-candidates",
+        type=int,
+        default=0,
+        help="With --dry-run, show up to N formula candidate previews per paper",
+    )
+    sub_index_formulas.add_argument(
+        "--preview-all-candidates",
+        action="store_true",
+        help="With --dry-run, include every formula candidate in the read-only preview",
+    )
+    sub_index_formulas.add_argument(
+        "--preview-chars",
+        type=int,
+        default=160,
+        help="Max characters per raw_text/latex preview; 0 keeps the full text",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-write-blocked",
+        action="store_true",
+        help="Return exit code 2 when formula write guards block this run",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-review-required",
+        action="store_true",
+        help="Return exit code 3 when formula writes succeed but still require review",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-candidate-quality-blocked",
+        action="store_true",
+        help="With --dry-run, return exit code 4 when candidate quality blockers are found",
+    )
+    sub_index_formulas.add_argument(
+        "--fail-on-unmatched",
+        action="store_true",
+        help="Return exit code 5 when requested item keys are not matched",
+    )
+    sub_index_formulas.add_argument("--json", action="store_true", help="Output the full result as JSON")
+    sub_index_formulas.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_index_formulas.set_defaults(func=cmd_index_formulas)
+
+    # estimate-formula-backfill
+    sub_formula_estimate = subparsers.add_parser(
+        "estimate-formula-backfill",
+        help="Estimate formula OCR backfill volume without writing the index",
+    )
+    formula_estimate_scope = sub_formula_estimate.add_mutually_exclusive_group()
+    formula_estimate_scope.add_argument("--item-key", type=str, default=None, help="Estimate one Zotero item key")
+    formula_estimate_scope.add_argument(
+        "--item-keys",
+        nargs="+",
+        default=None,
+        help="Estimate a space-separated list of Zotero item keys",
+    )
+    sub_formula_estimate.add_argument("--limit", type=int, default=None, help="Max already-indexed papers to scan")
+    sub_formula_estimate.add_argument(
+        "--sample-size",
+        type=int,
+        default=None,
+        help="Randomly sample N matched already-indexed papers for read-only formula estimation",
+    )
+    sub_formula_estimate.add_argument(
+        "--sample-seed",
+        type=int,
+        default=0,
+        help="Seed for --sample-size so random validation batches are reproducible",
+    )
+    sub_formula_estimate.add_argument(
+        "--resume-after",
+        type=str,
+        default=None,
+        help="Resume estimate after this Zotero item key",
+    )
+    sub_formula_estimate.add_argument(
+        "--daily-call-budget",
+        type=int,
+        default=None,
+        help="Daily call budget to use for estimated run count",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-candidates",
+        type=int,
+        default=0,
+        help="Show up to N formula candidate previews per paper without OCR or index writes",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-all-candidates",
+        action="store_true",
+        help="Include every formula candidate in the read-only preview",
+    )
+    sub_formula_estimate.add_argument(
+        "--preview-chars",
+        type=int,
+        default=160,
+        help="Max characters per raw_text/latex preview; 0 keeps the full text",
+    )
+    sub_formula_estimate.add_argument(
+        "--pdf-fallback-max-pages",
+        type=int,
+        default=None,
+        help=(
+            "Max PDF pages to scan for fallback equation-number candidates; "
+            "0 scans the full document for reviewed theses/books"
+        ),
+    )
+    sub_formula_estimate.add_argument(
+        "--cache-pdf-number-enrichment",
+        action="store_true",
+        help=(
+            "Explicitly open PDFs to enrich equation numbers for cached LaTeX; "
+            "off by default so cache hits do not scan PDFs"
+        ),
+    )
+    sub_formula_estimate.add_argument(
+        "--page-min",
+        type=int,
+        default=None,
+        help="Only estimate formula candidates on or after this 1-based PDF page; single-item estimates only",
+    )
+    sub_formula_estimate.add_argument(
+        "--page-max",
+        type=int,
+        default=None,
+        help="Only estimate formula candidates on or before this 1-based PDF page; single-item estimates only",
+    )
+    sub_formula_estimate.add_argument(
+        "--fail-on-candidate-quality-blocked",
+        action="store_true",
+        help="Return exit code 4 when read-only estimate finds candidate quality blocking papers",
+    )
+    sub_formula_estimate.add_argument(
+        "--fail-on-unmatched",
+        action="store_true",
+        help="Return exit code 5 when requested item keys are not matched",
+    )
+    sub_formula_estimate.add_argument("--json", action="store_true", help="Output the full estimate as JSON")
+    sub_formula_estimate.add_argument("--config", type=str, default=None, help="Config file path")
+    sub_formula_estimate.set_defaults(func=cmd_estimate_formula_backfill)
+
     # status
     sub_status = subparsers.add_parser("status", help="Show config and index stats")
     sub_status.add_argument("--config", type=str, default=None, help="Config file path")
@@ -1960,6 +2630,7 @@ def main(argv: list[str] | None = None) -> int:
     sub_register.set_defaults(func=cmd_register)
 
     args = parser.parse_args(argv)
+    _validate_formula_cli_args(parser, args)
 
     if not args.command:
         # Default: run MCP server — signal state.py to start parent monitor

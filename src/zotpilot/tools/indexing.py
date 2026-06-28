@@ -3,8 +3,9 @@
 import json
 import logging
 from collections import defaultdict
+from dataclasses import is_dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from pydantic import BeforeValidator, Field
 
@@ -34,6 +35,16 @@ def _parse_json_string_list(value: Any) -> Any:
         if isinstance(parsed, list):
             return parsed
     return value
+
+
+def _with_formula_cache_pdf_number_enrichment(config: Any, enabled: bool) -> Any:
+    """Return a runtime-only config with cache PDF number enrichment enabled."""
+    if not enabled:
+        return config
+    if is_dataclass(config):
+        return replace(cast(Any, config), formula_candidate_cache_pdf_number_enrichment=True)
+    setattr(config, "formula_candidate_cache_pdf_number_enrichment", True)
+    return config
 
 
 def _collect_unindexed_papers(limit: int | None = None, offset: int = 0) -> tuple[list[dict], int]:
@@ -387,6 +398,72 @@ def index_formulas(
         bool,
         Field(description="Delete existing formula chunks before writing new ones"),
     ] = True,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Max formula OCR provider calls for this run; None uses config, 0 disables the cap", ge=0),
+    ] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume after the item_key returned as resume_cursor by a previous run"),
+    ] = None,
+    stop_on_quota: Annotated[
+        bool,
+        Field(description="Stop the batch immediately on quota, balance, or rate-limit provider errors"),
+    ] = True,
+    status_jsonl: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Append per-paper formula backfill status to this JSONL path; "
+                "None disables status writes and an empty string uses ZotPilot's default state path"
+            )
+        ),
+    ] = None,
+    low_confidence_threshold: Annotated[
+        float | None,
+        Field(description="Return recognized formulas below this confidence in a review queue", ge=0.0, le=1.0),
+    ] = None,
+    include_high_density: Annotated[
+        bool,
+        Field(description="Allow high-density formula documents in this run after reviewing the estimate"),
+    ] = False,
+    allow_candidate_quality_warnings: Annotated[
+        bool,
+        Field(description="Allow formula writes despite candidate-stage numbering/truncation warnings after review"),
+    ] = False,
+    cache_pdf_number_enrichment: Annotated[
+        bool,
+        Field(
+            description=(
+                "Explicitly open PDFs to enrich equation numbers for cached LaTeX; "
+                "disabled by default so cache hits do not scan PDFs"
+            )
+        ),
+    ] = False,
+    pdf_fallback_max_pages: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Max PDF pages to scan for fallback equation-number candidates; "
+                "0 scans the full document for reviewed theses/books"
+            ),
+            ge=0,
+        ),
+    ] = None,
+    page_min: Annotated[
+        int | None,
+        Field(
+            description="Only backfill formula candidates on or after this 1-based PDF page; single-item runs only",
+            ge=1,
+        ),
+    ] = None,
+    page_max: Annotated[
+        int | None,
+        Field(
+            description="Only backfill formula candidates on or before this 1-based PDF page; single-item runs only",
+            ge=1,
+        ),
+    ] = None,
 ) -> dict:
     """Backfill formula chunks for already-indexed papers. Requires formula_ocr_enabled=true."""
     if not _index_lock.acquire(blocking=False):
@@ -397,7 +474,10 @@ def index_formulas(
         from ..vector_store import EmbeddingDimensionMismatchError, IndexUnavailableError
 
         item_keys = _parse_json_string_list(item_keys)
-        _config = _get_config()
+        _config = _with_formula_cache_pdf_number_enrichment(
+            _get_config(),
+            cache_pdf_number_enrichment,
+        )
         errors = _config.validate()
         if errors:
             raise ToolError(f"Config errors: {'; '.join(errors)}")
@@ -417,6 +497,16 @@ def index_formulas(
                 item_keys=item_keys,
                 limit=limit,
                 refresh_existing=refresh_existing,
+                daily_call_budget=daily_call_budget,
+                resume_after=resume_after,
+                stop_on_quota=stop_on_quota,
+                status_jsonl=status_jsonl,
+                low_confidence_threshold=low_confidence_threshold,
+                include_high_density=include_high_density,
+                allow_candidate_quality_warnings=allow_candidate_quality_warnings,
+                pdf_fallback_max_pages=pdf_fallback_max_pages,
+                page_min=page_min,
+                page_max=page_max,
             )
         except (
             ConfigDriftError,
@@ -432,6 +522,101 @@ def index_formulas(
         if lease is not None:
             release_lease(lease)
         _index_lock.release()
+
+
+@mcp.tool(tags=tool_tags("extended", "indexing"))
+def estimate_formula_backfill(
+    item_key: Annotated[
+        str | None,
+        Field(description="Estimate formula OCR candidates for one Zotero item key"),
+    ] = None,
+    item_keys: Annotated[
+        list[str] | None,
+        BeforeValidator(_parse_json_string_list),
+        Field(description="Estimate formula OCR candidates for these Zotero item keys"),
+    ] = None,
+    limit: Annotated[int | None, Field(description="Max already-indexed papers to estimate", ge=1)] = None,
+    resume_after: Annotated[
+        str | None,
+        Field(description="Resume estimate after this Zotero item key"),
+    ] = None,
+    daily_call_budget: Annotated[
+        int | None,
+        Field(description="Daily call budget to use for estimated run count", ge=0),
+    ] = None,
+    sample_size: Annotated[
+        int | None,
+        Field(description="Randomly sample N matched already-indexed papers for read-only formula estimation", ge=0),
+    ] = None,
+    sample_seed: Annotated[
+        int,
+        Field(description="Seed for sample_size so random validation batches are reproducible"),
+    ] = 0,
+    cache_pdf_number_enrichment: Annotated[
+        bool,
+        Field(
+            description=(
+                "Explicitly open PDFs to enrich equation numbers for cached LaTeX; "
+                "disabled by default so cache hits do not scan PDFs"
+            )
+        ),
+    ] = False,
+    pdf_fallback_max_pages: Annotated[
+        int | None,
+        Field(
+            description=(
+                "Max PDF pages to scan for fallback equation-number candidates; "
+                "0 scans the full document for reviewed theses/books"
+            ),
+            ge=0,
+        ),
+    ] = None,
+    page_min: Annotated[
+        int | None,
+        Field(
+            description="Only estimate formulas on or after this 1-based PDF page; single-item estimates only",
+            ge=1,
+        ),
+    ] = None,
+    page_max: Annotated[
+        int | None,
+        Field(
+            description="Only estimate formulas on or before this 1-based PDF page; single-item estimates only",
+            ge=1,
+        ),
+    ] = None,
+) -> dict:
+    """Estimate formula OCR candidate volume for already-indexed papers without writing chunks."""
+    from ..indexer import ConfigDriftError, Indexer
+    from ..vector_store import IndexUnavailableError
+
+    item_keys = _parse_json_string_list(item_keys)
+    _config = _with_formula_cache_pdf_number_enrichment(
+        _get_config(),
+        cache_pdf_number_enrichment,
+    )
+    errors = _config.validate()
+    blocking_errors = [
+        e for e in errors
+        if "SimpleTex formula OCR requires" not in e and "_API_KEY not set" not in e
+    ]
+    if blocking_errors:
+        raise ToolError(f"Config errors: {'; '.join(blocking_errors)}")
+    try:
+        return Indexer.for_formula_estimate(_config).estimate_formula_backfill(
+            item_key=item_key,
+            item_keys=item_keys,
+            limit=limit,
+            resume_after=resume_after,
+            daily_call_budget=daily_call_budget,
+            sample_size=sample_size,
+            sample_seed=sample_seed,
+            pdf_fallback_max_pages=pdf_fallback_max_pages,
+            page_min=page_min,
+            page_max=page_max,
+        )
+    except (ConfigDriftError, IndexUnavailableError, ValueError) as e:
+        raise ToolError(str(e)) from e
 
 
 @mcp.tool(tags=tool_tags("core", "indexing"))

@@ -352,6 +352,7 @@ class TestMCPInstructions:
             "annotate_pdf",
             "browse_library",
             "create_note",
+            "estimate_formula_backfill",
             "get_annotations",
             "get_citations",
             "get_index_stats",
