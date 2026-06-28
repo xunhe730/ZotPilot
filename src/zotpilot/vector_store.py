@@ -126,6 +126,14 @@ class VectorStore:
             settings=Settings(anonymized_telemetry=False)
         )
 
+        # Chroma rejects single add()/upsert() calls larger than this (SQLite
+        # host-parameter ceiling, 5461 on the local backend). We slice every
+        # insert in _guarded_add to stay under it. Leave headroom.
+        try:
+            self._max_add_batch = max(1, self.client.get_max_batch_size() - 1)
+        except Exception:
+            self._max_add_batch = 5000  # safe floor for older/edge Chroma builds
+
         # Get embedder dimensions
         embedder_dims = getattr(embedder, 'dimensions', None)
 
@@ -195,7 +203,19 @@ class VectorStore:
                 f"ids={n}, documents={len(documents)}, embeddings={len(embeddings)}, "
                 f"metadatas={len(metadatas)} (embedding provider returned a wrong count)"
             )
-        self.collection.add(ids=ids, documents=documents, embeddings=embeddings, metadatas=metadatas)
+        # Slice the insert under the client max batch size. Chroma's
+        # collection.add() rejects calls larger than get_max_batch_size()
+        # (5461 on the SQLite backend); large documents (books) routinely
+        # exceed this. range(0, 0, step) is empty, so n == 0 adds nothing.
+        step = self._max_add_batch
+        for i in range(0, n, step):
+            sl = slice(i, i + step)
+            self.collection.add(
+                ids=ids[sl],
+                documents=documents[sl],
+                embeddings=embeddings[sl],
+                metadatas=metadatas[sl],
+            )
 
     def _guarded_upsert(self, ids: list, documents: list, embeddings: list, metadatas: list) -> None:
         """Upsert to the collection only when vector payloads are aligned."""
