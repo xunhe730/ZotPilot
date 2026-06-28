@@ -561,7 +561,7 @@ class MinerUCacheFormulaCandidateProvider:
         found: list[Path] = []
         for root in self._cache_dirs:
             if root.is_file() and self._is_cache_path(root):
-                if item_key is None or _cache_path_matches_keys(root, keys):
+                if item_key is None or _is_generic_formula_cache_filename(root) or _cache_path_matches_keys(root, keys):
                     found.append(root)
                 continue
             if not root.exists() or not root.is_dir():
@@ -1507,6 +1507,8 @@ def _bounded_cache_scan(
         visited += 1
         if visited > max_entries:
             break
+        if not _path_is_within_root(path, root):
+            continue
         if cache_path_filter(path) and (not keys or _cache_path_matches_keys(path, keys)):
             found.append(path)
     return found
@@ -1521,6 +1523,14 @@ def _is_direct_child_path(path: Path, root: Path) -> bool:
         return path.resolve().parent == root.resolve()
     except OSError:
         return path.parent == root
+
+
+def _path_is_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def _cache_paths_in_directory(
@@ -1589,6 +1599,11 @@ def _looks_like_zotero_key(value: str) -> bool:
 
 def _is_formula_cache_path(path: Path) -> bool:
     return _is_formula_cache_file(path) or _is_formula_archive_file(path)
+
+
+def _is_generic_formula_cache_filename(path: Path) -> bool:
+    name = path.name.lower()
+    return name == "full.md" or name in FORMULA_JSON_CACHE_NAMES
 
 
 def _is_formula_archive_file(path: Path) -> bool:
@@ -1720,10 +1735,10 @@ def _parse_mineru_zip_candidates(path: Path) -> list[FormulaCandidate]:
 
 
 def _select_zip_formula_cache_members(names: list[str]) -> list[str]:
-    lower_to_name = {Path(name).name.lower(): name for name in names}
     for preferred in ("content_list.json", "content_list_v2.json", "middle.json", "full.md"):
-        if preferred in lower_to_name:
-            return [lower_to_name[preferred]]
+        selected = [name for name in names if Path(name).name.lower() == preferred]
+        if selected:
+            return selected
     return names
 
 
@@ -1741,6 +1756,8 @@ def _json_depth_exceeds(payload: Any, max_depth: int) -> bool:
 
 
 def _parse_mineru_json_payload(payload: Any, *, source: str) -> list[FormulaCandidate]:
+    if _json_depth_exceeds(payload, MAX_FORMULA_CACHE_JSON_DEPTH):
+        return []
     candidates: list[FormulaCandidate] = []
     for record in _iter_formula_records(payload):
         candidate = _candidate_from_formula_record(record, source=source)
@@ -1877,7 +1894,12 @@ def _manifest_referenced_cache_paths(
         candidate = Path(value)
         if not candidate.is_absolute():
             candidate = base_dir / candidate
-        if candidate.exists() and candidate.is_file() and candidate.suffix.lower() != ".zip" and allowed_cache_file(candidate):
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.suffix.lower() != ".zip"
+            and allowed_cache_file(candidate)
+        ):
             paths.append(candidate.resolve())
     return _unique_paths(paths)
 
@@ -2374,6 +2396,8 @@ def _candidate_has_usable_payload(candidate: FormulaCandidate) -> bool:
         if _is_structured_cache_candidate(candidate):
             return _is_usable_structured_formula_latex(latex)
         return is_high_quality_formula_latex(latex)
+    if candidate.source == "pdf_extract_kit_json" and _is_valid_bbox(candidate.bbox) and candidate.raw_text.strip():
+        return True
     return _is_valid_bbox(candidate.bbox) and candidate.bbox_coordinate_space == "pdf"
 
 

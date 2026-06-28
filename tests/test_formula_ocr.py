@@ -5546,3 +5546,224 @@ def test_extracted_formula_searchable_text_leads_with_context_before_latex():
     assert text.splitlines()[0] == "Formula on page 3, index #2 (1)"
     assert "Context: Energy is defined" in text
     assert text.splitlines()[-1] == r"LaTeX: E = mc^2"
+
+
+def test_rebased_mineru_cache_provider_skips_oversized_zip_members(tmp_path, monkeypatch):
+    from zotpilot.feature_extraction import formula_ocr
+
+    monkeypatch.setattr(formula_ocr, "MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES", 16, raising=False)
+    cache_zip = tmp_path / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+    with zipfile.ZipFile(cache_zip, "w") as archive:
+        archive.writestr(
+            "cache/content_list.json",
+            json.dumps([{"type": "equation", "text": r"E = mc^2"}]),
+        )
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(formula_candidate_cache_dirs=""),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", cache_paths=(cache_zip,))
+
+    assert candidates == []
+
+
+def test_rebased_mineru_cache_provider_skips_zip_with_too_many_formula_members(tmp_path, monkeypatch):
+    from zotpilot.feature_extraction import formula_ocr
+
+    monkeypatch.setattr(formula_ocr, "MAX_FORMULA_CACHE_ZIP_MEMBERS", 1, raising=False)
+    cache_zip = tmp_path / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+    with zipfile.ZipFile(cache_zip, "w") as archive:
+        archive.writestr("a/content_list.json", json.dumps([{"type": "equation", "text": r"a=b"}]))
+        archive.writestr("b/middle.json", json.dumps([{"type": "equation", "text": r"c=d"}]))
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(formula_candidate_cache_dirs=""),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", cache_paths=(cache_zip,))
+
+    assert candidates == []
+
+
+def test_rebased_mineru_cache_provider_preserves_same_basename_zip_members(tmp_path):
+    cache_zip = tmp_path / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+    with zipfile.ZipFile(cache_zip, "w") as archive:
+        archive.writestr("paper-a/content_list.json", json.dumps([{"type": "equation", "text": r"a=b"}]))
+        archive.writestr("paper-b/content_list.json", json.dumps([{"type": "equation", "text": r"c=d"}]))
+    provider = create_formula_candidate_provider(
+        "mineru_cache",
+        config=SimpleNamespace(formula_candidate_cache_dirs=""),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", cache_paths=(cache_zip,))
+
+    assert [candidate.latex for candidate in candidates] == ["a=b", "c=d"]
+
+
+def test_rebased_mineru_cache_key_match_does_not_use_short_substring_fallback(tmp_path):
+    from zotpilot.feature_extraction.formula_ocr import _cache_path_matches_keys
+
+    path = tmp_path / "unrelated" / "content_list.json"
+
+    assert not _cache_path_matches_keys(path, {"re"})
+    assert _cache_path_matches_keys(path, {"unrelated"})
+
+
+def test_rebased_mineru_json_payload_depth_guard_prevents_recursion_error():
+    from zotpilot.feature_extraction import formula_ocr
+
+    payload: dict[str, object] = {}
+    current = payload
+    for _ in range(1200):
+        next_node: dict[str, object] = {}
+        current["children"] = [next_node]
+        current = next_node
+    current["type"] = "equation"
+    current["text"] = r"E = mc^2"
+
+    candidates = formula_ocr._parse_mineru_json_payload(payload, source="mineru_content_list")
+
+    assert candidates == []
+
+
+def test_rebased_bounded_cache_scan_skips_symlink_escape(tmp_path):
+    from zotpilot.feature_extraction.formula_ocr import _bounded_cache_scan
+
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    outside_cache = outside / "content_list.json"
+    outside_cache.write_text(json.dumps([{"type": "equation", "text": r"E = mc^2"}]), encoding="utf-8")
+    symlink_path = root / "ITEM123" / "content_list.json"
+    symlink_path.parent.mkdir()
+    try:
+        symlink_path.symlink_to(outside_cache)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is not available: {exc}")
+
+    found = _bounded_cache_scan(root, {"ITEM123"})
+
+    assert found == []
+
+
+def test_rebased_mineru_json_provider_reads_direct_content_list_file(tmp_path):
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(
+        json.dumps([
+            {
+                "type": "interline_equation",
+                "page_idx": 4,
+                "bbox": [10, 20, 200, 60],
+                "text": r"$$\Delta T = \frac{\beta_T}{\rho C_V}\int \sigma d\epsilon$$",
+                "equation_number": "4",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(content_list)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 5
+    assert candidates[0].equation_number == "(4)"
+    assert candidates[0].latex == r"\Delta T = \frac{\beta_T}{\rho C_V}\int \sigma d\epsilon"
+    assert candidates[0].source == "mineru_content_list"
+
+
+def test_rebased_mineru_json_provider_ignores_markdown_and_zip_cache(tmp_path):
+    full_md = tmp_path / "full.md"
+    full_md.write_text("<!-- page 6 -->\n```math\nE = mc^2\\tag{7}\n```", encoding="utf-8")
+    cache_zip = tmp_path / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+    with zipfile.ZipFile(cache_zip, "w") as archive:
+        archive.writestr("cache/content_list.json", json.dumps([{"type": "equation", "text": r"E=mc^2"}]))
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=f"{full_md};{cache_zip}"),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
+def test_rebased_mineru_json_provider_manifest_ignores_markdown_reference(tmp_path):
+    cache_dir = tmp_path / "mineru-json"
+    cache_dir.mkdir()
+    manifest = cache_dir / "manifest.json"
+    (cache_dir / "full.md").write_text("$$F = ma\\tag{4}$$", encoding="utf-8")
+    manifest.write_text(json.dumps({"markdown": "full.md"}), encoding="utf-8")
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(manifest)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
+def test_rebased_pdf_extract_kit_provider_ignores_mineru_cache_files(tmp_path):
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(
+        json.dumps([{"type": "equation", "text": r"E = mc^2", "bbox": [1, 2, 3, 4]}]),
+        encoding="utf-8",
+    )
+    full_md = tmp_path / "full.md"
+    full_md.write_text("$$F = ma\\tag{1}$$", encoding="utf-8")
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=f"{content_list};{full_md}"),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
+def test_rebased_pdf_extract_kit_provider_normalizes_detection_only_raw_text(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit"
+    cache_dir.mkdir()
+    (cache_dir / "formula_detection.json").write_text(
+        json.dumps([{
+            "det_label": "  formula\n region\t",
+            "page_no": 1,
+            "bbox": [10, 20, 30, 40],
+        }]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(cache_dir)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert len(candidates) == 1
+    assert candidates[0].raw_text == "formula region"
+
+
+def test_rebased_pdf_extract_kit_provider_rejects_oversized_detection_only_raw_text(tmp_path):
+    cache_dir = tmp_path / "pdf-extract-kit"
+    cache_dir.mkdir()
+    (cache_dir / "formula_detection.json").write_text(
+        json.dumps([{
+            "det_label": "formula " + ("x" * 300),
+            "page_no": 1,
+            "bbox": [10, 20, 30, 40],
+        }]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "pdf_extract_kit_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(cache_dir)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
