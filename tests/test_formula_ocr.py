@@ -682,6 +682,103 @@ def test_bounded_cache_scan_skips_symlink_escape(tmp_path):
     assert found == []
 
 
+def test_mineru_json_provider_reads_direct_content_list_file(tmp_path):
+    content_list = tmp_path / "content_list.json"
+    content_list.write_text(
+        json.dumps([
+            {
+                "type": "interline_equation",
+                "page_idx": 4,
+                "bbox": [10, 20, 200, 60],
+                "text": r"$$\Delta T = \frac{\beta_T}{\rho C_V}\int \sigma d\epsilon$$",
+                "equation_number": "4",
+            }
+        ]),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(content_list)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf", item_key="ITEM123")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 5
+    assert candidates[0].equation_number == "(4)"
+    assert candidates[0].latex == r"\Delta T = \frac{\beta_T}{\rho C_V}\int \sigma d\epsilon"
+    assert candidates[0].source == "mineru_content_list"
+
+
+def test_mineru_json_provider_reads_middle_json_nested_formula(tmp_path):
+    cache_dir = tmp_path / "mineru-output"
+    cache_dir.mkdir()
+    (cache_dir / "middle.json").write_text(
+        json.dumps({
+            "pdf_info": [
+                {
+                    "page_idx": 0,
+                    "para_blocks": [
+                        {
+                            "layout_type": "interline_equation",
+                            "content": {"math_content": r"f(x)=x^2\tag{1}"},
+                        },
+                        {
+                            "layout_type": "text",
+                            "content": {"text": "Introduction"},
+                        },
+                    ],
+                }
+            ]
+        }),
+        encoding="utf-8",
+    )
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(cache_dir)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert len(candidates) == 1
+    assert candidates[0].page_num == 1
+    assert candidates[0].equation_number == "(1)"
+    assert candidates[0].latex == r"f(x)=x^2\tag{1}"
+    assert candidates[0].source == "mineru_middle_json"
+
+
+def test_mineru_json_provider_ignores_markdown_and_zip_cache(tmp_path):
+    full_md = tmp_path / "full.md"
+    full_md.write_text("<!-- page 6 -->\n```math\nE = mc^2\\tag{7}\n```", encoding="utf-8")
+    cache_zip = tmp_path / "LLM-for-Zotero-MinerU-cache-ATT001.zip"
+    with zipfile.ZipFile(cache_zip, "w") as archive:
+        archive.writestr("cache/content_list.json", json.dumps([{"type": "equation", "text": r"E=mc^2"}]))
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=f"{full_md};{cache_zip}"),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
+def test_mineru_json_provider_manifest_ignores_markdown_reference(tmp_path):
+    cache_dir = tmp_path / "mineru-json"
+    cache_dir.mkdir()
+    manifest = cache_dir / "manifest.json"
+    (cache_dir / "full.md").write_text("$$F = ma\\tag{4}$$", encoding="utf-8")
+    manifest.write_text(json.dumps({"markdown": "full.md"}), encoding="utf-8")
+    provider = create_formula_candidate_provider(
+        "mineru_json",
+        config=SimpleNamespace(formula_candidate_cache_dirs=str(manifest)),
+    )
+
+    candidates = provider.extract_candidates(tmp_path / "paper.pdf")
+
+    assert candidates == []
+
+
 def test_cached_latex_does_not_open_pdf_or_call_ocr_provider(tmp_path):
     class CachedCandidateProvider:
         name = "cached-test"
