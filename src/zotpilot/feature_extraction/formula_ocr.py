@@ -110,6 +110,8 @@ MAX_FORMULA_CACHE_ZIP_MEMBER_SIZE_BYTES = 100 * 1024 * 1024
 MAX_FORMULA_CACHE_JSON_DEPTH = 256
 MIN_CACHE_KEY_SUBSTRING_LENGTH = 8
 MINERU_JSON_CACHE_NAMES = {"content_list.json", "content_list_v2.json", "middle.json", "manifest.json"}
+PDF_EXTRACT_KIT_CACHE_NAMES = {"formula_detection.json", "formula_recognition.json", "results.json"}
+MAX_RECORD_FORMULA_LABEL_CHARS = 96
 SIMPLETEX_RETRIABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SIMPLETEX_MIN_RETRY_DELAY = 0.25
 SIMPLETEX_MAX_RETRY_DELAY = 30.0
@@ -409,6 +411,41 @@ class MinerUJsonFormulaCandidateProvider:
         return ordered
 
 
+class PdfExtractKitJsonFormulaCandidateProvider:
+    """Read formula candidates from PDF-Extract-Kit-style JSON exports."""
+    name = "pdf_extract_kit_json"
+
+    def __init__(self, cache_dirs: tuple[str, ...] = ()) -> None:
+        self._cache_dirs = tuple(Path(path).expanduser() for path in cache_dirs if path)
+
+    def extract_candidates(
+        self,
+        pdf_path: Path | str,
+        *,
+        item_key: str | None = None,
+        cache_paths: tuple[Path | str, ...] | None = None,
+        max_formulas_per_doc: int = 40,
+        max_formulas_per_page: int = 6,
+        min_confidence: float = 0.6,
+    ) -> list[FormulaCandidate]:
+        del max_formulas_per_page, min_confidence
+        candidates: list[FormulaCandidate] = []
+        for cache_path in _pdf_extract_kit_candidate_cache_paths(
+            pdf_path,
+            item_key=item_key,
+            cache_dirs=self._cache_dirs,
+            cache_paths=cache_paths,
+        ):
+            candidates.extend(_parse_mineru_json_candidates(cache_path))
+        candidates = _dedupe_candidates(candidates)
+        cached = [candidate for candidate in candidates if candidate.latex.strip()]
+        needs_ocr = [candidate for candidate in candidates if not candidate.latex.strip()]
+        ordered = cached + needs_ocr
+        if max_formulas_per_doc > 0:
+            ordered = ordered[:max_formulas_per_doc]
+        return ordered
+
+
 FORMULA_OCR_PROVIDERS: dict[str, type[LocalFormulaOCRProvider] | type[SimpleTexFormulaOCRProvider]] = {
     "local": LocalFormulaOCRProvider,
     "simpletex": SimpleTexFormulaOCRProvider,
@@ -418,11 +455,13 @@ FORMULA_CANDIDATE_PROVIDERS: dict[
     type[TextLayerFormulaCandidateProvider]
     | type[MinerUCacheFormulaCandidateProvider]
     | type[MinerUJsonFormulaCandidateProvider]
+    | type[PdfExtractKitJsonFormulaCandidateProvider]
     | type[AutoFormulaCandidateProvider],
 ] = {
     "text_layer": TextLayerFormulaCandidateProvider,
     "mineru_cache": MinerUCacheFormulaCandidateProvider,
     "mineru_json": MinerUJsonFormulaCandidateProvider,
+    "pdf_extract_kit_json": PdfExtractKitJsonFormulaCandidateProvider,
     "auto": AutoFormulaCandidateProvider,
 }
 
@@ -484,6 +523,8 @@ def create_formula_candidate_provider(name: str, *, config: Any | None = None) -
         return MinerUCacheFormulaCandidateProvider(cache_dirs=cache_dirs)
     if name == "mineru_json":
         return MinerUJsonFormulaCandidateProvider(cache_dirs=cache_dirs)
+    if name == "pdf_extract_kit_json":
+        return PdfExtractKitJsonFormulaCandidateProvider(cache_dirs=cache_dirs)
     return AutoFormulaCandidateProvider(cache_dirs=cache_dirs)
 
 
@@ -852,6 +893,31 @@ def _mineru_json_candidate_cache_paths(
     return _unique_paths(found)
 
 
+def _pdf_extract_kit_candidate_cache_paths(
+    pdf_path: Path | str,
+    *,
+    item_key: str | None,
+    cache_dirs: tuple[Path, ...],
+    cache_paths: tuple[Path | str, ...] | None,
+) -> list[Path]:
+    roots = [Path(path).expanduser() for path in cache_paths or ()]
+    roots.extend(cache_dirs)
+    keys = _cache_lookup_keys(pdf_path, item_key=item_key)
+    found: list[Path] = []
+    for root in roots:
+        if root.is_file():
+            if _is_pdf_extract_kit_cache_path(root):
+                found.append(root)
+            continue
+        if not root.is_dir():
+            continue
+        root_found = _pdf_extract_kit_paths_in_directory(root, keys)
+        if not root_found:
+            root_found = _bounded_pdf_extract_kit_scan(root, keys)
+        found.extend(root_found)
+    return _unique_paths(found)
+
+
 def _cache_lookup_keys(pdf_path: Path | str, *, item_key: str | None) -> set[str]:
     path = Path(pdf_path)
     keys = {path.stem.lower(), path.parent.name.lower()}
@@ -910,6 +976,29 @@ def _mineru_json_paths_in_directory(directory: Path, keys: set[str]) -> list[Pat
     return found
 
 
+def _pdf_extract_kit_paths_in_directory(directory: Path, keys: set[str]) -> list[Path]:
+    found: list[Path] = []
+    try:
+        children = list(directory.iterdir())
+    except OSError:
+        return found
+    for path in children:
+        if path.is_file() and _is_pdf_extract_kit_cache_path(path):
+            found.append(path)
+    if found:
+        return found
+    for child in children:
+        if not child.is_dir() or (keys and child.name.lower() not in keys):
+            continue
+        try:
+            for path in child.iterdir():
+                if path.is_file() and _is_pdf_extract_kit_cache_path(path):
+                    found.append(path)
+        except OSError:
+            continue
+    return found
+
+
 def _bounded_cache_scan(root: Path, keys: set[str], *, max_entries: int = 20000) -> list[Path]:
     found: list[Path] = []
     visited = 0
@@ -930,6 +1019,18 @@ def _bounded_mineru_json_scan(root: Path, keys: set[str], *, max_entries: int = 
         if visited > max_entries:
             break
         if path.is_file() and _is_mineru_json_cache_path(path) and _cache_path_matches_keys(path, keys):
+            found.append(path)
+    return found
+
+
+def _bounded_pdf_extract_kit_scan(root: Path, keys: set[str], *, max_entries: int = 20000) -> list[Path]:
+    found: list[Path] = []
+    visited = 0
+    for path in root.rglob("*"):
+        visited += 1
+        if visited > max_entries:
+            break
+        if path.is_file() and _is_pdf_extract_kit_cache_path(path) and _cache_path_matches_keys(path, keys):
             found.append(path)
     return found
 
@@ -958,6 +1059,19 @@ def _is_mineru_json_cache_path(path: Path) -> bool:
     )
 
 
+def _is_pdf_extract_kit_cache_path(path: Path) -> bool:
+    name = path.name.lower()
+    return (
+        name in PDF_EXTRACT_KIT_CACHE_NAMES
+        or name.endswith("_formula_detection.json")
+        or name.endswith(".formula_detection.json")
+        or name.endswith("_formula_recognition.json")
+        or name.endswith(".formula_recognition.json")
+        or name.endswith("_results.json")
+        or name.endswith(".results.json")
+    )
+
+
 def _is_formula_cache_path(path: Path) -> bool:
     name = path.name.lower()
     if name in FORMULA_CACHE_NAMES:
@@ -969,6 +1083,12 @@ def _is_formula_cache_path(path: Path) -> bool:
         or name.endswith("_content_list_v2.json")
         or name.endswith(".content_list.json")
         or name.endswith(".content_list_v2.json")
+        or name.endswith("_formula_detection.json")
+        or name.endswith("_formula_recognition.json")
+        or name.endswith(".formula_detection.json")
+        or name.endswith(".formula_recognition.json")
+        or name.endswith("_formula_results.json")
+        or name.endswith(".formula_results.json")
     )
 
 
@@ -1227,7 +1347,7 @@ def _iter_formula_records(
 def _record_looks_like_formula(record: dict[str, Any]) -> bool:
     labels = [
         str(record.get(key) or "").lower()
-        for key in ("type", "category", "role", "block_type", "cls_name", "layout_type")
+        for key in ("type", "category", "role", "block_type", "cls_name", "layout_type", "label", "det_label")
     ]
     if any("equation" in label or "formula" in label for label in labels):
         return True
@@ -1237,19 +1357,26 @@ def _record_looks_like_formula(record: dict[str, Any]) -> bool:
         record.get("latex")
         or record.get("latex_styled")
         or record.get("formula_text")
+        or record.get("rec_formula")
         or record.get("math_content")
     )
 
 
 def _candidate_from_formula_record(record: dict[str, Any], *, source: str) -> FormulaCandidate | None:
     latex = _extract_record_latex(record)
-    if not is_high_quality_formula_latex(latex):
+    if latex and not is_high_quality_formula_latex(latex):
+        return None
+    bbox = _record_bbox(record)
+    if not latex and bbox == (0.0, 0.0, 0.0, 0.0):
+        return None
+    raw_text = latex or _record_formula_label(record)
+    if not raw_text:
         return None
     equation_number = _candidate_equation_number(record, latex)
     return FormulaCandidate(
         page_num=_record_page_num(record),
-        bbox=_record_bbox(record),
-        raw_text=latex,
+        bbox=bbox,
+        raw_text=raw_text,
         confidence=_record_confidence(record),
         equation_number=equation_number,
         equation_number_status="provided" if equation_number else "missing",
@@ -1259,11 +1386,22 @@ def _candidate_from_formula_record(record: dict[str, Any], *, source: str) -> Fo
 
 
 def _extract_record_latex(record: dict[str, Any]) -> str:
-    for key in ("latex", "latex_styled", "formula_text", "math_content", "text", "content"):
+    for key in ("latex", "latex_styled", "rec_formula", "formula_text", "math_content", "text", "content"):
         value = record.get(key)
         if isinstance(value, str) and value.strip():
             return _clean_candidate_latex(value)
     return ""
+
+
+def _record_formula_label(record: dict[str, Any]) -> str:
+    for key in ("label", "cls_name", "det_label", "type", "category", "role"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            cleaned = _normalize_space(value)
+            if len(cleaned) > MAX_RECORD_FORMULA_LABEL_CHARS:
+                return ""
+            return cleaned
+    return "formula"
 
 
 def _clean_candidate_latex(value: str) -> str:
@@ -1308,7 +1446,7 @@ def _record_page_num_or_none(record: dict[str, Any]) -> int | None:
             return max(int(value), 1)
         if isinstance(value, str) and value.strip().isdigit():
             return max(int(value), 1)
-    for key in ("page_idx", "page_id"):
+    for key in ("page_idx", "page_id", "page_index"):
         value = record.get(key)
         if isinstance(value, (int, float)):
             return max(int(value) + 1, 1)
@@ -1320,6 +1458,10 @@ def _record_page_num_or_none(record: dict[str, Any]) -> int | None:
 def _record_bbox(record: dict[str, Any]) -> tuple[float, float, float, float]:
     for key in ("bbox", "layout_bbox"):
         bbox = _coerce_bbox(record.get(key))
+        if bbox is not None:
+            return bbox
+    for key in ("points", "dt_boxes"):
+        bbox = _coerce_points_bbox(record.get(key))
         if bbox is not None:
             return bbox
     return (0.0, 0.0, 0.0, 0.0)
@@ -1336,8 +1478,29 @@ def _coerce_bbox(value: Any) -> tuple[float, float, float, float] | None:
     return None
 
 
+def _coerce_points_bbox(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    points = value
+    if len(points) == 1 and isinstance(points[0], (list, tuple)):
+        points = points[0]
+    xs: list[float] = []
+    ys: list[float] = []
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            xs.append(float(point[0]))
+            ys.append(float(point[1]))
+        except (TypeError, ValueError):
+            continue
+    if not xs or not ys:
+        return None
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 def _record_confidence(record: dict[str, Any]) -> float:
-    for key in ("confidence", "conf", "score"):
+    for key in ("confidence", "conf", "score", "confidence_score"):
         value = record.get(key)
         if isinstance(value, (int, float)):
             return float(value)
@@ -1361,6 +1524,8 @@ def _page_num_before_offset(markdown: str, offset: int) -> int:
 
 def _source_from_cache_path(path: Path) -> str:
     name = path.name.lower()
+    if "formula_detection" in name or "formula_recognition" in name or name == "results.json":
+        return "pdf_extract_kit_json"
     if name == "full.md":
         return "mineru_markdown"
     if "middle" in name:

@@ -450,6 +450,13 @@ class TestOpenAICompatConfigSchema:
 
         assert not any("formula_candidate_provider" in e for e in errors)
 
+    def test_validate_accepts_pdf_extract_kit_formula_candidate_provider(self, tmp_path, monkeypatch):
+        cfg = self._oai_cfg(tmp_path, monkeypatch, formula_candidate_provider="pdf_extract_kit_json")
+
+        errors = cfg.validate()
+
+        assert not any("formula_candidate_provider" in e for e in errors)
+
     def test_validate_formula_limits(self, tmp_path, monkeypatch):
         cfg = self._oai_cfg(
             tmp_path,
